@@ -50,7 +50,7 @@
     (:success (error "Expected error"))))
 
 (defmacro types-assert-success (expr)
-  (eval expr))
+  (ignore (eval expr)))
 
 
 ;;;; Errored "or"
@@ -80,9 +80,12 @@ Syntax (within the keyword name, after the leading colon):
 
 Operator precedence: & binds tighter than |.
 Type names must match [A-Z][a-zA-Z0-9]*."
-  (unless (keywordp spec)
-    (error "Type must be a keyword"))
-  (types--parse-string (substring (symbol-name spec) 1)))
+  (if (and (listp spec) (keywordp (car spec)))
+      spec
+
+    (unless (keywordp spec)
+      (error "Type must be a keyword"))
+    (types--parse-string (substring (symbol-name spec) 1))))
 
 (defun types--parse-string (s)
   "Parse type string S (no leading colon).
@@ -173,6 +176,44 @@ Depth tracks < > and { } nesting."
                (setq start (1+ i))))))
     (push (substring s start) result)
     (nreverse result)))
+
+
+;;;; Type printing
+
+(defun types-format (type)
+  "Format a type expression back into a human-readable string."
+  (pcase type
+    (`(:Literal ,val)
+     (if (and (symbolp val) val (not (eq val t)))
+         (format "`%s'" val)
+       (prin1-to-string val)))
+
+    (`(:Cons ,elem ,tail)
+     (let* ((elems (list (types-format elem))))
+       (while (pcase tail
+                (`(:Cons ,tail-car ,tail-cdr)
+                 (nconc elems (list (types-format tail-car)))
+                 (setq tail tail-cdr)
+                 t)))
+       (unless (equal tail '(:Literal nil))
+         (setcdr (last elems) (types-format tail)))
+       (format "%s" elems)))
+
+    (`(:Or . ,elts)
+     (mapconcat #'types-format elts " | "))
+    (`(:And . ,elts)
+     (mapconcat
+      (lambda (e)
+        (if (eq (car-safe e) :Or)
+            (format "(%s)" (types-format e))
+          (types-format e)))
+      elts " & "))
+    (`(,(and kw (guard (keywordp kw))) . ,args)
+     (let ((name (substring (symbol-name kw) 1)))
+       (if args
+           (format "%s<%s>" name (mapconcat #'types-format args ", "))
+         name)))
+    (_ (error "Invalid type expression: %S" type))))
 
 
 ;;;; Is subtype
@@ -355,9 +396,11 @@ subexpression."
 
 (defun types-resolve (type expr)
   (setq type (types-parse type))
-  (let ((expr-type (car (types-check expr))))
-    (or (types-a-is-b expr-type type)
-        (error "Type %s is not assignable to type %s" expr-type type))))
+  (let ((result (types-check expr)))
+    (if (types-a-is-b (car result) type)
+        (cdr result)
+      (types--error "Type %s is not assignable to type %s"
+                    (types-format (car result)) (types-format type)))))
 
 
 ;;; ============================================================
@@ -379,10 +422,7 @@ subexpression."
            ;; Type-check the value
            (types--with-binds let-binds-rev
              (types--with-path (list 2)
-               (let ((result (types-check val)))
-                 (setq val (cdr result))
-                 (or (types-a-is-b (car result) type)
-                     (types--error "Type %s is not assignable to type %s" (car result) type)))))
+               (setq val (types-resolve type val))))
 
            (push (list var val) new-varlist-rev)
            (push (cons var type) let-binds-rev))
@@ -402,11 +442,7 @@ subexpression."
 
   ;; Check if the list has the correct type
   (types--with-path (list 1 2)
-    (let ((result (types-check lst)))
-      (setq lst (cdr result))
-      (or (types-a-is-b (car result) (list :List etype))
-          (types--error "Type %s is not assignable to type %s"
-                        (car result) (list :List etype)))))
+    (setq lst (types-resolve `(:List ,etype) lst)))
 
   (let ((result (types--with-binds (list (cons var etype)) (types-check-block 2 body))))
     (setq types--current-checking-expr `(dolist (,var ,lst) . ,(cdr result)))
