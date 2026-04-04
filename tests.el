@@ -191,11 +191,11 @@
 
 (types-block
  (let* ((a :Integer 4)
-        (b :List<String> (list (+ 1 2))))
+        (b :List<Integer> (list (+ 1 2))))
    ;; (setq a 3.3)
    (let* ((a :List<Integer> (cons (1+ a) nil)))
      (dolist (n :Integer a)
-       (setq b (cons (+ n 1.5) b)))
+       (setq b (cons (+ n 1) b)))
      (+ 2 1))))
 
 ;; (my-macro 1 (2 3) 3)
