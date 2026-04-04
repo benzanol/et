@@ -84,56 +84,9 @@
 (add-hook 'flycheck-process-error-functions #'types--flycheck-reposition-error)
 
 
-;;;; Define resolver
-
-;; The resolvers list is a list of
-;; (BASE-TYPE . (PATTERN FUNC))
-
-(defmacro types-define-resolver (expr-pattern type-pattern &rest body)
-  "Define a type resolver.
-
-EXPR-PATTERN can be (:primitive var) or (func args...).
-
-TYPE-PATTERN can be (:Type args...) or `var'."
-  (declare (indent 2))
-
-  (let ((make-fn
-         (lambda (name)
-           `(let ((sym (make-symbol ,name)))
-              (fset sym (cons #'lambda
-                              (cl--transform-lambda
-                               ',(cons (list (if (keywordp (car expr-pattern))
-                                                 (cadr expr-pattern)
-                                               (cons '_ (cdr expr-pattern)))
-                                             (if (consp type-pattern)
-                                                 (cons '_ (cdr type-pattern))
-                                               type-pattern))
-                                       body)
-                               ,name)))
-              sym))))
-
-    (pcase expr-pattern
-      (`(,(and (pred symbolp) expr-type) . ,_args)
-       (cl-assert (or (not (keywordp expr-type))
-                      (memq expr-type '(:any :number :string :symbol))))
-
-       (pcase type-pattern
-         ;; If it is for a specific base type
-         (`(,base-type . ,_type-args)
-          (cl-assert (keywordp base-type))
-          (cl-assert (string-match-p "^:[A-Z]" (symbol-name base-type)))
-
-          `(let ((func ,(funcall make-fn (format "types--%s-is-%s" expr-type base-type))))
-             (setf (alist-get ',base-type (get ',expr-type 'types-resolvers)) func)))
-
-         ;; If it is for a generic type
-         (_
-          `(let ((func ,(funcall make-fn (format "types--%s-is-type" expr-type))))
-             (setf (get ',expr-type 'types-default-resolver) func)))))
-      (_ (error "Invalid expr pattern")))))
-
-
 ;;;; Define checker
+
+(defvar types--binds nil)
 
 (defmacro types-define-checker (expr-type arglist &rest body)
   (declare (indent 2))
@@ -141,12 +94,58 @@ TYPE-PATTERN can be (:Type args...) or `var'."
   (cl-assert (listp arglist))
 
   `(setf (get ',expr-type 'types-checker)
-         (lambda ,arglist . ,body)))
+         (lambda . ,(cl--transform-lambda (cons arglist body) (format "types--checker:%s" expr-type)))))
+
+(defvar types--current-checking-expr nil)
+
+(defun types-check (expr)
+  (let ((types--current-checking-expr expr))
+    (pcase expr
+      (`(,func . ,args)
+       (apply (or (get func 'types-checker) (types--error "No checker for function: %s" func))
+              args))
+
+      ((pred numberp)
+       (if (eq (mod expr 1) 0) (list :Integer) (list :Number)))
+      ((pred stringp) (list :String))
+      ((pred keywordp) (list :Keyword))
+      ((pred symbolp) (or (alist-get expr types--binds)
+                          (types--error "Free variable: %s" expr)))
+      (_ (types--error "Unsupported code item: %s" expr)))))
+
+(defun types-check-subexpr (where subexpr)
+  "Type check an argument of the current expression.
+
+This sets the value of `types--flycheck-path' to the path to the
+sub-expression, and calls `types-check' to do the actual checking."
+  (let ((expr types--current-checking-expr))
+    (cl-assert (and expr (listp expr)))
+    (cond
+     ((numberp where)
+      (cl-assert (eq (nth (1+ where) expr) subexpr))
+      (let ((types--flycheck-path (append types--flycheck-path (list (1+ where)))))
+        (types-check subexpr)))
+
+     ((keywordp where)
+      ;; This method for calculating the position could technically
+      ;; fail Suppose a function has arglist (arg1 arg2 &key mykey),
+      ;; and someone calls (func :mykey 7 :mykey 7). The position for
+      ;; where=:mykey and subexpr=7 would be determined to be 2,
+      ;; rather than the correct position of 4. A fully correct
+      ;; strategy would require parsing the function arglist.
+      (let* ((pos (or (cl-loop for tail on (cdr expr)
+                               for idx upfrom 1
+                               when (and (eq (car tail) where) (eq (cadr tail) subexpr))
+                               do (cl-return (1+ idx)))
+                      (error "Keyword argument %s with value %s not found" where subexpr)))
+             (types--flycheck-path (append types--flycheck-path (list pos))))
+        (cl-assert (eq (nth pos expr) subexpr))
+        (types-check subexpr)))
+
+     (t (error "WHERE must be either an argument index or keyword")))))
 
 
 ;;;; Check
-
-(defvar types--binds nil)
 
 (defun types--get-expr-type (expr)
   (pcase expr
@@ -188,11 +187,6 @@ TYPE-PATTERN can be (:Type args...) or `var'."
        (message "%s %s %s" type expr resolver)
        (if resolver (funcall resolver expr type)
          (types--error "Expression %s cannot be assigned to type %s" expr base-type))))))
-
-(defun types-check (expr)
-  (let* ((expr-type (types--get-expr-type expr))
-         (checker (get expr-type 'types-checker)))
-    (when checker (apply checker (cdr expr)))))
 
 
 ;;;; Parse a type
@@ -367,8 +361,11 @@ TYPE-PATTERN can be (:Type args...) or `var'."
 
 (types-define-resolver (quote expr) (:Cons ltype rtype)
   (unless (consp expr) (types--error "Expression %s cannot be assigned to type :Cons"))
-  (type--resolve ltype (list 'quote (car expr)))
-  (types--resolve rtype (list 'quote (cdr expr))))
+  (types--resolve (0) ltype (list 'quote (car expr)))
+  (progn
+    (cl-assert (eq types--flycheck-offset 0))
+    (let ((types--flycheck-path (append types--flycheck-path '(1))))
+      (types-resolve rtype (list 'quote (cdr expr))))))
 
 
 ;;;; Logic
