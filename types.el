@@ -67,33 +67,112 @@
 ;;; Core
 ;;;; Type parsing
 
-(defun types-parse-split (s)
-  "Split S on ~ but only at depth 0 (not inside angle brackets)."
-  (let ((depth 0)
-        (start 0)
-        (result '()))
-    (cl-loop for i from 0 below (length s)
-             for c = (aref s i)
-             do (cond ((eq c ?<) (cl-incf depth))
-                      ((eq c ?>) (cl-decf depth))
-                      ((and (eq c ?~) (= depth 0))
-                       (push (substring s start i) result)
-                       (setq start (1+ i)))))
+(defun types-parse (spec)
+  "Parse a type keyword SPEC into a type expression.
+
+Syntax (within the keyword name, after the leading colon):
+  Foo            → (:Foo)
+  Foo<A~B>       → (:Foo (:A) (:B))
+  {expr}         → (:Literal expr)
+  A|B            → (:Or (:A) (:B))
+  A&B            → (:And (:A) (:B))
+  A|B&C          → (:Or (:A) (:And (:B) (:C)))
+
+Operator precedence: & binds tighter than |.
+Type names must match [A-Z][a-zA-Z0-9]*."
+  (unless (keywordp spec)
+    (error "Type must be a keyword"))
+  (types--parse-string (substring (symbol-name spec) 1)))
+
+(defun types--parse-string (s)
+  "Parse type string S (no leading colon).
+Splits on | at depth 0, then & at depth 0, then parses atoms."
+  (when (string-empty-p s)
+    (error "Empty type expression"))
+
+  (let ((or-elements
+         (cl-loop for or-seg in (types--split-at-depth s ?|)
+                  when (string-empty-p or-seg)
+                  do (error "Empty segment in union type: %s" s)
+                  collect
+                  (let* ((and-elements
+                          (cl-loop for and-seg in (types--split-at-depth or-seg ?&)
+                                   when (string-empty-p and-seg)
+                                   do (error "Empty segment in intersection type: %s" s)
+                                   collect (types--parse-atom and-seg))))
+                    (if (cdr and-elements) (cons :And and-elements) (car and-elements))))))
+    (if (cdr or-elements) (cons :Or or-elements) (car or-elements))))
+
+(defun types--parse-atom (s)
+  "Parse a single type atom, or error.
+
+S can have one of the following forms:
+- {TYPE}             -> (types--parse-type TYPE)
+- Name               -> (:Name)
+- Name<T1~T2~...~TN> -> (:Name (types--parse-string T1) ...)
+- nil                -> (:Literal nil)
+- t                  -> (:Literal t)
+- str<STRING>        -> (:Literal STRING)
+- sym<SYMBOL-NAME>   -> (:Literal (intern SYMBOL-NAME))
+- num<NUMBER>        -> (:Literal (string-to-number NUMBER))
+
+An atom is a parenthesized {type}, generic Name<A~B>, or plain Name."
+  (cond
+   ;; {type}
+   ((eq (aref s 0) ?{)
+    (unless (eq (aref s (1- (length s))) ?})
+      (error "Unclosed literal brace in: %s" s))
+    (types--parse-string (substring s 1 -1)))
+
+   ((equal s "nil") (list :Literal nil))
+   ((equal s "t") (list :Literal t))
+
+   ;; Name or Name<...>
+   ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)" s)
+    (let ((name (match-string 1 s))
+          (rest-start (match-end 1))
+          (inner nil))
+      (if (= rest-start (length s))
+          (if (string-match-p "^[A-Z]" name)
+              (list (intern (format ":%s" name)))
+            (error "Type name %s must be capitalized" name))
+
+        (unless (eq (aref s rest-start) ?<)
+          (error "Unexpected character after type name in: %s" s))
+        (unless (eq (aref s (1- (length s))) ?>)
+          (error "Unclosed angle bracket in: %s" s))
+        (setq inner (substring s (1+ rest-start) (1- (length s))))
+
+        ;; If it is lowercase, it represents a literal
+        (if (string-match-p "^[a-z]" name)
+            (pcase name
+              ('"sym" (list :Literal (intern inner)))
+              ('"str" (list :Literal inner))
+              ('"num" (list :Literal (string-to-number inner)))
+              (_ (error "Invalid literal type: %s" name)))
+
+          (let ((parts (types--split-at-depth inner ?~)))
+            (when (and (= (length parts) 1) (string-empty-p (car parts)))
+              (error "Empty type parameters in: %s" s))
+            (cons (intern (format ":%s" name))
+                  (cl-loop for p in parts
+                           collect (types--parse-string p))))))))
+
+   (t (error "Invalid type syntax: %s" s))))
+
+(defun types--split-at-depth (s delim)
+  "Split string S on character DELIM at depth 0 only.
+Depth tracks < > and { } nesting."
+  (let ((depth 0) (start 0) (result '()))
+    (dotimes (i (length s))
+      (let ((c (aref s i)))
+        (cond ((memq c '(?< ?{)) (cl-incf depth))
+              ((memq c '(?> ?})) (cl-decf depth))
+              ((and (eq c delim) (= depth 0))
+               (push (substring s start i) result)
+               (setq start (1+ i))))))
     (push (substring s start) result)
     (nreverse result)))
-
-(defun types-parse (spec)
-  (if (not (keywordp spec)) (error "Type must be a keyword")
-    (let ((name (symbol-name spec)))
-      (if (string-match "^:\\([A-Z][A-Za-z]*\\)<\\(.*\\)>$" name)
-          (let* ((base  (intern (format ":%s" (match-string 1 name))))
-                 (inner (match-string 2 name))
-                 (parts (types-parse-split inner)))
-            (cons base
-                  (mapcar (lambda (s)
-                            (types-parse (intern (format ":%s" s))))
-                          parts)))
-        (list spec)))))
 
 
 ;;;; Is subtype
