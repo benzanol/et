@@ -102,34 +102,34 @@
 ;;;; And/or
 
 ;; And - value must satisfy all constituent types
-(types-assert-success (types-root-resolve :And<Boolean~Boolean> t))
-(types-assert-success (types-root-resolve :And<Boolean~Symbol~Boolean> t))
-(types-assert-error   (types-root-resolve :And<Boolean~Integer> t))
-(types-assert-error   (types-root-resolve :And<Boolean~Integer> 1))
-(types-assert-error   (types-root-resolve :And<Boolean~Integer> nil))
+(types-assert-success (types-root-resolve :Boolean&Boolean t))
+(types-assert-success (types-root-resolve :Boolean&Symbol&Boolean t))
+(types-assert-error   (types-root-resolve :Boolean&Integer t))
+(types-assert-error   (types-root-resolve :Boolean&Integer 1))
+(types-assert-error   (types-root-resolve :Boolean&Integer nil))
 
 ;; Two Or types
-(types-assert-success (types-root-resolve :Or<Boolean~Integer> t))
-(types-assert-success (types-root-resolve :Or<Boolean~Integer> nil))
-(types-assert-success (types-root-resolve :Or<Boolean~Integer> 1))
-(types-assert-error   (types-root-resolve :Or<Boolean~Integer> "1"))
-(types-assert-error   (types-root-resolve :Or<Boolean~Integer> 'a))
+(types-assert-success (types-root-resolve :Boolean|Integer t))
+(types-assert-success (types-root-resolve :Boolean|Integer nil))
+(types-assert-success (types-root-resolve :Boolean|Integer 1))
+(types-assert-error   (types-root-resolve :Boolean|Integer "1"))
+(types-assert-error   (types-root-resolve :Boolean|Integer 'a))
 
 ;; Three Or types
-(types-assert-success (types-root-resolve :Or<Boolean~Integer~String> t))
-(types-assert-success (types-root-resolve :Or<Boolean~Integer~String> 1))
-(types-assert-success (types-root-resolve :Or<Boolean~Integer~String> "1"))
-(types-assert-error   (types-root-resolve :Or<Boolean~Integer~String> 'a))
+(types-assert-success (types-root-resolve :Boolean|Integer|String t))
+(types-assert-success (types-root-resolve :Boolean|Integer|String 1))
+(types-assert-success (types-root-resolve :Boolean|Integer|String "1"))
+(types-assert-error   (types-root-resolve :Boolean|Integer|String 'a))
 
 ;; Nested - And inside Or
-(types-assert-success (types-root-resolve :Or<Integer~And<Boolean~Symbol>> t))
-(types-assert-success (types-root-resolve :Or<Integer~And<Boolean~Symbol>> 1))
-(types-assert-error   (types-root-resolve :Or<Integer~And<Boolean~Symbol>> 'a))
+(types-assert-success (types-root-resolve :Integer|Boolean&Symbol t))
+(types-assert-success (types-root-resolve :Integer|Boolean&Symbol 1))
+(types-assert-error   (types-root-resolve :Integer|Boolean&Symbol 'a))
 
 ;; Nested - Or inside And
-(types-assert-success (types-root-resolve :And<Boolean~Or<Symbol~Integer>> t))
-(types-assert-success (types-root-resolve :And<Boolean~Or<Symbol~Integer>> nil))
-(types-assert-error   (types-root-resolve :And<Boolean~Or<Symbol~Integer>> 1))
+(types-assert-success (types-root-resolve :Boolean&{Symbol|Integer} t))
+(types-assert-success (types-root-resolve :Boolean&{Symbol|Integer} nil))
+(types-assert-error   (types-root-resolve :Boolean&{Symbol|Integer} 1))
 
 
 ;;;; cons
@@ -197,6 +197,7 @@
    (let* ((a :List<Integer> (cons (1+ a) nil)))
      (dolist (n a)
        (setq b (cons (+ n 1) b))))
+   (let* ((e (or (car b) 12))))
    (setq a (or (car b) 12))))
 
 

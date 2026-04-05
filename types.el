@@ -54,16 +54,6 @@
   (ignore (eval expr)))
 
 
-;;;; Errored "or"
-
-(defmacro types-or (&rest forms)
-  `(or ,@(cl-loop for tail on forms
-                  if (eq (length tail) 1)
-                  collect (car tail)
-                  else
-                  collect `(ignore-errors (or ,(car tail) t)))))
-
-
 ;;;; Flycheck move error
 
 (defun types--flycheck-reposition-error (err)
@@ -113,9 +103,9 @@ Syntax (within the keyword name, after the leading colon):
   Foo            → (:Foo)
   Foo<A~B>       → (:Foo (:A) (:B))
   {expr}         → (:Literal expr)
-  A|B            → (:Or (:A) (:B))
-  A&B            → (:And (:A) (:B))
-  A|B&C          → (:Or (:A) (:And (:B) (:C)))
+  A|B            → (`types-or' (:A) (:B))
+  A&B            → (`types-and' (:A) (:B))
+  A|B&C          → (`types-or' (:A) (`types-and' (:B) (:C)))
 
 Operator precedence: & binds tighter than |.
 Type names must match [A-Z][a-zA-Z0-9]*."
@@ -142,8 +132,8 @@ Splits on | at depth 0, then & at depth 0, then parses atoms."
                                    when (string-empty-p and-seg)
                                    do (error "Empty segment in intersection type: %s" s)
                                    collect (types--parse-atom and-seg))))
-                    (if (cdr and-elements) (cons :And and-elements) (car and-elements))))))
-    (if (cdr or-elements) (cons :Or or-elements) (car or-elements))))
+                    (apply #'types-and and-elements)))))
+    (apply #'types-or or-elements)))
 
 (defun types--parse-atom (s)
   "Parse a single type atom, or error.
@@ -239,20 +229,21 @@ Depth tracks < > and { } nesting."
          (setcdr (last elems) (types-format tail)))
        (format "%s" elems)))
 
-    (`(:Or . ,elts)
-     (mapconcat #'types-format elts " | "))
-    (`(:And . ,elts)
+    (`(:Logical . ,cases)
      (mapconcat
-      (lambda (e)
-        (if (eq (car-safe e) :Or)
-            (format "(%s)" (types-format e))
-          (types-format e)))
-      elts " & "))
+      (lambda (reqs)
+        (mapconcat
+         (lambda (req)
+           (types-format req))
+         reqs " & "))
+      cases " | "))
+
     (`(,(and kw (guard (keywordp kw))) . ,args)
      (let ((name (substring (symbol-name kw) 1)))
        (if args
            (format "%s<%s>" name (mapconcat #'types-format args ", "))
          name)))
+
     (_ (error "Invalid type expression: %S" type))))
 
 
@@ -273,11 +264,16 @@ Depth tracks < > and { } nesting."
      (and (types-subtype? `(:Literal ,lval) ltype)
           (types-subtype? `(:Literal ,rval) rtype)))
 
-    (`(,_ (:And . ,cases)) (cl-loop for case in cases always (types-subtype? a case)))
-    (`(,_ (:Or . ,cases)) (cl-loop for case in cases thereis (types-subtype? a case)))
-
-    (`((:And . ,cases) ,_) (cl-loop for case in cases thereis (types-subtype? a case)))
-    (`((:Or . ,cases) ,_) (cl-loop for case in cases always (types-subtype? case b)))
+    (`(,_ (:Logical . ,clauses))
+     ;; b is an Or of Ands - a must be subtype of at least one And-clause
+     (cl-loop for clause in clauses
+              thereis (cl-loop for case in clause
+                               always (types-subtype? a case))))
+    (`((:Logical . ,clauses) ,_)
+     ;; a is an Or of Ands - every And-clause must be subtype of b
+     (cl-loop for clause in clauses
+              always (cl-loop for case in clause
+                              thereis (types-subtype? case b))))
 
     ((guard (equal a b)) t)
     (`(,_ (:Any)) t)
@@ -290,38 +286,85 @@ Depth tracks < > and { } nesting."
     ))
 
 
-;;;; Simplify type
+;;;; Logical types
 
-(defun types--simplify (type)
+(defun types-and (&rest args)
+  (pcase args
+    ('nil `(:Logical ()))
+    (`(,only) only)
+    (`(,a ,b ,c . ,rest) (types-and a (apply #'types-and b c rest)))
+    (`(,(and a (or `(:Logical . ,a-cases) (let a-cases `((,a)))))
+       ,(and b (or `(:Logical . ,b-cases) (let b-cases `((,b))))))
+     (let ((cases
+            (cl-loop for ac in a-cases
+                     append
+                     (cl-loop for bc in b-cases
+                              collect
+                              (cl-loop for (req . rest) on (seq-uniq (append ac bc))
+                                       unless
+                                       (cl-loop for r in (append new-reqs rest)
+                                                ;; r is a subtype of req, so req is redundant
+                                                thereis (types-subtype? r req))
+                                       collect req into new-reqs
+                                       finally return new-reqs)))))
+
+       (apply #'types-or (cl-loop for case in cases collect (list :Logical case)))))
+    (_ (error "Should be unreachable"))))
+
+(defun types-or (&rest args)
+  (pcase args
+    ('nil `(:Logical))
+    (`(,only) only)
+    (`(,a ,b ,c . ,rest) (types-or a (apply #'types-or b c rest)))
+    (`(,(and a (or `(:Logical . ,a-cases) (let a-cases `((,a)))))
+       ,(and b (or `(:Logical . ,b-cases) (let b-cases `((,b))))))
+     (let* ((cases
+             (cl-loop for (case . rest) on (seq-uniq (append a-cases b-cases))
+                      unless
+                      (cl-loop for c in (append new-cases rest)
+                               ;; case is a subtype of c, so case is redundant
+                               thereis
+                               (cl-loop for req in case
+                                        always (cl-loop for r in c
+                                                        thereis (types-subtype? req r))))
+                      collect case into new-cases
+                      finally return new-cases)))
+       (pcase cases
+         (`((,type)) type)
+         (_ (cons :Logical cases)))))
+
+    (_ (error "Should be unreachable"))))
+
+
+;;;; Exclude
+
+(defun types-exclude (type exclude)
+  "Create a subtype of TYPE with some elements of EXCLUDE removed.
+
+This function will do its best to exclude all types, but it is not
+perfect. For example, there is no type to represent (:Number) with all
+of (:Integer) excluded, so it will just return (:Number).
+
+In cases where EXCLUDE contains all elements of TYPE, return (:Logical),
+representing a never type."
   (pcase type
-    (`(:Or ,single) single)
-    (`(:And ,single) single)
+    (`(:Logical . ,cases)
+     (apply #'types-or
+            (cl-loop for case in cases
+                     collect (types--exclude-case case exclude))))
+    (_ (types--exclude-case (list type) exclude))))
 
-    (`(:Or . ,cases)
-     (setq cases (cl-loop for case in cases
-                          nconc (pcase case
-                                  (`(:Or . ,inner) inner)
-                                  (_ (list case)))))
-     (setq cases (seq-uniq cases))
-     (if (cdr cases) (cons :Or cases) (car cases)))
-
-    (`(:And . ,cases)
-     (setq cases (cl-loop for case in cases
-                          nconc (pcase case
-                                  (`(:And . ,inner) inner)
-                                  (_ (list case)))))
-     (setq cases (seq-uniq cases))
-     ;; Remove all cases which are a subtype of another case (redundant)
-     (setq cases
-           (cl-loop for (case . rest) on cases
-                    unless (cl-loop for c in (append new-cases rest)
-                                    thereis (types-subtype? case c))
-                    collect case into new-cases
-                    finally return new-cases))
-
-     (if (cdr cases) (cons :And cases) (car cases)))
-
-    (_ type)))
+(defun types--exclude-case (reqs exclude)
+  "Helper function for `types-exclude' handling a case of a :Logical."
+  (pcase exclude
+    (`(:Logical . ,ex-cases)
+     ;; Must exclude every OR branch of exclude
+     (cl-loop with acc = `(:Logical (,@reqs))
+              for ex-case in ex-cases
+              do (setq acc (types-exclude acc `(:Logical (,@ex-case))))
+              finally return acc))
+    ((guard (types-subtype? `(:Logical (,@reqs)) exclude)) `(:Logical))
+    (_ (apply #'types-and reqs))))
 
 
 ;;; ============================================================
@@ -404,17 +447,16 @@ Depth tracks < > and { } nesting."
 
 (defun types-check ()
   "Returns the type of the current expr, if typechecking did not error."
-  (types--simplify
-   (pcase types--current-expr
-     (`(,func . ,args)
-      (or (apply (or (get func 'types-checker)
-                     (error "No checker for function: %s" func))
-                 args)
-          (error "Checker returned nil")))
-     ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
-      (or (alist-get sym types--binds)
-          (error "Free variable: %s" sym)))
-     (expr (list :Literal expr)))))
+  (pcase types--current-expr
+    (`(,func . ,args)
+     (or (apply (or (get func 'types-checker)
+                    (error "No checker for function: %s" func))
+                args)
+         (error "Checker returned nil")))
+    ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
+     (or (alist-get sym types--binds)
+         (error "Free variable: %s" sym)))
+    (expr (list :Literal expr))))
 
 
 ;;;; Check subexpression helper
@@ -452,7 +494,7 @@ Depth tracks < > and { } nesting."
 (defun types-check-block (start)
   (cl-loop for idx upfrom start below (length types--current-expr)
            for type = (types-with-path (list idx) (types-check))
-           finally return type))
+           finally return (or type `(:Literal nil))))
 
 
 ;;;; Root level functions
@@ -615,7 +657,7 @@ Depth tracks < > and { } nesting."
   (let ((expr-type (types-check-arg 1 expr)))
     (pcase expr-type
       (`(:Cons ,car ,_) car)
-      (`(:List ,elem) `(:Or (:Literal nil) ,elem))
+      (`(:List ,elem) (types-or `(:Literal nil) elem))
       (_ (types-with-path 1 (error "Expected list or cons, found %s" expr-type))))))
 
 
@@ -638,28 +680,16 @@ Depth tracks < > and { } nesting."
              finally return type)))
 
 (types-define-checker or (&rest args)
-  (if (null args)
-      '(:Literal nil)
-    (let ((types (cl-loop for arg in args
-                          for idx upfrom 1
-                          collect (types-check-arg idx arg))))
-      ;; For all but the last type, strip (:Literal nil) from :Or unions,
-      ;; since a non-nil value would have short-circuited to return that value.
-      (let ((stripped
-             (cl-loop for type in (butlast types)
-                      collect
-                      (pcase type
-                        (`(:Or . ,cases)
-                         (let ((non-nil (cl-remove '(:Literal nil) cases :test #'equal)))
-                           (pcase non-nil
-                             (`(,single) single)
-                             (_ (cons :Or non-nil)))))
-                        (_ type))))
-            (last-type (car (last types))))
-        (let ((all-types (append stripped (list last-type))))
-          (if (cl-every (lambda (type) (equal type (car all-types))) (cdr all-types))
-              (car all-types)
-            (cons :Or all-types)))))))
+  (if (null args) `(:Literal nil)
+    (let* ((types (cl-loop for arg in args
+                           for idx upfrom 1
+                           collect (types-check-arg idx arg)))
+           ;; For all but the last type, strip (:Literal nil) from :Or unions,
+           ;; since a non-nil value would have short-circuited to return that value.
+           (no-nil (cl-loop for type in (butlast types)
+                            collect (types-exclude type `(:Literal nil))))
+           (last-type (car (last types))))
+      (apply #'types-or (append no-nil (list last-type))))))
 
 
 ;;; ============================================================
