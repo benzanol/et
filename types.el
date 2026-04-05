@@ -38,6 +38,7 @@
 ;;; Code:
 
 (require 'flycheck)
+(require 'seq)
 
 
 ;;; ============================================================
@@ -63,8 +64,46 @@
                   collect `(ignore-errors (or ,(car tail) t)))))
 
 
-;;; ============================================================
-;;; Core
+;;;; Flycheck move error
+
+(defun types--flycheck-reposition-error (err)
+  "If ERR has a ;;flycheck-path: sentinel, reposition it."
+  (with-demoted-errors "Error in reposition: %s"
+    (when-let* ((msg (flycheck-error-message err))
+                (match (string-match "\0;;flycheck-path:\\((.*)\\)" msg))
+                (path (car (read-from-string (match-string 1 msg))))
+                (prev-start t))
+
+      ;; Strip the sentinel from the displayed message
+      (setf (flycheck-error-message err)
+            (substring msg 0 match))
+      (if (eq (flycheck-error-level err) 'warning)
+          (setf (flycheck-error-level err) 'info))
+
+      ;; Find the macro call in the buffer and walk the path
+      (with-current-buffer (flycheck-error-buffer err)
+        (save-excursion
+          ;; (debug)
+          (goto-char (flycheck-error-pos err)) ; start near the error
+          (beginning-of-defun)
+
+          (dolist (idx path)
+            (cl-assert (looking-at-p "[[(]"))
+            (forward-char 1)
+            (dotimes (_ idx) (forward-sexp))
+            (forward-sexp) (backward-sexp))
+
+          (setf (flycheck-error-line err) (line-number-at-pos))
+          (setf (flycheck-error-column err) (1+ (current-column)))
+          (forward-sexp)
+          (setf (flycheck-error-end-line err) (line-number-at-pos))
+          (setf (flycheck-error-end-column err) (1+ (current-column))))))
+    ;; return nil so other handlers still run
+    nil))
+
+(add-hook 'flycheck-process-error-functions #'types--flycheck-reposition-error)
+
+
 ;;;; Type parsing
 
 (defun types-parse (spec)
@@ -120,48 +159,49 @@ S can have one of the following forms:
 - num<NUMBER>        -> (:Literal (string-to-number NUMBER))
 
 An atom is a parenthesized {type}, generic Name<A~B>, or plain Name."
-  (cond
-   ;; {type}
-   ((eq (aref s 0) ?{)
-    (unless (eq (aref s (1- (length s))) ?})
-      (error "Unclosed literal brace in: %s" s))
-    (types--parse-string (substring s 1 -1)))
+  (let ((case-fold-search nil))
+    (cond
+     ;; {type}
+     ((eq (aref s 0) ?{)
+      (unless (eq (aref s (1- (length s))) ?})
+        (error "Unclosed literal brace in: %s" s))
+      (types--parse-string (substring s 1 -1)))
 
-   ((equal s "nil") (list :Literal nil))
-   ((equal s "t") (list :Literal t))
+     ((equal s "nil") (list :Literal nil))
+     ((equal s "t") (list :Literal t))
 
-   ;; Name or Name<...>
-   ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)" s)
-    (let ((name (match-string 1 s))
-          (rest-start (match-end 1))
-          (inner nil))
-      (if (= rest-start (length s))
-          (if (string-match-p "^[A-Z]" name)
-              (list (intern (format ":%s" name)))
-            (error "Type name %s must be capitalized" name))
+     ;; Name or Name<...>
+     ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)" s)
+      (let ((name (match-string 1 s))
+            (rest-start (match-end 1))
+            (inner nil))
+        (if (= rest-start (length s))
+            (if (string-match-p "^[A-Z]" name)
+                (list (intern (format ":%s" name)))
+              (error "Type name %s must be capitalized" name))
 
-        (unless (eq (aref s rest-start) ?<)
-          (error "Unexpected character after type name in: %s" s))
-        (unless (eq (aref s (1- (length s))) ?>)
-          (error "Unclosed angle bracket in: %s" s))
-        (setq inner (substring s (1+ rest-start) (1- (length s))))
+          (unless (eq (aref s rest-start) ?<)
+            (error "Unexpected character after type name in: %s" s))
+          (unless (eq (aref s (1- (length s))) ?>)
+            (error "Unclosed angle bracket in: %s" s))
+          (setq inner (substring s (1+ rest-start) (1- (length s))))
 
-        ;; If it is lowercase, it represents a literal
-        (if (string-match-p "^[a-z]" name)
-            (pcase name
-              ('"sym" (list :Literal (intern inner)))
-              ('"str" (list :Literal inner))
-              ('"num" (list :Literal (string-to-number inner)))
-              (_ (error "Invalid literal type: %s" name)))
+          ;; If it is lowercase, it represents a literal
+          (if (string-match-p "^[a-z]" name)
+              (pcase name
+                ('"sym" (list :Literal (intern inner)))
+                ('"str" (list :Literal inner))
+                ('"num" (list :Literal (string-to-number inner)))
+                (_ (error "Invalid literal type: %s" name)))
 
-          (let ((parts (types--split-at-depth inner ?~)))
-            (when (and (= (length parts) 1) (string-empty-p (car parts)))
-              (error "Empty type parameters in: %s" s))
-            (cons (intern (format ":%s" name))
-                  (cl-loop for p in parts
-                           collect (types--parse-string p))))))))
+            (let ((parts (types--split-at-depth inner ?~)))
+              (when (and (= (length parts) 1) (string-empty-p (car parts)))
+                (error "Empty type parameters in: %s" s))
+              (cons (intern (format ":%s" name))
+                    (cl-loop for p in parts
+                             collect (types--parse-string p))))))))
 
-   (t (error "Invalid type syntax: %s" s))))
+     (t (error "Invalid type syntax: %s" s)))))
 
 (defun types--split-at-depth (s delim)
   "Split string S on character DELIM at depth 0 only.
@@ -218,7 +258,7 @@ Depth tracks < > and { } nesting."
 
 ;;;; Is subtype
 
-(defun types-a-is-b (a b)
+(defun types-subtype? (a b)
   "Can an object of type A be assigned to a variable of type B?"
   (pcase (list a b)
     (`((:Literal ,value) (:Number)) (numberp value))
@@ -228,76 +268,78 @@ Depth tracks < > and { } nesting."
     (`((:Literal ,value) (:Boolean)) (or (null value) (eq value t)))
     (`((:Literal ,value) (:Nil)) (null value))
     (`((:Literal ,value) (:List ,elem))
-     (and (listp value) (cl-loop for e in value always (types-a-is-b `(:Literal ,e) elem))))
+     (and (listp value) (cl-loop for e in value always (types-subtype? `(:Literal ,e) elem))))
     (`((:Literal (,lval . ,rval)) (:Cons ,ltype ,rtype))
-     (and (types-a-is-b `(:Literal ,lval) ltype)
-          (types-a-is-b `(:Literal ,rval) rtype)))
+     (and (types-subtype? `(:Literal ,lval) ltype)
+          (types-subtype? `(:Literal ,rval) rtype)))
 
-    (`(,_ (:And . ,cases)) (cl-loop for case in cases always (types-a-is-b a case)))
-    (`(,_ (:Or . ,cases)) (cl-loop for case in cases thereis (types-a-is-b a case)))
+    (`(,_ (:And . ,cases)) (cl-loop for case in cases always (types-subtype? a case)))
+    (`(,_ (:Or . ,cases)) (cl-loop for case in cases thereis (types-subtype? a case)))
+
+    (`((:And . ,cases) ,_) (cl-loop for case in cases thereis (types-subtype? a case)))
+    (`((:Or . ,cases) ,_) (cl-loop for case in cases always (types-subtype? case b)))
 
     ((guard (equal a b)) t)
     (`(,_ (:Any)) t)
     ('((:Integer) (:Number)) t)
-    (`((:List ,ae) (:List ,ab)) (types-a-is-b ae ab))
-    (`((:Cons ,al ,ar) (:Cons ,bl ,br)) (and (types-a-is-b al bl) (types-a-is-b ar br)))
-    (`((:Cons ,l ,r) (:List ,elem)) (and (types-a-is-b l elem) (types-a-is-b r b)))
+    (`((:List ,ae) (:List ,ab)) (types-subtype? ae ab))
+    (`((:Cons ,al ,ar) (:Cons ,bl ,br)) (and (types-subtype? al bl) (types-subtype? ar br)))
+    (`((:Cons ,l ,r) (:List ,elem)) (and (types-subtype? l elem) (types-subtype? r b)))
     ;; This one doesn't quite work, because a list could be nil
-    ;; (`((:List ,elem) (:Cons ,l ,r)) (and (types-a-is-b elem l) (types-a-is-b a r)))
+    ;; (`((:List ,elem) (:Cons ,l ,r)) (and (types-subtype? elem l) (types-subtype? a r)))
     ))
 
 
-;;;; Flycheck
+;;; ============================================================
+;;; Checking
+;;;; Global variables
 
-(defvar types--flycheck-path nil)
+(defvar types--current-expr nil)
+(defvar types--current-path nil)
 
-(defmacro types--error (msg &rest args)
-  `(error ,(format "%s\0;;flycheck-path:%%s" msg)
-          ,@args types--flycheck-path))
+(defun types--error-advice (error string &rest args)
+  (if types--current-path
+      (apply error (format "%s\0;;flycheck-path:%s" string types--current-path)
+             args)
+    (apply error string args)))
+
+(advice-add #'error :around #'types--error-advice)
+
+(defun types-warn (msg &rest args)
+  (setq msg (format "%s\0;;flycheck-path:%s" msg types--current-path))
+  (apply #'byte-compile-warn msg args))
+
+(defmacro types--label-errors (expr)
+  `(condition-case err ,expr
+     (error
+      (let ((str (error-message-string err)))
+        (if (string-match-p "\0;;flycheck-path:([0-9 ]*)\\'" str)
+            (error str)
+          (error (format "%s\0;;flycheck-path:%s" str types--current-path)))))))
+
+(defun types--traverse-tree (path tree)
+  (if (null path) tree
+    (when (>= (car path) (length tree))
+      (error "Index out of bounds: %s %s" (car path) tree))
+    (types--traverse-tree (cdr path) (nth (car path) tree))))
 
 (defmacro types--with-path (path &rest body)
   (declare (indent 1))
-  `(let ((types--flycheck-path (append types--flycheck-path ,path)))
-     ,@body))
-
-
-(defun types--flycheck-reposition-error (err)
-  "If ERR has a ;;flycheck-path: sentinel, reposition it."
-  (with-demoted-errors "Error in reposition: %s"
-    (when-let* ((msg (flycheck-error-message err))
-                (match (string-match "\0;;flycheck-path:\\((.*)\\)" msg))
-                (path (car (read-from-string (match-string 1 msg))))
-                (prev-start t))
-
-      ;; Strip the sentinel from the displayed message
-      (setf (flycheck-error-message err)
-            (substring msg 0 match))
-
-      ;; Find the macro call in the buffer and walk the path
-      (with-current-buffer (flycheck-error-buffer err)
-        (save-excursion
-          ;; (debug)
-          (goto-char (flycheck-error-pos err)) ; start near the error
-          (beginning-of-defun)
-
-          (dolist (idx path)
-            (cl-assert (looking-at-p "[[(]"))
-            (forward-char 1)
-            (dotimes (_ idx) (forward-sexp))
-            (forward-sexp) (backward-sexp))
-
-          (setf (flycheck-error-line err) (line-number-at-pos))
-          (setf (flycheck-error-column err) (1+ (current-column)))
-          (forward-sexp)
-          (setf (flycheck-error-end-line err) (line-number-at-pos))
-          (setf (flycheck-error-end-column err) (1+ (current-column))))))
-    ;; return nil so other handlers still run
-    nil))
-
-(add-hook 'flycheck-process-error-functions #'types--flycheck-reposition-error)
-
-
-;;;; Checkers
+  (let ((path-var (make-symbol "path"))
+        (parent-var (make-symbol "parent"))
+        (expr-var (make-symbol "expr")))
+    `(let* ((,path-var ,path)
+            (,parent-var (types--traverse-tree (butlast ,path-var) types--current-expr))
+            (,expr-var (nth (car (last ,path-var)) ,parent-var))
+            (types--current-path (append types--current-path ,path-var))
+            (types--current-expr ,expr-var))
+       ;; (types--label-errors
+       (prog1 (progn ,@body)
+         (unless (eq types--current-expr ,expr-var)
+           (setf (nth (car (last ,path-var)) ,parent-var)
+                 types--current-expr)))
+       ;; )
+       )))
 
 (defvar types--binds nil)
 
@@ -306,6 +348,17 @@ Depth tracks < > and { } nesting."
   `(let ((types--binds (append ,binds types--binds)))
      ,@body))
 
+(defmacro types--root (expr &rest body)
+  (declare (indent 1))
+  `(progn
+     (cl-assert (null types--current-expr))
+     (cl-assert (null types--current-path))
+     (cl-assert (null types--binds))
+     (let ((types--current-expr ,expr))
+       ,@body)))
+
+
+;;;; Checkers
 
 (defmacro types-define-checker (expr-type arglist &rest body)
   (declare (indent 2))
@@ -315,44 +368,29 @@ Depth tracks < > and { } nesting."
   `(setf (get ',expr-type 'types-checker)
          (lambda . ,(cl--transform-lambda (cons arglist body) (format "types--checker:%s" expr-type)))))
 
-(defvar types--current-checking-expr nil)
-
-(defun types-check (expr)
-  "Returns a cons cell (TYPE . COMPILED).
-
-TYPE is the type that EXPR was determined to be.
-COMPILED is the compiled version of expr."
-
-  (pcase expr
+(defun types--check-current-expr ()
+  "Returns the type of the current expr, if typechecking did not error."
+  (pcase types--current-expr
     (`(,func . ,args)
-     (let ((types--current-checking-expr (apply #'list expr)))
-       (cons (apply (or (get func 'types-checker) (types--error "No checker for function: %s" func))
-                    args)
-             types--current-checking-expr)))
-    (_
-     (cons
-      (if (and (symbolp expr) expr (not (eq expr t)))
-          (or (alist-get expr types--binds)
-              (types--error "Free variable: %s" expr))
-        (list :Literal expr))
-
-      expr))))
+     (or (apply (or (get func 'types-checker)
+                    (error "No checker for function: %s" func))
+                args)
+         (error "Checker returned nil")))
+    ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
+     (or (alist-get sym types--binds)
+         (error "Free variable: %s" sym)))
+    (expr (list :Literal expr))))
 
 
 ;;;; Check subexpression helper
 
-(defun types-check-subexpr (where subexpr)
-  "Type check an argument of the current expression, returning the type.
-
-Set the value of `types--flycheck-path' to the path to the
-sub-expression, and calls `types-check' to do the actual checking. Then,
-update `types--current-checking-expr' to use the compiled version of the
-subexpression."
-  (let* ((expr types--current-checking-expr)
-         (_ (cl-assert (and expr (listp expr))))
+(defun types-check-arg (where subexpr)
+  "Type check an argument of the current expression, returning the type."
+  (cl-assert (and types--current-expr (listp types--current-expr)))
+  (let* ((expr types--current-expr)
          (position
           (cond
-           ((numberp where) (1+ where))
+           ((numberp where) where)
 
            ((keywordp where)
             ;; This method for calculating the position could technically
@@ -370,82 +408,106 @@ subexpression."
            (t (error "WHERE must be either an argument index or keyword")))))
 
     (cl-assert (eq (nth position expr) subexpr))
-    (let ((result (types--with-path (list position) (types-check subexpr))))
-      ;; Update the current expression to use the compiled argument
-      (setf (nth position types--current-checking-expr) (cdr result))
-      ;; Return just the type
-      (car result))))
+    (types--with-path (list position)
+      (types--check-current-expr))))
 
 
 ;;;; Check a block
 
-(defun types-check-block (offset body)
-  "Returns (TYPE COMPILED-BLOCK...)."
-  (cl-loop for expr in body
-           for idx upfrom offset
-           for (type . compiled) = (types--with-path (list idx) (types-check expr))
-           for block-type = type
-           collect compiled into compiled-block
-           finally return (cons block-type compiled-block)))
-
-(defmacro types-block (&rest body)
-  (cons #'progn (cdr (types-check-block 1 body))))
+(defun types-check-block (start)
+  (cl-loop for idx upfrom start below (length types--current-expr)
+           for type = (types--with-path (list idx) (types--check-current-expr))
+           finally return type))
 
 
-;;;; Resolve
+;;;; Root level functions
 
-(defun types-resolve (type expr)
+(defmacro types-root-block (&rest body)
+  (types--root (cons #'progn body)
+    (types-check-block 1)
+    types--current-expr))
+
+(defun types-root-check (expr)
+  (types--root expr (types--check-current-expr)))
+
+(defun types-resolve (type)
   (setq type (types-parse type))
-  (let ((result (types-check expr)))
-    (if (types-a-is-b (car result) type)
-        (cdr result)
-      (types--error "Type %s is not assignable to type %s"
-                    (types-format (car result)) (types-format type)))))
+
+  (let ((expr-type (types--check-current-expr)))
+    (unless (types-subtype? expr-type type)
+      (error "Type %s is not assignable to type %s"
+             (types-format expr-type) (types-format type)))))
+
+(defun types-root-resolve (type expr)
+  (types--root expr (types-resolve type)))
 
 
 ;;; ============================================================
 ;;; Control flow
 ;;;; Let
 
-(types-define-checker let* (varlist &rest body)
-  (let ((let-binds-rev nil)
-        (new-varlist-rev nil))
+(types-define-checker let* (varlist &rest _body)
+  (let ((let-binds-rev nil))
     ;; Process let forms
-    (dolist (form varlist)
-      (types--with-path (list 1 (length new-varlist-rev))
-        (pcase form
-          (`(,var ,type ,val)
-           ;; Parse the type
-           (unless (setq type (ignore-errors (types-parse type)))
-             (types--with-path (list 1) (types--error "Invalid type format")))
+    (cl-loop
+     for form in varlist
+     for idx upfrom 0
+     do
+     (types--with-path (list 1 idx)
+       (pcase form
+         (`(,var ,type ,val)
+          ;; Parse the type
+          (types--with-path (list 1) (setq type (types-parse type)))
 
-           ;; Type-check the value
-           (types--with-binds let-binds-rev
-             (types--with-path (list 2)
-               (setq val (types-resolve type val))))
+          ;; Type-check the value
+          (types--with-binds let-binds-rev
+            (types--with-path (list 2)
+              (types-resolve type)))
 
-           (push (list var val) new-varlist-rev)
-           (push (cons var type) let-binds-rev))
-          (_ (push form new-varlist-rev)))))
+          (setq types--current-expr (list var val))
+          (push (cons var type) let-binds-rev))
+         (`(,var ,_val)
+          (let ((type
+                 (types--with-binds let-binds-rev
+                   (types--with-path (list 1)
+                     (types--check-current-expr)))))
+            (push (cons var type) let-binds-rev)
+            (types--with-path (list 0)
+              (types-warn "%s: %s" var (types-format type))))))))
 
-    (let ((result (types--with-binds let-binds-rev (types-check-block 2 body))))
-      (setq types--current-checking-expr `(let ,(nreverse new-varlist-rev) . ,(cdr result)))
-      (car result))))
+    (types--with-binds let-binds-rev
+      (types-check-block 2))))
 
 
 ;;;; Dolist
 
-(types-define-checker dolist ((var etype lst) &rest body)
-  ;; Parse the type
-  (types--with-path (list 1 1)
-    (setq etype (types-parse etype)))
+(types-define-checker dolist (spec &rest)
+  (let (variable type)
+    (pcase spec
+      ;; With explicit type
+      (`(,var ,etype ,_val)
+       (types--with-path (list 1 1)
+         (setq type (types-parse etype)))
+       (setq variable var)
+       (types--with-path (list 1 2)
+         (types-resolve `(:List ,type))))
 
-  ;; Check if the list has the correct type
-  (types--with-path (list 1 2)
-    (setq lst (types-resolve `(:List ,etype) lst)))
+      ;; With implicit type
+      (`(,var ,_val)
+       (setq variable var)
+       (types--with-path (list 1 1)
+         (pcase (types--check-current-expr)
+           (`(:List ,elem) (setq type elem))
+           (other (error "Expected list, found %s" other))))
+       (types--with-path (list 1 0)
+         (types-warn "%s: %s" var (types-format type))))
 
-  (let ((result (types--with-binds (list (cons var etype)) (types-check-block 2 body))))
-    (setq types--current-checking-expr `(dolist (,var ,lst) . ,(cdr result)))
+      (_ (error "Invalid dolist variable spec")))
+
+    ;; Check the body
+    (types--with-binds (list (cons variable type))
+      (types-check-block 2))
+
     (list :Nil)))
 
 
@@ -454,17 +516,15 @@ subexpression."
 (types-define-checker setq (&rest args)
   (unless (eq (mod (length args) 2) 0)
     (types--with-path (list (length args))
-      (types--error "Unmatched variable")))
+      (error "Unmatched variable")))
 
-  (cl-loop for (var val) on args by #'cddr
+  (cl-loop for (var _val) on args by #'cddr
            for idx upfrom 0 by 2
            for type = (or (alist-get var types--binds)
                           (types--with-path (list (1+ idx))
-                            (types--error "Assignment to free variable")))
-           for found-type = (types-check-subexpr (1+ idx) val)
-           do (or (types-a-is-b found-type type)
-                  (types--with-path (list (+ 2 idx))
-                    (types--error "Cannot assign %s to type %s" found-type type)))
+                            (error "Assignment to free variable")))
+           do (types--with-path (list (+ idx 2))
+                (types-resolve type))
 
            finally return type))
 
@@ -482,12 +542,12 @@ subexpression."
 (defun types--check-arithmetic-function (args)
   (cl-loop with is-integer = t
            for arg in args
-           for idx upfrom 0
-           for type = (types-check-subexpr idx arg)
-           do (or (types-a-is-b type '(:Number))
-                  (types--with-path (list (1+ idx))
-                    (types--error "Argument must be a number")))
-           do (setq is-integer (and is-integer (types-a-is-b type '(:Integer))))
+           for idx upfrom 1
+           for type = (types-check-arg idx arg)
+           do (or (types-subtype? type '(:Number))
+                  (types--with-path (list idx)
+                    (error "Argument must be a number, got %s" type)))
+           do (setq is-integer (and is-integer (types-subtype? type '(:Integer))))
            finally return (if is-integer (list :Integer) (list :Number))))
 
 (types-define-checker + (&rest args) (types--check-arithmetic-function args))
@@ -498,42 +558,73 @@ subexpression."
 (types-define-checker 1- (arg) (types--check-arithmetic-function (list arg)))
 
 
-;;;; cons
+;;;; cons/list
 
 (types-define-checker cons (lval rval)
   (list :Cons
-        (types-check-subexpr 0 lval)
-        (types-check-subexpr 1 rval)))
+        (types-check-arg 1 lval)
+        (types-check-arg 2 rval)))
 
-
-;;;; list
 
 (types-define-checker list (&rest args)
   (cl-loop with type = (list :Literal nil)
            for arg in (reverse args)
-           for idx downfrom (1- (length args))
-           do (setq type (list :Cons (types-check-subexpr idx arg) type))
+           for idx downfrom (length args)
+           do (setq type (list :Cons (types-check-arg idx arg) type))
            finally return type))
 
 
-;;;; car
+;;;; car/cdr
 
 (types-define-checker car (expr)
-  (let ((expr-type (types-check-subexpr 0 expr)))
+  (let ((expr-type (types-check-arg 1 expr)))
     (pcase expr-type
       (`(:Cons ,car ,_) car)
       (`(:List ,elem) `(:Or (:Literal nil) ,elem))
-      (_ (types--with-path 1 (types--error "Expected list or cons, found %s" expr-type))))))
+      (_ (types--with-path 1 (error "Expected list or cons, found %s" expr-type))))))
 
-
-;;;; cdr
 
 (types-define-checker cdr (expr)
-  (let ((expr-type (types-check-subexpr 0 expr)))
+  (let ((expr-type (types-check-arg 1 expr)))
     (pcase expr-type
       (`(:Cons ,_ ,cdr) cdr)
       (`(:List ,elem) `(:List ,elem))
-      (_ (types--with-path 1 (types--error "Expected list or cons, found %s" expr-type))))))
+      (_ (types--with-path 1 (error "Expected list or cons, found %s" expr-type))))))
+
+
+;;;; and/or
+
+(types-define-checker and (&rest args)
+  (if (null args)
+      '(:Literal t)
+    (cl-loop for arg in args
+             for idx upfrom 1
+             for type = (types-check-arg idx arg)
+             finally return type)))
+
+(types-define-checker or (&rest args)
+  (if (null args)
+      '(:Literal nil)
+    (let ((types (cl-loop for arg in args
+                          for idx upfrom 1
+                          collect (types-check-arg idx arg))))
+      ;; For all but the last type, strip (:Literal nil) from :Or unions,
+      ;; since a non-nil value would have short-circuited to return that value.
+      (let ((stripped
+             (cl-loop for type in (butlast types)
+                      collect
+                      (pcase type
+                        (`(:Or . ,cases)
+                         (let ((non-nil (cl-remove '(:Literal nil) cases :test #'equal)))
+                           (pcase non-nil
+                             (`(,single) single)
+                             (_ (cons :Or non-nil)))))
+                        (_ type))))
+            (last-type (car (last types))))
+        (let ((all-types (append stripped (list last-type))))
+          (if (cl-every (lambda (type) (equal type (car all-types))) (cdr all-types))
+              (car all-types)
+            (cons :Or all-types)))))))
 
 
 ;;; ============================================================
