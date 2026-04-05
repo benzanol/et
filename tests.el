@@ -49,156 +49,156 @@
 ;;; Types
 ;;;; Primitives
 
-(types-assert-success (types-resolve :Number 1))
-(types-assert-success (types-resolve :Number 1.1))
-(types-assert-error (types-resolve :Number "1"))
+(types-assert-success (types-root-resolve :Number 1))
+(types-assert-success (types-root-resolve :Number 1.1))
+(types-assert-error (types-root-resolve :Number "1"))
 
-(types-assert-success (types-resolve :Integer 1))
-(types-assert-error (types-resolve :Integer 1.1))
-(types-assert-error (types-resolve :Integer "1"))
+(types-assert-success (types-root-resolve :Integer 1))
+(types-assert-error (types-root-resolve :Integer 1.1))
+(types-assert-error (types-root-resolve :Integer "1"))
 
-(types-assert-success (types-resolve :String "1"))
-(types-assert-error (types-resolve :String 1))
+(types-assert-success (types-root-resolve :String "1"))
+(types-assert-error (types-root-resolve :String 1))
 
-(types-assert-success (types-resolve :Symbol nil))
-(types-assert-success (types-resolve :Symbol t))
-(types-assert-error (types-resolve :Symbol 'a)) ; Not self-quoting
-(types-assert-error (types-resolve :Symbol 1))
-(types-assert-error (types-resolve :Symbol "1"))
+(types-assert-success (types-root-resolve :Symbol nil))
+(types-assert-success (types-root-resolve :Symbol t))
+(types-assert-error (types-root-resolve :Symbol 'a)) ; Not self-quoting
+(types-assert-error (types-root-resolve :Symbol 1))
+(types-assert-error (types-root-resolve :Symbol "1"))
 
-(types-assert-success (types-resolve :Boolean t))
-(types-assert-success (types-resolve :Boolean nil))
-(types-assert-error (types-resolve :Boolean 'a))
-(types-assert-error (types-resolve :Boolean 1))
-(types-assert-error (types-resolve :Boolean "1"))
+(types-assert-success (types-root-resolve :Boolean t))
+(types-assert-success (types-root-resolve :Boolean nil))
+(types-assert-error (types-root-resolve :Boolean 'a))
+(types-assert-error (types-root-resolve :Boolean 1))
+(types-assert-error (types-root-resolve :Boolean "1"))
 
 
 ;;;; Quoted
 
-(types-assert-success (types-resolve :Integer ''1))
-(types-assert-success (types-resolve :Number ''1.1))
-(types-assert-success (types-resolve :String ''"hi"))
-(types-assert-success (types-resolve :Symbol ''a))
-(types-assert-error (types-resolve :Integer ''1.1))
-(types-assert-error (types-resolve :Integer '''1))
-(types-assert-error (types-resolve :Number '''1.1))
-(types-assert-error (types-resolve :String '''"hi"))
-(types-assert-error (types-resolve :Symbol '''a))
+(types-assert-success (types-root-resolve :Integer ''1))
+(types-assert-success (types-root-resolve :Number ''1.1))
+(types-assert-success (types-root-resolve :String ''"hi"))
+(types-assert-success (types-root-resolve :Symbol ''a))
+(types-assert-error (types-root-resolve :Integer ''1.1))
+(types-assert-error (types-root-resolve :Integer '''1))
+(types-assert-error (types-root-resolve :Number '''1.1))
+(types-assert-error (types-root-resolve :String '''"hi"))
+(types-assert-error (types-root-resolve :Symbol '''a))
 
-(types-assert-success (types-resolve :List<Integer> ''(1 2 3)))
-(types-assert-success (types-resolve :List<Symbol> ''(a b c)))
-(types-assert-success (types-resolve :List<Integer> ''()))
-(types-assert-error (types-resolve :List<Integer> ''(1 2 '3)))
-(types-assert-error (types-resolve :List<Integer> ''(1 2 3.3)))
-(types-assert-error (types-resolve :List<Integer> '''(1 2 3)))
-(types-assert-error (types-resolve :List<Integer> '''()))
+(types-assert-success (types-root-resolve :List<Integer> ''(1 2 3)))
+(types-assert-success (types-root-resolve :List<Symbol> ''(a b c)))
+(types-assert-success (types-root-resolve :List<Integer> ''()))
+(types-assert-error (types-root-resolve :List<Integer> ''(1 2 '3)))
+(types-assert-error (types-root-resolve :List<Integer> ''(1 2 3.3)))
+(types-assert-error (types-root-resolve :List<Integer> '''(1 2 3)))
+(types-assert-error (types-root-resolve :List<Integer> '''()))
 
-(types-assert-success (types-resolve :Cons<Integer~Integer> ''(1 . 2)))
-(types-assert-error (types-resolve :Cons<Integer~Integer> ''(1 . 2.2)))
-(types-assert-error (types-resolve :Cons<Integer~Integer> ''(1.1 . 2)))
-(types-assert-success (types-resolve :Cons<Symbol~List<String>> ''(a "2" "3")))
+(types-assert-success (types-root-resolve :Cons<Integer~Integer> ''(1 . 2)))
+(types-assert-error (types-root-resolve :Cons<Integer~Integer> ''(1 . 2.2)))
+(types-assert-error (types-root-resolve :Cons<Integer~Integer> ''(1.1 . 2)))
+(types-assert-success (types-root-resolve :Cons<Symbol~List<String>> ''(a "2" "3")))
 
 
 ;;;; And/or
 
 ;; And - value must satisfy all constituent types
-(types-assert-success (types-resolve :And<Boolean~Boolean> t))
-(types-assert-success (types-resolve :And<Boolean~Symbol~Boolean> t))
-(types-assert-error   (types-resolve :And<Boolean~Integer> t))
-(types-assert-error   (types-resolve :And<Boolean~Integer> 1))
-(types-assert-error   (types-resolve :And<Boolean~Integer> nil))
+(types-assert-success (types-root-resolve :And<Boolean~Boolean> t))
+(types-assert-success (types-root-resolve :And<Boolean~Symbol~Boolean> t))
+(types-assert-error   (types-root-resolve :And<Boolean~Integer> t))
+(types-assert-error   (types-root-resolve :And<Boolean~Integer> 1))
+(types-assert-error   (types-root-resolve :And<Boolean~Integer> nil))
 
 ;; Two Or types
-(types-assert-success (types-resolve :Or<Boolean~Integer> t))
-(types-assert-success (types-resolve :Or<Boolean~Integer> nil))
-(types-assert-success (types-resolve :Or<Boolean~Integer> 1))
-(types-assert-error   (types-resolve :Or<Boolean~Integer> "1"))
-(types-assert-error   (types-resolve :Or<Boolean~Integer> 'a))
+(types-assert-success (types-root-resolve :Or<Boolean~Integer> t))
+(types-assert-success (types-root-resolve :Or<Boolean~Integer> nil))
+(types-assert-success (types-root-resolve :Or<Boolean~Integer> 1))
+(types-assert-error   (types-root-resolve :Or<Boolean~Integer> "1"))
+(types-assert-error   (types-root-resolve :Or<Boolean~Integer> 'a))
 
 ;; Three Or types
-(types-assert-success (types-resolve :Or<Boolean~Integer~String> t))
-(types-assert-success (types-resolve :Or<Boolean~Integer~String> 1))
-(types-assert-success (types-resolve :Or<Boolean~Integer~String> "1"))
-(types-assert-error   (types-resolve :Or<Boolean~Integer~String> 'a))
+(types-assert-success (types-root-resolve :Or<Boolean~Integer~String> t))
+(types-assert-success (types-root-resolve :Or<Boolean~Integer~String> 1))
+(types-assert-success (types-root-resolve :Or<Boolean~Integer~String> "1"))
+(types-assert-error   (types-root-resolve :Or<Boolean~Integer~String> 'a))
 
 ;; Nested - And inside Or
-(types-assert-success (types-resolve :Or<Integer~And<Boolean~Symbol>> t))
-(types-assert-success (types-resolve :Or<Integer~And<Boolean~Symbol>> 1))
-(types-assert-error   (types-resolve :Or<Integer~And<Boolean~Symbol>> 'a))
+(types-assert-success (types-root-resolve :Or<Integer~And<Boolean~Symbol>> t))
+(types-assert-success (types-root-resolve :Or<Integer~And<Boolean~Symbol>> 1))
+(types-assert-error   (types-root-resolve :Or<Integer~And<Boolean~Symbol>> 'a))
 
 ;; Nested - Or inside And
-(types-assert-success (types-resolve :And<Boolean~Or<Symbol~Integer>> t))
-(types-assert-success (types-resolve :And<Boolean~Or<Symbol~Integer>> nil))
-(types-assert-error   (types-resolve :And<Boolean~Or<Symbol~Integer>> 1))
+(types-assert-success (types-root-resolve :And<Boolean~Or<Symbol~Integer>> t))
+(types-assert-success (types-root-resolve :And<Boolean~Or<Symbol~Integer>> nil))
+(types-assert-error   (types-root-resolve :And<Boolean~Or<Symbol~Integer>> 1))
 
 
 ;;;; cons
 
-(types-assert-success (types-resolve :Cons<Integer~String> '(cons 1 "2")))
-(types-assert-error (types-resolve :Cons<Integer~String> '(cons "1" 2)))
-(types-assert-success (types-resolve :Cons<Integer~List<String>> '(cons 1 nil)))
-(types-assert-success (types-resolve :Cons<Integer~List<String>> '(cons 1 (cons "2" nil))))
+(types-assert-success (types-root-resolve :Cons<Integer~String> '(cons 1 "2")))
+(types-assert-error (types-root-resolve :Cons<Integer~String> '(cons "1" 2)))
+(types-assert-success (types-root-resolve :Cons<Integer~List<String>> '(cons 1 nil)))
+(types-assert-success (types-root-resolve :Cons<Integer~List<String>> '(cons 1 (cons "2" nil))))
 
-(types-assert-success (types-resolve :List<Integer> '(cons 1 (cons 2 nil))))
-(types-assert-error (types-resolve :List<Integer> '(cons 1 (cons "2" nil))))
-(types-assert-error (types-resolve :List<Integer> '(cons "1" (cons 2 nil))))
-(types-assert-error (types-resolve :List<Integer> '(cons 1 (cons 2 t))))
+(types-assert-success (types-root-resolve :List<Integer> '(cons 1 (cons 2 nil))))
+(types-assert-error (types-root-resolve :List<Integer> '(cons 1 (cons "2" nil))))
+(types-assert-error (types-root-resolve :List<Integer> '(cons "1" (cons 2 nil))))
+(types-assert-error (types-root-resolve :List<Integer> '(cons 1 (cons 2 t))))
 
 
 ;;;; list
 
-(types-assert-success (types-resolve :Cons<Integer~List<String>> '(list 1 "2")))
-(types-assert-error (types-resolve :Cons<Integer~String> '(list "1" 2)))
-(types-assert-error (types-resolve :Cons<Integer~String> '(list)))
+(types-assert-success (types-root-resolve :Cons<Integer~List<String>> '(list 1 "2")))
+(types-assert-error (types-root-resolve :Cons<Integer~String> '(list "1" 2)))
+(types-assert-error (types-root-resolve :Cons<Integer~String> '(list)))
 
-(types-assert-success (types-resolve :List<Integer> '(list 1 2 3)))
-(types-assert-success (types-resolve :List<Integer> '(list 1)))
-(types-assert-error (types-resolve :List<Integer> '(list 1 "2" 3)))
+(types-assert-success (types-root-resolve :List<Integer> '(list 1 2 3)))
+(types-assert-success (types-root-resolve :List<Integer> '(list 1)))
+(types-assert-error (types-root-resolve :List<Integer> '(list 1 "2" 3)))
 
 
 ;;;; car
 
-(types-assert-success (types-resolve :Integer '(car (list 1 2.2 3))))
-(types-assert-error (types-resolve :Integer '(car (list 1.1 2 3))))
-(types-assert-success (types-resolve :Integer '(car (cons 1 "3"))))
-(types-assert-success (types-resolve :List<Integer> '(car (cons (list 1) "3"))))
-(types-assert-success (types-resolve :Cons<Integer~Any> '(car (cons (list 1) "3"))))
-(types-assert-success (types-resolve :Integer '(car (car (cons (list 1) "3")))))
-(types-assert-error (types-resolve :Integer '(car (car (cons (list 1.1) "3")))))
+(types-assert-success (types-root-resolve :Integer '(car (list 1 2.2 3))))
+(types-assert-error (types-root-resolve :Integer '(car (list 1.1 2 3))))
+(types-assert-success (types-root-resolve :Integer '(car (cons 1 "3"))))
+(types-assert-success (types-root-resolve :List<Integer> '(car (cons (list 1) "3"))))
+(types-assert-success (types-root-resolve :Cons<Integer~Any> '(car (cons (list 1) "3"))))
+(types-assert-success (types-root-resolve :Integer '(car (car (cons (list 1) "3")))))
+(types-assert-error (types-root-resolve :Integer '(car (car (cons (list 1.1) "3")))))
 
 
 ;;;; cdr
 
-(types-assert-success (types-resolve :List<Number> '(cdr (list 1 2.2 3))))
-(types-assert-success (types-resolve :List<Integer> '(cdr (list 1.1 2 3))))
-(types-assert-error (types-resolve :List<Integer> '(car (list 1 2.2 3))))
+(types-assert-success (types-root-resolve :List<Number> '(cdr (list 1 2.2 3))))
+(types-assert-success (types-root-resolve :List<Integer> '(cdr (list 1.1 2 3))))
+(types-assert-error (types-root-resolve :List<Integer> '(car (list 1 2.2 3))))
 
-(types-assert-success (types-resolve :Integer '(cdr (cons "1" 2))))
-(types-assert-error (types-resolve :Integer '(cdr (cons 1 "2"))))
+(types-assert-success (types-root-resolve :Integer '(cdr (cons "1" 2))))
+(types-assert-error (types-root-resolve :Integer '(cdr (cons 1 "2"))))
 
-(types-assert-success (types-resolve :List<Integer> '(cdr (cons "1" (list 2)))))
-(types-assert-success (types-resolve :Cons<Integer~Any> '(cdr (cons "1" (list 2)))))
-(types-assert-success (types-resolve :Cons<Integer~Boolean> '(cdr (cons "1" (list 2)))))
-(types-assert-error (types-resolve :Cons<Integer~Boolean> '(cdr (cons "1" (list 2 3)))))
-(types-assert-success (types-resolve :Integer '(car (cdr (cons "1" (list 2))))))
+(types-assert-success (types-root-resolve :List<Integer> '(cdr (cons "1" (list 2)))))
+(types-assert-success (types-root-resolve :Cons<Integer~Any> '(cdr (cons "1" (list 2)))))
+(types-assert-success (types-root-resolve :Cons<Integer~Boolean> '(cdr (cons "1" (list 2)))))
+(types-assert-error (types-root-resolve :Cons<Integer~Boolean> '(cdr (cons "1" (list 2 3)))))
+(types-assert-success (types-root-resolve :Integer '(car (cdr (cons "1" (list 2))))))
 
-(types-assert-success (types-resolve :Boolean '(cdr (cdr (cdr (list 1 2 3))))))
-(types-assert-error (types-resolve :Boolean '(cdr (cdr (list 1 2 3)))))
+(types-assert-success (types-root-resolve :Boolean '(cdr (cdr (cdr (list 1 2 3))))))
+(types-assert-error (types-root-resolve :Boolean '(cdr (cdr (list 1 2 3)))))
 
 
 ;;; ============================================================
 ;;; Blocks
 
-(types-block
- (let* ((a :Integer 4)
+(types-root-block
+ (let* ((c (1+ 4))
+        (a :Integer 4)
         (b :List<Integer> (list (+ 1 2))))
-   ;; (setq a 3.3)
+   (setq a c)
    (let* ((a :List<Integer> (cons (1+ a) nil)))
-     (dolist (n :Integer a)
-       (setq b (cons (+ n 1) b)))
-     (+ 2 1))))
+     (dolist (n a)
+       (setq b (cons (+ n 1) b))))
+   (setq a (or (car b) 12))))
 
-;; (my-macro 1 (2 3) 3)
 
 
 ;; ============================================================

@@ -290,6 +290,40 @@ Depth tracks < > and { } nesting."
     ))
 
 
+;;;; Simplify type
+
+(defun types--simplify (type)
+  (pcase type
+    (`(:Or ,single) single)
+    (`(:And ,single) single)
+
+    (`(:Or . ,cases)
+     (setq cases (cl-loop for case in cases
+                          nconc (pcase case
+                                  (`(:Or . ,inner) inner)
+                                  (_ (list case)))))
+     (setq cases (seq-uniq cases))
+     (if (cdr cases) (cons :Or cases) (car cases)))
+
+    (`(:And . ,cases)
+     (setq cases (cl-loop for case in cases
+                          nconc (pcase case
+                                  (`(:And . ,inner) inner)
+                                  (_ (list case)))))
+     (setq cases (seq-uniq cases))
+     ;; Remove all cases which are a subtype of another case (redundant)
+     (setq cases
+           (cl-loop for (case . rest) on cases
+                    unless (cl-loop for c in (append new-cases rest)
+                                    thereis (types-subtype? case c))
+                    collect case into new-cases
+                    finally return new-cases))
+
+     (if (cdr cases) (cons :And cases) (car cases)))
+
+    (_ type)))
+
+
 ;;; ============================================================
 ;;; Checking
 ;;;; Global variables
@@ -323,7 +357,7 @@ Depth tracks < > and { } nesting."
       (error "Index out of bounds: %s %s" (car path) tree))
     (types--traverse-tree (cdr path) (nth (car path) tree))))
 
-(defmacro types--with-path (path &rest body)
+(defmacro types-with-path (path &rest body)
   (declare (indent 1))
   (let ((path-var (make-symbol "path"))
         (parent-var (make-symbol "parent"))
@@ -343,7 +377,7 @@ Depth tracks < > and { } nesting."
 
 (defvar types--binds nil)
 
-(defmacro types--with-binds (binds &rest body)
+(defmacro types-with-binds (binds &rest body)
   (declare (indent 1))
   `(let ((types--binds (append ,binds types--binds)))
      ,@body))
@@ -368,18 +402,19 @@ Depth tracks < > and { } nesting."
   `(setf (get ',expr-type 'types-checker)
          (lambda . ,(cl--transform-lambda (cons arglist body) (format "types--checker:%s" expr-type)))))
 
-(defun types--check-current-expr ()
+(defun types-check ()
   "Returns the type of the current expr, if typechecking did not error."
-  (pcase types--current-expr
-    (`(,func . ,args)
-     (or (apply (or (get func 'types-checker)
-                    (error "No checker for function: %s" func))
-                args)
-         (error "Checker returned nil")))
-    ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
-     (or (alist-get sym types--binds)
-         (error "Free variable: %s" sym)))
-    (expr (list :Literal expr))))
+  (types--simplify
+   (pcase types--current-expr
+     (`(,func . ,args)
+      (or (apply (or (get func 'types-checker)
+                     (error "No checker for function: %s" func))
+                 args)
+          (error "Checker returned nil")))
+     ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
+      (or (alist-get sym types--binds)
+          (error "Free variable: %s" sym)))
+     (expr (list :Literal expr)))))
 
 
 ;;;; Check subexpression helper
@@ -408,15 +443,15 @@ Depth tracks < > and { } nesting."
            (t (error "WHERE must be either an argument index or keyword")))))
 
     (cl-assert (eq (nth position expr) subexpr))
-    (types--with-path (list position)
-      (types--check-current-expr))))
+    (types-with-path (list position)
+      (types-check))))
 
 
 ;;;; Check a block
 
 (defun types-check-block (start)
   (cl-loop for idx upfrom start below (length types--current-expr)
-           for type = (types--with-path (list idx) (types--check-current-expr))
+           for type = (types-with-path (list idx) (types-check))
            finally return type))
 
 
@@ -428,12 +463,12 @@ Depth tracks < > and { } nesting."
     types--current-expr))
 
 (defun types-root-check (expr)
-  (types--root expr (types--check-current-expr)))
+  (types--root expr (types-check)))
 
 (defun types-resolve (type)
   (setq type (types-parse type))
 
-  (let ((expr-type (types--check-current-expr)))
+  (let ((expr-type (types-check)))
     (unless (types-subtype? expr-type type)
       (error "Type %s is not assignable to type %s"
              (types-format expr-type) (types-format type)))))
@@ -453,29 +488,29 @@ Depth tracks < > and { } nesting."
      for form in varlist
      for idx upfrom 0
      do
-     (types--with-path (list 1 idx)
+     (types-with-path (list 1 idx)
        (pcase form
          (`(,var ,type ,val)
           ;; Parse the type
-          (types--with-path (list 1) (setq type (types-parse type)))
+          (types-with-path (list 1) (setq type (types-parse type)))
 
           ;; Type-check the value
-          (types--with-binds let-binds-rev
-            (types--with-path (list 2)
+          (types-with-binds let-binds-rev
+            (types-with-path (list 2)
               (types-resolve type)))
 
           (setq types--current-expr (list var val))
           (push (cons var type) let-binds-rev))
          (`(,var ,_val)
           (let ((type
-                 (types--with-binds let-binds-rev
-                   (types--with-path (list 1)
-                     (types--check-current-expr)))))
+                 (types-with-binds let-binds-rev
+                   (types-with-path (list 1)
+                     (types-check)))))
             (push (cons var type) let-binds-rev)
-            (types--with-path (list 0)
+            (types-with-path (list 0)
               (types-warn "%s: %s" var (types-format type))))))))
 
-    (types--with-binds let-binds-rev
+    (types-with-binds let-binds-rev
       (types-check-block 2))))
 
 
@@ -486,26 +521,26 @@ Depth tracks < > and { } nesting."
     (pcase spec
       ;; With explicit type
       (`(,var ,etype ,_val)
-       (types--with-path (list 1 1)
+       (types-with-path (list 1 1)
          (setq type (types-parse etype)))
        (setq variable var)
-       (types--with-path (list 1 2)
+       (types-with-path (list 1 2)
          (types-resolve `(:List ,type))))
 
       ;; With implicit type
       (`(,var ,_val)
        (setq variable var)
-       (types--with-path (list 1 1)
-         (pcase (types--check-current-expr)
+       (types-with-path (list 1 1)
+         (pcase (types-check)
            (`(:List ,elem) (setq type elem))
            (other (error "Expected list, found %s" other))))
-       (types--with-path (list 1 0)
+       (types-with-path (list 1 0)
          (types-warn "%s: %s" var (types-format type))))
 
       (_ (error "Invalid dolist variable spec")))
 
     ;; Check the body
-    (types--with-binds (list (cons variable type))
+    (types-with-binds (list (cons variable type))
       (types-check-block 2))
 
     (list :Nil)))
@@ -515,15 +550,15 @@ Depth tracks < > and { } nesting."
 
 (types-define-checker setq (&rest args)
   (unless (eq (mod (length args) 2) 0)
-    (types--with-path (list (length args))
+    (types-with-path (list (length args))
       (error "Unmatched variable")))
 
   (cl-loop for (var _val) on args by #'cddr
            for idx upfrom 0 by 2
            for type = (or (alist-get var types--binds)
-                          (types--with-path (list (1+ idx))
+                          (types-with-path (list (1+ idx))
                             (error "Assignment to free variable")))
-           do (types--with-path (list (+ idx 2))
+           do (types-with-path (list (+ idx 2))
                 (types-resolve type))
 
            finally return type))
@@ -545,7 +580,7 @@ Depth tracks < > and { } nesting."
            for idx upfrom 1
            for type = (types-check-arg idx arg)
            do (or (types-subtype? type '(:Number))
-                  (types--with-path (list idx)
+                  (types-with-path (list idx)
                     (error "Argument must be a number, got %s" type)))
            do (setq is-integer (and is-integer (types-subtype? type '(:Integer))))
            finally return (if is-integer (list :Integer) (list :Number))))
@@ -581,7 +616,7 @@ Depth tracks < > and { } nesting."
     (pcase expr-type
       (`(:Cons ,car ,_) car)
       (`(:List ,elem) `(:Or (:Literal nil) ,elem))
-      (_ (types--with-path 1 (error "Expected list or cons, found %s" expr-type))))))
+      (_ (types-with-path 1 (error "Expected list or cons, found %s" expr-type))))))
 
 
 (types-define-checker cdr (expr)
@@ -589,7 +624,7 @@ Depth tracks < > and { } nesting."
     (pcase expr-type
       (`(:Cons ,_ ,cdr) cdr)
       (`(:List ,elem) `(:List ,elem))
-      (_ (types--with-path 1 (error "Expected list or cons, found %s" expr-type))))))
+      (_ (types-with-path 1 (error "Expected list or cons, found %s" expr-type))))))
 
 
 ;;;; and/or
