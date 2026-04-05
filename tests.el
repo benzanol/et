@@ -200,6 +200,13 @@
    (let* ((e (or (car b) 12))))
    (setq a (or (car b) 12))))
 
+(types-root-block
+ (let* ((a :String|Integer 4)
+        (b :String|Number 4))
+   (if (numberp a)
+       (+ 1 a)
+     (let* ((test a))
+       test))))
 
 
 ;; ============================================================

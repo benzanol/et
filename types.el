@@ -288,6 +288,10 @@ Depth tracks < > and { } nesting."
 
 ;;;; Logical types
 
+(defun types-base-nonoverlapping (type1 type2)
+  (and (not (types-subtype? type1 type2))
+       (not (types-subtype? type2 type1))))
+
 (defun types-and (&rest args)
   (pcase args
     ('nil `(:Logical ()))
@@ -306,8 +310,8 @@ Depth tracks < > and { } nesting."
                                                 ;; r is a subtype of req, so req is redundant
                                                 thereis (types-subtype? r req))
                                        collect req into new-reqs
-                                       finally return new-reqs)))))
-
+                                       finally return
+                                       new-reqs)))))
        (apply #'types-or (cl-loop for case in cases collect (list :Logical case)))))
     (_ (error "Should be unreachable"))))
 
@@ -323,10 +327,7 @@ Depth tracks < > and { } nesting."
                       unless
                       (cl-loop for c in (append new-cases rest)
                                ;; case is a subtype of c, so case is redundant
-                               thereis
-                               (cl-loop for req in case
-                                        always (cl-loop for r in c
-                                                        thereis (types-subtype? req r))))
+                               thereis (types-subtype? `(:Logical ,case) `(:Logical ,c)))
                       collect case into new-cases
                       finally return new-cases)))
        (pcase cases
@@ -365,6 +366,37 @@ representing a never type."
               finally return acc))
     ((guard (types-subtype? `(:Logical (,@reqs)) exclude)) `(:Logical))
     (_ (apply #'types-and reqs))))
+
+
+;;;; Is
+
+(defun types--is-bindings (type)
+  "Given a TYPE that was truthy, return bindings it implies."
+  (pcase type
+    (`(:Logical . ,cases)
+     ;; Collect bindings from each OR case - only safe to use the
+     ;; 'and' of a binding across each case
+     (let ((per-case (cl-loop for case in cases
+                              collect
+                              (cl-loop for req in case
+                                       append (types--is-bindings req)))))
+       (cl-reduce (lambda (a b)
+                    (cl-loop for (var . type) in a
+                             for other = (alist-get var b)
+                             when other collect (cons var (types-and type other))))
+                  per-case)))
+
+    (`(:Is (,var . ,base-type) ,type)
+     (list (cons var (types-and base-type type))))
+    (_ nil)))
+
+(defmacro types-with-is-bindings (type &rest body)
+  (declare (indent 1))
+  `(let ((binds (types--is-bindings ,type)))
+     (types-with-path (list 0)
+       (types-warn "%s" (cl-loop for (var . type) in binds
+                                 concat (format "%s: %s" var (types-format type)))))
+     (types-with-binds binds ,@body)))
 
 
 ;;; ============================================================
@@ -606,6 +638,16 @@ representing a never type."
            finally return type))
 
 
+;;;; If
+
+(types-define-checker if (cond then &optional _else)
+  (let* ((cond-type (types-check-arg 1 cond)))
+    (types-or
+     (types-with-is-bindings cond-type
+       (types-check-arg 2 then))
+     (types-check-block 3))))
+
+
 ;;; ============================================================
 ;;; Types
 ;;;; Quoted
@@ -690,6 +732,27 @@ representing a never type."
                             collect (types-exclude type `(:Literal nil))))
            (last-type (car (last types))))
       (apply #'types-or (append no-nil (list last-type))))))
+
+
+;;;; Predicates
+
+(defmacro types-define-predicate (name type)
+  `(types-define-checker ,name (expr)
+     (if (symbolp expr)
+         (list :Is (or (assoc expr types--binds)
+                       (error "Invalid variable %s" expr))
+               ',type)
+       ;; Compile the argument
+       (types-check-arg 1 expr)
+       `(:Boolean))))
+
+(types-define-predicate stringp (:String))
+(types-define-predicate numberp (:Number))
+(types-define-predicate integerp (:Integer))
+(types-define-predicate consp (:Cons (:Logical ()) (:Logical ())))
+(types-define-predicate listp (:Logical ((:Cons (:Logical ()) (:Logical ()))) ((:Literal nil))))
+(types-define-predicate null (:Literal nil))
+(types-define-predicate not (:Literal nil))
 
 
 ;;; ============================================================
