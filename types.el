@@ -278,10 +278,6 @@ Depth tracks < > and { } nesting."
     (`((:Cons ,al ,ar) (:Cons ,bl ,br)) (and (types-subtype? al bl) (types-subtype? ar br)))
     (`((:Cons ,l ,r) (:List ,elem)) (and (types-subtype? l elem) (types-subtype? r b)))
 
-    ;; Non-nil
-    (`((:Literal ,value) (:NonNil)) (not (null value)))
-    (`((,(or :Cons :Integer :Number :String)) (:NonNil)) t)
-
     ;; Literals
     (`((:Literal ,value) (:Number)) (numberp value))
     (`((:Literal ,value) (:Integer)) (and (numberp value) (eq (mod value 1) 0)))
@@ -325,9 +321,6 @@ type."
       ;; Different literals
       (`((:Literal ,a-val) (:Literal ,b-val)) (not (equal a-val b-val)))
 
-      ;; nil and NonNil
-      ((or `((:NonNil) (:Literal nil)) `((:Literal nil) (:NonNil))) t)
-
       ;; Literal which is not an instance of a data type
       ((or `((:Literal ,val) ,other) `(,other (:Literal ,val)))
        (and (memq (car-safe other) data-types)
@@ -367,18 +360,9 @@ Returns nil if any requirements are incompatible."
     (`(,only) only)
     (`(,a ,b ,c . ,rest) (types-and a (apply #'types-and b c rest)))
 
-    ;; Both types have only 1 logical case
-    (`(,(or `(:Logical ,a-reqs) (and a (guard (not (eq :Logical (car-safe a)))) (let a-reqs `(,a))))
-       ,(or `(:Logical ,b-reqs) (and b (guard (not (eq :Logical (car-safe b)))) (let b-reqs `(,b)))))
-     (pcase (types--simplify-requirements (append a-reqs b-reqs))
-       ('nil `(:Logical))
-       (`(,type) type)
-       (reqs `(:Logical ,reqs))))
-
-    ;; One or both types have multiple logical cases. Expand out into
-    ;; all possible pairings, and perform `types-and' on each possible
-    ;; pairing (defer to the case above). Then perform `types-or' on
-    ;; the resulting pairings.
+    ;; Expand out into all possible pairings of cases, and perform
+    ;; `types--simplify-requirements' on each possible pairing. Then
+    ;; perform `types-or' on the resulting pairings.
     (`(,(and a (or `(:Logical . ,a-cases) (let a-cases `((,a)))))
        ,(and b (or `(:Logical . ,b-cases) (let b-cases `((,b))))))
      (let ((cases
@@ -440,6 +424,38 @@ Returns a list of (VARSPEC . TYPE)."
                                  collect (format "%s: %s" var (types-format type)) into strs
                                  finally return (string-join strs "\\n"))))
      (types-with-binds binds ,@body)))
+
+
+;;;; Exclude
+;;;; Exclude
+
+(defun types-exclude (type exclude)
+  "Create a subtype of TYPE with some elements of EXCLUDE removed.
+
+This function will do its best to exclude all types, but it is not
+perfect. For example, there is no type to represent (:Number) with all
+of (:Integer) excluded, so it will just return (:Number).
+
+In cases where EXCLUDE contains all elements of TYPE, return (:Logical),
+representing a never type."
+  (pcase type
+    (`(:Logical . ,cases)
+     (apply #'types-or
+            (cl-loop for case in cases
+                     collect (types--exclude-case case exclude))))
+    (_ (types--exclude-case (list type) exclude))))
+
+(defun types--exclude-case (reqs exclude)
+  "Helper function for `types-exclude' handling a case of a :Logical."
+  (pcase exclude
+    (`(:Logical . ,ex-cases)
+     ;; Must exclude every OR branch of exclude
+     (cl-loop with acc = `(:Logical (,@reqs))
+              for ex-case in ex-cases
+              do (setq acc (types-exclude acc `(:Logical (,@ex-case))))
+              finally return acc))
+    ((guard (types-subtype? `(:Logical (,@reqs)) exclude)) `(:Logical))
+    (_ (apply #'types-and reqs))))
 
 
 ;;; ============================================================
@@ -686,7 +702,7 @@ Returns a list of (VARSPEC . TYPE)."
 (types-define-checker if (cond then &optional _else)
   (let* ((cond-type (types-check-arg 1 cond)))
     (types-or
-     (types-with-is-bindings (types-and cond-type '(:NonNil))
+     (types-with-is-bindings (types-exclude cond-type '(:Literal nil))
        (types-check-arg 2 then))
      (types-check-block 3))))
 
@@ -763,11 +779,11 @@ Returns a list of (VARSPEC . TYPE)."
              for idx upfrom 1
              for type = (types-check-arg idx arg)
              unless (eq idx (length args))
-             append (types--is-bindings (types-and type '(:NonNil))) into binds
+             append (types--is-bindings (types-exclude type '(:Literal nil))) into binds
              finally return
              (types-or '(:Literal nil)
                        (apply #'types-and
-                              (types-and type '(:NonNil))
+                              (types-exclude type '(:Literal nil))
                               (cl-loop for (varspec . type) in binds
                                        collect (list :Bind varspec type)))))))
 
@@ -779,7 +795,7 @@ Returns a list of (VARSPEC . TYPE)."
            ;; For all but the last type, strip (:Literal nil) from :Or unions,
            ;; since a non-nil value would have short-circuited to return that value.
            (no-nil (cl-loop for type in (butlast types)
-                            collect (types-and type '(:NonNil))))
+                            collect (types-exclude type '(:Literal nil))))
            (last-type (car (last types))))
       (apply #'types-or (append no-nil (list last-type))))))
 
