@@ -415,14 +415,17 @@ Returns a list of (VARSPEC . TYPE)."
                 collect (cons varspec (apply #'types-or type types)))))
     (_ nil)))
 
-(defmacro types-with-is-bindings (type &rest body)
-  (declare (indent 1))
+(defmacro types-with-is-bindings (format type &rest body)
+  (declare (indent 2))
   `(let ((binds (cl-loop for ((var . _) . type) in (types--is-bindings ,type)
-                         collect (cons var type))))
+                         collect (cons var type)))
+         (format ,format))
      (types-with-path (list 0)
-       (types-warn "%s" (cl-loop for (var . type) in binds
-                                 collect (format "%s: %s" var (types-format type)) into strs
-                                 finally return (string-join strs "\\n"))))
+       (when format
+         (types-warn format
+                     (cl-loop for (var . type) in binds
+                              collect (format "%s: %s" var (types-format type)) into strs
+                              finally return (string-join strs "\\n")))))
      (types-with-binds binds ,@body)))
 
 
@@ -702,10 +705,20 @@ representing a never type."
 (types-define-checker if (cond then &optional _else)
   (let* ((cond-type (types-check-arg 1 cond)))
     (types-or
-     (types-with-is-bindings (types-exclude cond-type '(:Literal nil))
+     (types-with-is-bindings "non-nil case:\\n%s" (types-exclude cond-type '(:Literal nil))
        (types-check-arg 2 then))
-     (types-with-is-bindings (types-and cond-type '(:Literal nil))
+     (types-with-is-bindings "nil case:\\n%s" (types-and cond-type '(:Literal nil))
        (types-check-block 3)))))
+
+(types-define-checker when (cond &rest body)
+  (let* ((cond-type (types-check-arg 1 cond)))
+    (types-with-is-bindings "%s" (types-exclude cond-type '(:Literal nil))
+      (types-check-block 2))))
+
+(types-define-checker unless (cond &rest body)
+  (let* ((cond-type (types-check-arg 1 cond)))
+    (types-with-is-bindings "%s" (types-and cond-type '(:Literal nil))
+      (types-check-block 2))))
 
 
 ;;; ============================================================
