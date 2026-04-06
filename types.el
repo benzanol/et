@@ -499,6 +499,13 @@ representing a never type."
 (defun et-never () (make-et-type :cases nil))
 (defun et-literal (value) (et-datatype `(:Literal ,value)))
 (defun et-nil () (et-datatype `(:Literal nil)))
+
+(defun et-type-factors (type)
+  "Expand out the factors as a list of lists."
+  (cl-loop for case in (et-type-cases type)
+           collect (cl-loop for factor in (et-case-factors case)
+                            collect factor)))
+
 (defun et-type-with-binds (type &rest binds)
   (cl-loop with type-copy = (copy-et-type type)
            for case in (et-type-cases type)
@@ -767,6 +774,31 @@ Returns a single datatype, or nil if it is impossible."
   `(let ((et--binds (append ,binds et--binds)))
      ,@body))
 
+(defun et--type-binds (type)
+  "Return bindings embedded in TYPE.
+
+Returns a list of (VARSPEC . TYPE)."
+
+  (when-let ((alists (mapcar #'et-case-binds (et-type-cases type))))
+    (cl-loop for (varspec . type) in (car alists)
+             for types = (cl-loop for alist in (cdr alists)
+                                  for type = (alist-get varspec alist)
+                                  always type collect type)
+             when types
+             collect (cons varspec (apply #'types-or type types)))))
+
+(defmacro et-with-type-binds (format type &rest body)
+  (declare (indent 2))
+  `(let ((binds (et--type-binds ,type))
+         (format ,format))
+     (et-with-path (list 0)
+       (when format
+         (et-warn format
+                  (cl-loop for (var . type) in binds
+                           collect (format "%s: %s" var (et-format type)) into strs
+                           finally return (string-join strs "\\n")))))
+     (et-with-binds binds ,@body)))
+
 (defmacro et--root (expr &rest body)
   (declare (indent 1))
   `(progn
@@ -911,75 +943,75 @@ Returns a single datatype, or nil if it is impossible."
 
 ;;;; Dolist
 
-(types-define-checker dolist (spec &rest)
-                      (let (variable type)
-                        (pcase spec
-                          ;; With explicit type
-                          (`(,var ,etype ,_val)
-                           (types-with-path (list 1 1)
-                                            (setq type (types-parse etype)))
-                           (setq variable var)
-                           (types-with-path (list 1 2)
-                                            (types-resolve `(:List ,type))))
+(et-define-checker dolist (spec &rest)
+  (let (variable type)
+    (pcase spec
+      ;; With explicit type
+      (`(,var ,etype ,_val)
+       (et-with-path (list 1 1)
+         (setq type (et-parse etype)))
+       (setq variable var)
+       (et-with-path (list 1 2)
+         (et-resolve (et-datatype `(:List ,type)))))
 
-                          ;; With implicit type
-                          (`(,var ,_val)
-                           (setq variable var)
-                           (types-with-path (list 1 1)
-                                            (pcase (types-check)
-                                              (`(:List ,elem) (setq type elem))
-                                              (other (error "Expected list, found %s" other))))
-                           (types-with-path (list 1 0)
-                                            (types-warn "%s: %s" var (types-format type))))
+      ;; With implicit type
+      (`(,var ,_val)
+       (setq variable var)
+       (et-with-path (list 1 1)
+         (pcase (et-type-factors (et-check))
+           (`(((:List ,elem))) (setq type elem))
+           (other (error "Expected list, found %s" other))))
+       (et-with-path (list 1 0)
+         (et-warn "%s: %s" var (et-format type))))
 
-                          (_ (error "Invalid dolist variable spec")))
+      (_ (error "Invalid dolist variable spec")))
 
-                        ;; Check the body
-                        (types-with-binds (list (cons variable type))
-                                          (types-check-block 2))
+    ;; Check the body
+    (et-with-binds (list (cons variable type))
+      (et-check-tail 2))
 
-                        (list :Nil)))
+    (et-nil)))
 
 
 ;;;; Setq
 
-(types-define-checker setq (&rest args)
-                      (unless (eq (mod (length args) 2) 0)
-                        (types-with-path (list (length args))
-                                         (error "Unmatched variable")))
+(et-define-checker setq (&rest args)
+  (unless (eq (mod (length args) 2) 0)
+    (et-with-path (list (length args))
+      (error "Unmatched variable")))
 
-                      (cl-loop for (var _val) on args by #'cddr
-                               for idx upfrom 0 by 2
-                               for type = (or (alist-get var types--binds)
-                                              (types-with-path (list (1+ idx))
-                                                               (error "Assignment to free variable")))
-                               do (types-with-path (list (+ idx 2))
-                                                   (types-resolve type))
+  (cl-loop for (var _val) on args by #'cddr
+           for idx upfrom 0 by 2
+           for type = (or (alist-get var et--binds)
+                          (et-with-path (list (1+ idx))
+                            (error "Assignment to free variable")))
+           do (et-with-path (list (+ idx 2))
+                (et-resolve type))
 
-                               finally return type))
+           finally return type))
 
 
 ;;;; If
 
-(types-define-checker if (cond then &optional _else)
-                      (let* ((cond-type (types-check-arg 1 cond)))
-                        (byte-compile-warn "%s" (types-and cond-type '(:Literal nil)))
-                        (types-or
-                         (types-with-is-bindings "non-nil case:\\n%s" (types-exclude cond-type '(:Literal nil))
-                           (types-check-arg 2 then))
-                         (types-with-is-bindings "nil case:\\n%s" (types-and cond-type '(:Literal nil))
-                           (types-check-block 3)))))
+(et-define-checker if (cond then &optional _else)
+  (let* ((cond-type (et-check-arg 1 cond)))
+    (byte-compile-warn "%s" (et-and cond-type '(:Literal nil)))
+    (et-or
+     (et-with-type-binds "non-nil case:\\n%s" (et-subtract cond-type (et-nil))
+       (et-check-arg 2 then))
+     (et-with-type-binds "nil case:\\n%s" (et-and cond-type (et-nil))
+       (et-check-block 3)))))
 
 
-(types-define-checker when (cond &rest _body)
-                      (let* ((cond-type (types-check-arg 1 cond)))
-                        (types-with-is-bindings "%s" (types-exclude cond-type '(:Literal nil))
-                          (types-check-block 2))))
+(et-define-checker when (cond &rest _body)
+  (let* ((cond-type (et-check-arg 1 cond)))
+    (et-with-type-binds "%s" (et-subtract cond-type (et-nil))
+      (et-check-block 2))))
 
-(types-define-checker unless (cond &rest _body)
-                      (let* ((cond-type (types-check-arg 1 cond)))
-                        (types-with-is-bindings "%s" (types-and cond-type '(:Literal nil))
-                          (types-check-block 2))))
+(et-define-checker unless (cond &rest _body)
+  (let* ((cond-type (et-check-arg 1 cond)))
+    (et-with-type-binds "%s" (et-and cond-type (et-nil))
+      (et-check-block 2))))
 
 
 ;;; ============================================================
