@@ -43,17 +43,6 @@
 
 ;;; ============================================================
 ;;; Utils
-;;;; Assert at compile type
-
-(defmacro types-assert-error (expr)
-  (condition-case _err (eval expr)
-    (error nil)
-    (:success (error "Expected error"))))
-
-(defmacro types-assert-success (expr)
-  (ignore (eval expr)))
-
-
 ;;;; Flycheck move error
 
 (defun types--flycheck-reposition-error (err)
@@ -66,7 +55,7 @@
 
       ;; Strip the sentinel from the displayed message
       (setf (flycheck-error-message err)
-            (substring msg 0 match))
+            (replace-regexp-in-string "\\\\n" "\n" (substring msg 0 match)))
       (if (eq (flycheck-error-level err) 'warning)
           (setf (flycheck-error-level err) 'info))
 
@@ -92,6 +81,17 @@
     nil))
 
 (add-hook 'flycheck-process-error-functions #'types--flycheck-reposition-error)
+
+
+;;;; Assert at compile type
+
+(defmacro types-assert-error (expr)
+  (condition-case _err (eval expr)
+    (error nil)
+    (:success (error "Expected error"))))
+
+(defmacro types-assert-success (expr)
+  (ignore (eval expr)))
 
 
 ;;;; Type parsing
@@ -229,6 +229,9 @@ Depth tracks < > and { } nesting."
          (setcdr (last elems) (types-format tail)))
        (format "%s" elems)))
 
+    (`(:Logical) "nothing")
+    (`(:Logical ()) "anything")
+
     (`(:Logical . ,cases)
      (mapconcat
       (lambda (reqs)
@@ -237,6 +240,8 @@ Depth tracks < > and { } nesting."
            (types-format req))
          reqs " & "))
       cases " | "))
+
+    (`(:Bind (,var . ,_) ,type) (format "{%s: %s}" var (types-format type)))
 
     (`(,(and kw (guard (keywordp kw))) . ,args)
      (let ((name (substring (symbol-name kw) 1)))
@@ -292,26 +297,91 @@ Depth tracks < > and { } nesting."
   (and (not (types-subtype? type1 type2))
        (not (types-subtype? type2 type1))))
 
+(defun types--simplify-and (a b)
+  "Perform an and of two non-:Logical types.
+
+Returns a single type, or nil if the and cannot be simplified to a
+single non-logical type."
+  (pcase (list a b)
+    ((guard (types-subtype? a b)) a)
+    ((guard (types-subtype? b a)) b)
+    (`((:Bind ,varspec ,a-bind) (:Bind ,varspec ,b-bind))
+     `(:Bind ,varspec ,(types-and a-bind b-bind)))
+    (_ nil)))
+
+(defun types--incompatible? (a b)
+  "Return non-nil if types A and B have no intersection.
+
+This is not intended to check intersection for logical types, as it is
+intended as a helper for `types-and'. To check intersection for
+arbitrary types, check if `types-and' returns (:Logical), the never
+type."
+  (let ((data-types '(:Number :Integer :String :Symbol)))
+    (pcase (list a b)
+      ;; Different literals
+      (`((:Literal ,a-val) (:Literal ,b-val)) (not (equal a-val b-val)))
+
+      ;; nil and NonNil
+      ((or `((:NonNil) (:Literal nil)) `((:Literal nil) (:NonNil))) t)
+
+      ;; Literal which is not an instance of a data type
+      ((or `((:Literal ,val) ,other) `(,other (:Literal ,val)))
+       (and (memq (car-safe other) data-types)
+            (not (types-subtype? `(:Literal ,val) other))))
+
+      ;; Incompatible data types
+      ((guard (and (memq (car-safe a) data-types)
+                   (memq (car-safe b) data-types)))
+       (not (or (types-subtype? a b) (types-subtype? b a))))
+
+      (_ nil))))
+
+(defun types--simplify-requirements (reqs)
+  "Simplify REQS into a simpler but equivalent requirement list.
+
+Returns nil if any requirements are incompatible."
+
+  ;; Check if any types are incompatible
+  (when (cl-loop for (a . rest) on reqs
+                 always (cl-loop for b in rest
+                                 always (not (types--incompatible? a b))))
+
+    ;; Search through every possible pair of requirements, to check
+    ;; if `types--simplify-and' returns a simple merging of the
+    ;; two. If it does, then replace both requirements with it.
+    (cl-loop for (req . tail) on reqs
+             unless (cl-loop for new-tail on new-reqs
+                             for simple = (types--simplify-and req (car new-tail))
+                             when simple do (setcar new-tail simple)
+                             thereis simple)
+             collect req into new-reqs
+             finally return new-reqs)))
+
 (defun types-and (&rest args)
   (pcase args
     ('nil `(:Logical ()))
     (`(,only) only)
     (`(,a ,b ,c . ,rest) (types-and a (apply #'types-and b c rest)))
+
+    ;; Both types have only 1 logical case
+    (`(,(or `(:Logical ,a-reqs) (and a (guard (not (eq :Logical (car-safe a)))) (let a-reqs `(,a))))
+       ,(or `(:Logical ,b-reqs) (and b (guard (not (eq :Logical (car-safe b)))) (let b-reqs `(,b)))))
+     (pcase (types--simplify-requirements (append a-reqs b-reqs))
+       ('nil `(:Logical))
+       (`(,type) type)
+       (reqs `(:Logical ,reqs))))
+
+    ;; One or both types have multiple logical cases. Expand out into
+    ;; all possible pairings, and perform `types-and' on each possible
+    ;; pairing (defer to the case above). Then perform `types-or' on
+    ;; the resulting pairings.
     (`(,(and a (or `(:Logical . ,a-cases) (let a-cases `((,a)))))
        ,(and b (or `(:Logical . ,b-cases) (let b-cases `((,b))))))
      (let ((cases
             (cl-loop for ac in a-cases
-                     append
-                     (cl-loop for bc in b-cases
-                              collect
-                              (cl-loop for (req . rest) on (seq-uniq (append ac bc))
-                                       unless
-                                       (cl-loop for r in (append new-reqs rest)
-                                                ;; r is a subtype of req, so req is redundant
-                                                thereis (types-subtype? r req))
-                                       collect req into new-reqs
-                                       finally return
-                                       new-reqs)))))
+                     append (cl-loop for bc in b-cases
+                                     for reqs = (types--simplify-requirements (append ac bc))
+                                     when reqs collect reqs))))
        (apply #'types-or (cl-loop for case in cases collect (list :Logical case)))))
     (_ (error "Should be unreachable"))))
 
@@ -337,65 +407,34 @@ Depth tracks < > and { } nesting."
     (_ (error "Should be unreachable"))))
 
 
-;;;; Exclude
-
-(defun types-exclude (type exclude)
-  "Create a subtype of TYPE with some elements of EXCLUDE removed.
-
-This function will do its best to exclude all types, but it is not
-perfect. For example, there is no type to represent (:Number) with all
-of (:Integer) excluded, so it will just return (:Number).
-
-In cases where EXCLUDE contains all elements of TYPE, return (:Logical),
-representing a never type."
-  (pcase type
-    (`(:Logical . ,cases)
-     (apply #'types-or
-            (cl-loop for case in cases
-                     collect (types--exclude-case case exclude))))
-    (_ (types--exclude-case (list type) exclude))))
-
-(defun types--exclude-case (reqs exclude)
-  "Helper function for `types-exclude' handling a case of a :Logical."
-  (pcase exclude
-    (`(:Logical . ,ex-cases)
-     ;; Must exclude every OR branch of exclude
-     (cl-loop with acc = `(:Logical (,@reqs))
-              for ex-case in ex-cases
-              do (setq acc (types-exclude acc `(:Logical (,@ex-case))))
-              finally return acc))
-    ((guard (types-subtype? `(:Logical (,@reqs)) exclude)) `(:Logical))
-    (_ (apply #'types-and reqs))))
-
-
 ;;;; Is
 
 (defun types--is-bindings (type)
-  "Given a TYPE that was truthy, return bindings it implies."
-  (pcase type
-    (`(:Logical . ,cases)
-     ;; Collect bindings from each OR case - only safe to use the
-     ;; 'and' of a binding across each case
-     (let ((per-case (cl-loop for case in cases
-                              collect
-                              (cl-loop for req in case
-                                       append (types--is-bindings req)))))
-       (cl-reduce (lambda (a b)
-                    (cl-loop for (var . type) in a
-                             for other = (alist-get var b)
-                             when other collect (cons var (types-and type other))))
-                  per-case)))
+  "Given a TYPE that was truthy, return bindings it implies.
 
-    (`(:Is (,var . ,base-type) ,type)
-     (list (cons var (types-and base-type type))))
+Returns a list of (VARSPEC . TYPE)."
+  (pcase type
+    (`(:Bind ,varspec ,type)
+     (list (cons varspec (types-and (cdr varspec) type))))
+    (`(:Logical ,only) (mapcan #'types--is-bindings only))
+    (`(:Logical ,first . ,rest)
+     (let ((rest-binds (cl-loop for case in rest collect (types--is-bindings `(:Logical ,case)))))
+       (cl-loop for (varspec . type) in (types--is-bindings `(:Logical ,first))
+                for types = (cl-loop for entry in rest-binds
+                                     for type = (alist-get varspec entry)
+                                     always type collect type)
+                when types
+                collect (cons varspec (cl-reduce #'types-and (cons type types))))))
     (_ nil)))
 
 (defmacro types-with-is-bindings (type &rest body)
   (declare (indent 1))
-  `(let ((binds (types--is-bindings ,type)))
+  `(let ((binds (cl-loop for ((var . _) . type) in (types--is-bindings ,type)
+                         collect (cons var type))))
      (types-with-path (list 0)
        (types-warn "%s" (cl-loop for (var . type) in binds
-                                 concat (format "%s: %s" var (types-format type)))))
+                                 collect (format "%s: %s" var (types-format type)) into strs
+                                 finally return (string-join strs "\\n"))))
      (types-with-binds binds ,@body)))
 
 
@@ -643,7 +682,7 @@ representing a never type."
 (types-define-checker if (cond then &optional _else)
   (let* ((cond-type (types-check-arg 1 cond)))
     (types-or
-     (types-with-is-bindings cond-type
+     (types-with-is-bindings (types-and cond-type '(:NonNil))
        (types-check-arg 2 then))
      (types-check-block 3))))
 
@@ -719,7 +758,14 @@ representing a never type."
     (cl-loop for arg in args
              for idx upfrom 1
              for type = (types-check-arg idx arg)
-             finally return type)))
+             unless (eq idx (length args))
+             append (types--is-bindings (types-and type '(:NonNil))) into binds
+             finally return
+             (types-or '(:Literal nil)
+                       (apply #'types-and
+                              (types-and type '(:NonNil))
+                              (cl-loop for (varspec . type) in binds
+                                       collect (list :Bind varspec type)))))))
 
 (types-define-checker or (&rest args)
   (if (null args) `(:Literal nil)
@@ -729,7 +775,7 @@ representing a never type."
            ;; For all but the last type, strip (:Literal nil) from :Or unions,
            ;; since a non-nil value would have short-circuited to return that value.
            (no-nil (cl-loop for type in (butlast types)
-                            collect (types-exclude type `(:Literal nil))))
+                            collect (types-and type '(:NonNil))))
            (last-type (car (last types))))
       (apply #'types-or (append no-nil (list last-type))))))
 
@@ -739,9 +785,10 @@ representing a never type."
 (defmacro types-define-predicate (name type)
   `(types-define-checker ,name (expr)
      (if (symbolp expr)
-         (list :Is (or (assoc expr types--binds)
-                       (error "Invalid variable %s" expr))
-               ',type)
+         (let ((varspec (or (assoc expr types--binds)
+                            (error "Invalid variable %s" expr)))
+               (type ',type))
+           `(:Logical ((:Literal t) (:Bind ,varspec ,type)) ((:Literal nil))))
        ;; Compile the argument
        (types-check-arg 1 expr)
        `(:Boolean))))
