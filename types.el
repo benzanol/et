@@ -497,15 +497,22 @@ representing a never type."
 (defun et-datatype (dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-any () (make-et-type :cases (list (make-et-case :factors nil))))
 (defun et-never () (make-et-type :cases nil))
+(defun et-literal (value) (et-datatype `(:Literal ,value)))
+(defun et-nil () (et-datatype `(:Literal nil)))
+(defun et-type-with-binds (type &rest binds)
+  (cl-loop with type-copy = (copy-et-type type)
+           for case in (et-type-cases type)
+           for copy = (copy-et-case case)
+           do (setf (et-case-binds copy) (append binds (et-case-binds case)))
+           collect copy into case-copies
+           finally do (setf (et-type-cases type-copy) case-copies)
+           finally return type-copy))
 
 ;; Each FACTOR is a DATATYPE, which is one of
-;; (:Number/Integer/String/Symbol/Boolean)
+;; (:Number/Integer/String/Symbol)
 ;; (:Literal VALUE)
 ;; (:Cons LEFT RIGHT)
 ;; (:List ELEM)
-;; (:Vector ELEM)
-;; (:HashMap KEY VALUE)
-;; (:Plist :KEY TYPE ...)
 
 
 ;;;; Subtype
@@ -709,85 +716,82 @@ Returns a single datatype, or nil if it is impossible."
 ;;; Checking
 ;;;; Global variables
 
-(defvar types--current-expr nil)
-(defvar types--current-path nil)
+(defvar et--current-expr nil)
+(defvar et--current-path nil)
 
-(defun types--error-advice (error string &rest args)
-  (if types--current-path
-      (apply error (format "%s\0;;flycheck-path:%s" string types--current-path)
+(defun et--error-advice (error string &rest args)
+  (if et--current-path
+      (apply error (format "%s\0;;flycheck-path:%s" string et--current-path)
              args)
     (apply error string args)))
 
-(advice-add #'error :around #'types--error-advice)
+(advice-add #'error :around #'et--error-advice)
 
-(defun types-warn (msg &rest args)
-  (setq msg (format "%s\0;;flycheck-path:%s" msg types--current-path))
+(defun et-warn (msg &rest args)
+  (setq msg (format "%s\0;;flycheck-path:%s" msg et--current-path))
   (apply #'byte-compile-warn msg args))
 
-(defmacro types--label-errors (expr)
+(defmacro et--label-errors (expr)
   `(condition-case err ,expr
      (error
       (let ((str (error-message-string err)))
         (if (string-match-p "\0;;flycheck-path:([0-9 ]*)\\'" str)
             (error str)
-          (error (format "%s\0;;flycheck-path:%s" str types--current-path)))))))
+          (error (format "%s\0;;flycheck-path:%s" str et--current-path)))))))
 
-(defun types--traverse-tree (path tree)
+(defun et--traverse-tree (path tree)
   (if (null path) tree
     (when (>= (car path) (length tree))
       (error "Index out of bounds: %s %s" (car path) tree))
-    (types--traverse-tree (cdr path) (nth (car path) tree))))
+    (et--traverse-tree (cdr path) (nth (car path) tree))))
 
-(defmacro types-with-path (path &rest body)
+(defmacro et-with-path (path &rest body)
   (declare (indent 1))
   (let ((path-var (make-symbol "path"))
         (parent-var (make-symbol "parent"))
         (expr-var (make-symbol "expr")))
     `(let* ((,path-var ,path)
-            (,parent-var (types--traverse-tree (butlast ,path-var) types--current-expr))
+            (,parent-var (et--traverse-tree (butlast ,path-var) et--current-expr))
             (,expr-var (nth (car (last ,path-var)) ,parent-var))
-            (types--current-path (append types--current-path ,path-var))
-            (types--current-expr ,expr-var))
-       ;; (types--label-errors
+            (et--current-path (append et--current-path ,path-var))
+            (et--current-expr ,expr-var))
        (prog1 (progn ,@body)
-         (unless (eq types--current-expr ,expr-var)
+         (unless (eq et--current-expr ,expr-var)
            (setf (nth (car (last ,path-var)) ,parent-var)
-                 types--current-expr)))
-       ;; )
-       )))
+                 et--current-expr))))))
 
-(defvar types--binds nil)
+(defvar et--binds nil)
 
-(defmacro types-with-binds (binds &rest body)
+(defmacro et-with-binds (binds &rest body)
   (declare (indent 1))
-  `(let ((types--binds (append ,binds types--binds)))
+  `(let ((et--binds (append ,binds et--binds)))
      ,@body))
 
-(defmacro types--root (expr &rest body)
+(defmacro et--root (expr &rest body)
   (declare (indent 1))
   `(progn
-     (cl-assert (null types--current-expr))
-     (cl-assert (null types--current-path))
-     (cl-assert (null types--binds))
-     (let ((types--current-expr ,expr))
+     (cl-assert (null et--current-expr))
+     (cl-assert (null et--current-path))
+     (cl-assert (null et--binds))
+     (let ((et--current-expr ,expr))
        ,@body)))
 
 
 ;;;; Checkers
 
-(defmacro types-define-checker (expr-type arglist &rest body)
+(defmacro et-define-checker (expr-type arglist &rest body)
   (declare (indent 2))
   (cl-assert (symbolp expr-type))
   (cl-assert (listp arglist))
 
-  `(setf (get ',expr-type 'types-checker)
-         (lambda . ,(cl--transform-lambda (cons arglist body) (format "types--checker:%s" expr-type)))))
+  `(setf (get ',expr-type 'et-checker)
+         (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type)))))
 
-(defun types-check ()
+(defun et-check ()
   "Returns the type of the current expr, if typechecking did not error."
-  (pcase types--current-expr
+  (pcase et--current-expr
     (`(,func . ,args)
-     (or (apply (or (get func 'types-checker)
+     (or (apply (or (get func 'et-checker)
                     (error "No checker for function: %s" func))
                 args)
          (error "Checker returned nil")))
@@ -796,33 +800,35 @@ Returns a single datatype, or nil if it is impossible."
      ;; Allow for type narrowing on variable names.
      ;; For example, if a: Number | nil,
      ;; then return the type Number&{a: Number} | nil
-     (if-let ((varspec (assoc sym types--binds))
-              (non-nil (types-exclude (cdr varspec) '(:Literal nil))))
+     (if-let ((varspec (assoc sym et--binds))
+              (non-nil (et-subtract (cdr varspec) (et-nil))))
          (if (equal non-nil (cdr varspec)) (cdr varspec)
-           (types-or (types-and non-nil `(:Bind ,varspec ,non-nil))
-                     (types-and (cdr varspec) `(:Literal nil) `(:Bind ,varspec (:Literal nil)))))
+           (et-or (et-type-with-binds non-nil (cons varspec non-nil))
+                  (et-type-with-binds (et-and (cdr varspec) (et-nil))
+                                      (cons varspec (et-nil)))))
        (error "Free variable: %s" sym)))
 
-    (expr (list :Literal expr))))
+    (expr (et-literal expr))))
 
 
 ;;;; Check subexpression helper
 
-(defun types-check-arg (where subexpr)
+(defun et-check-arg (where subexpr)
   "Type check an argument of the current expression, returning the type."
-  (cl-assert (and types--current-expr (listp types--current-expr)))
-  (let* ((expr types--current-expr)
+  (cl-assert (and et--current-expr (listp et--current-expr)))
+  (let* ((expr et--current-expr)
          (position
           (cond
            ((numberp where) where)
 
            ((keywordp where)
-            ;; This method for calculating the position could technically
-            ;; fail Suppose a function has arglist (arg1 arg2 &key mykey),
-            ;; and someone calls (func :mykey 7 :mykey 7). The position for
-            ;; where=:mykey and subexpr=7 would be determined to be 2,
-            ;; rather than the correct position of 4. A fully correct
-            ;; strategy would require parsing the function arglist.
+            ;; This method for calculating the position could fail.
+            ;; Suppose a function has arglist (arg1 arg2 &key mykey),
+            ;; and someone calls (func :mykey 7 :mykey 7). The
+            ;; position for where=:mykey and subexpr=7 would be
+            ;; determined to be 2, rather than the correct position of
+            ;; 4. A fully correct strategy would require parsing the
+            ;; function arglist.
             (or (cl-loop for tail on (cdr expr)
                          for idx upfrom 1
                          when (and (eq (car tail) where) (eq (cadr tail) subexpr))
@@ -832,75 +838,75 @@ Returns a single datatype, or nil if it is impossible."
            (t (error "WHERE must be either an argument index or keyword")))))
 
     (cl-assert (eq (nth position expr) subexpr))
-    (types-with-path (list position)
-                     (types-check))))
+    (et-with-path (list position)
+      (types-check))))
 
 
-;;;; Check a block
+;;;; Check expr tail helper
 
-(defun types-check-block (start)
-  (cl-loop for idx upfrom start below (length types--current-expr)
-           for type = (types-with-path (list idx) (types-check))
-           finally return (or type `(:Literal nil))))
+(defun et-check-tail (start)
+  (cl-loop for idx upfrom start below (length et--current-expr)
+           for type = (et-with-path (list idx) (et-check))
+           finally return (or type (et-nil))))
 
 
 ;;;; Root level functions
 
-(defmacro types-root-block (&rest body)
-  (types--root (cons #'progn body)
-               (types-check-block 1)
-               types--current-expr))
+(defmacro et-root-block (&rest body)
+  (et--root (cons #'progn body)
+            (et-check-block 1)
+            et--current-expr))
 
-(defun types-root-check (expr)
-  (types--root expr (types-check)))
+(defun et-root-check (expr)
+  (et--root expr (et-check)))
 
-(defun types-resolve (type)
-  (setq type (types-parse type))
+(defun et-resolve (type)
+  (setq type (et-parse type))
 
-  (let ((expr-type (types-check)))
-    (unless (types-subtype? expr-type type)
+  (let ((expr-type (et-check)))
+    (unless (et-subtype? expr-type type)
       (error "Type %s is not assignable to type %s"
-             (types-format expr-type) (types-format type)))))
+             (et-format expr-type) (et-format type)))))
 
-(defun types-root-resolve (type expr)
-  (types--root expr (types-resolve type)))
+(defun et-root-resolve (type expr)
+  (et--root expr (et-resolve type)))
 
 
 ;;; ============================================================
 ;;; Control flow
 ;;;; Let
 
-(types-define-checker let* (varlist &rest _body)
-                      (let ((let-binds-rev nil))
-                        ;; Process let forms
-                        (cl-loop
-                         for form in varlist
-                         for idx upfrom 0
-                         do
-                         (types-with-path (list 1 idx)
-                                          (pcase form
-                                            (`(,var ,type ,val)
-                                             ;; Parse the type
-                                             (types-with-path (list 1) (setq type (types-parse type)))
+(et-define-checker let* (varlist &rest _body)
+  (let ((let-binds-rev nil))
+    ;; Process let forms
+    (cl-loop
+     for form in varlist
+     for idx upfrom 0
+     do
+     (et-with-path (list 1 idx)
+       (pcase form
+         (`(,var ,type ,val)
+          ;; Parse the type
+          (et-with-path (list 1) (setq type (et-parse type)))
 
-                                             ;; Type-check the value
-                                             (types-with-binds let-binds-rev
-                                                               (types-with-path (list 2)
-                                                                                (types-resolve type)))
+          ;; Type-check the value
+          (et-with-binds let-binds-rev
+            (et-with-path (list 2)
+              (et-resolve type)))
 
-                                             (setq types--current-expr (list var val))
-                                             (push (cons var type) let-binds-rev))
-                                            (`(,var ,_val)
-                                             (let ((type
-                                                    (types-with-binds let-binds-rev
-                                                                      (types-with-path (list 1)
-                                                                                       (types-check)))))
-                                               (push (cons var type) let-binds-rev)
-                                               (types-with-path (list 0)
-                                                                (types-warn "%s: %s" var (types-format type))))))))
+          (setq et--current-expr (list var val))
+          (push (cons var type) let-binds-rev))
+         (`(,var ,_val)
+          (let ((type
+                 (et-with-binds let-binds-rev
+                   (et-with-path (list 1)
+                     (et-check)))))
+            (push (cons var type) let-binds-rev)
+            (et-with-path (list 0)
+              (et-warn "%s: %s" var (et-format type))))))))
 
-                        (types-with-binds let-binds-rev
-                                          (types-check-block 2))))
+    (et-with-binds let-binds-rev
+      (et-check-block 2))))
 
 
 ;;;; Dolist
