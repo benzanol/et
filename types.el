@@ -409,10 +409,10 @@ Returns a list of (VARSPEC . TYPE)."
      (let ((rest-binds (cl-loop for case in rest collect (types--is-bindings `(:Logical ,case)))))
        (cl-loop for (varspec . type) in (types--is-bindings `(:Logical ,first))
                 for types = (cl-loop for entry in rest-binds
-                                     for type = (alist-get varspec entry)
-                                     always type collect type)
+                                     for entry-type = (alist-get varspec entry)
+                                     always entry-type collect entry-type)
                 when types
-                collect (cons varspec (cl-reduce #'types-and (cons type types))))))
+                collect (cons varspec (apply #'types-or type types)))))
     (_ nil)))
 
 (defmacro types-with-is-bindings (type &rest body)
@@ -704,7 +704,8 @@ representing a never type."
     (types-or
      (types-with-is-bindings (types-exclude cond-type '(:Literal nil))
        (types-check-arg 2 then))
-     (types-check-block 3))))
+     (types-with-is-bindings (types-and cond-type '(:Literal nil))
+       (types-check-block 3)))))
 
 
 ;;; ============================================================
@@ -779,12 +780,16 @@ representing a never type."
              for idx upfrom 1
              for type = (types-check-arg idx arg)
              unless (eq idx (length args))
-             append (types--is-bindings (types-exclude type '(:Literal nil))) into binds
+             append (types--is-bindings (types-exclude type '(:Literal nil))) into t-binds
+             append (types--is-bindings (types-and type '(:Literal nil))) into nil-binds
              finally return
-             (types-or '(:Literal nil)
+             (types-or (apply #'types-and
+                              (types-and type '(:Literal nil))
+                              (cl-loop for (varspec . type) in nil-binds
+                                       collect (list :Bind varspec type)))
                        (apply #'types-and
                               (types-exclude type '(:Literal nil))
-                              (cl-loop for (varspec . type) in binds
+                              (cl-loop for (varspec . type) in t-binds
                                        collect (list :Bind varspec type)))))))
 
 (types-define-checker or (&rest args)
@@ -805,10 +810,12 @@ representing a never type."
 (defmacro types-define-predicate (name type)
   `(types-define-checker ,name (expr)
      (if (symbolp expr)
-         (let ((varspec (or (assoc expr types--binds)
-                            (error "Invalid variable %s" expr)))
-               (type ',type))
-           `(:Logical ((:Literal t) (:Bind ,varspec ,type)) ((:Literal nil))))
+         (let* ((varspec (or (assoc expr types--binds)
+                             (error "Invalid variable %s" expr)))
+                (type ',type)
+                (nil-type (types-exclude (cdr varspec) type)))
+           `(:Logical ((:Literal t) (:Bind ,varspec ,type))
+                      ((:Literal nil) (:Bind ,varspec ,nil-type))))
        ;; Compile the argument
        (types-check-arg 1 expr)
        `(:Boolean))))
