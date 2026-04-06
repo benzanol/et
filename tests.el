@@ -190,23 +190,23 @@
 ;;; Blocks
 
 (types-root-block
- (let* ((c (1+ 4))
-        (a :Integer 4)
-        (b :List<Integer> (list (+ 1 2))))
-   (setq a c)
-   (let* ((a :List<Integer> (cons (1+ a) nil)))
-     (dolist (n a)
-       (setq b (cons (+ n 1) b))))
-   (let* ((e (or (car b) 12))))
-   (setq a (or (car b) 12))))
-
-(types-root-block
- (let* ((a :String|Integer 4)
-        (b :String|Number 4))
-   (if (numberp a)
+ (let* ((a :Any t)
+        (b :String|Number 4)
+        (c (and (numberp a) (stringp b))))
+   (if (and (numberp a) (stringp b))
        (+ 1 a)
      (let* ((test a))
        test))))
+
+(types-and '(:Logical ((:Literal nil) (:Bind a (:Integer)))
+                      ((:Literal t) (:Bind a (:String)))
+                      )
+           '(:Literal nil))
+(types-exclude '(:Logical ((:Literal nil) (:Bind a (:Integer)))
+                          ((:Literal t) (:Bind a (:String)))
+                          )
+               '(:Literal nil))
+(types--incompatible?)
 
 
 ;; ============================================================
