@@ -365,6 +365,9 @@ Returns nil if any requirements are incompatible."
     ;; perform `types-or' on the resulting pairings.
     (`(,(and a (or `(:Logical . ,a-cases) (let a-cases `((,a)))))
        ,(and b (or `(:Logical . ,b-cases) (let b-cases `((,b))))))
+     (types--assert-type a)
+     (types--assert-type b)
+
      (let ((cases
             (cl-loop for ac in a-cases
                      append (cl-loop for bc in b-cases
@@ -378,8 +381,12 @@ Returns nil if any requirements are incompatible."
     ('nil `(:Logical))
     (`(,only) only)
     (`(,a ,b ,c . ,rest) (types-or a (apply #'types-or b c rest)))
+
     (`(,(and a (or `(:Logical . ,a-cases) (let a-cases `((,a)))))
        ,(and b (or `(:Logical . ,b-cases) (let b-cases `((,b))))))
+     (types--assert-type a)
+     (types--assert-type b)
+
      (let* ((cases
              (cl-loop for (case . rest) on (seq-uniq (append a-cases b-cases))
                       unless
@@ -401,24 +408,33 @@ Returns nil if any requirements are incompatible."
   "Given a TYPE that was truthy, return bindings it implies.
 
 Returns a list of (VARSPEC . TYPE)."
+  (types--assert-type type)
+
   (pcase type
     (`(:Bind ,varspec ,type)
-     (list (cons varspec (types-and (cdr varspec) type))))
+     (list (cons varspec type)))
     (`(:Logical ,only) (mapcan #'types--is-bindings only))
     (`(:Logical ,first . ,rest)
-     (let ((rest-binds (cl-loop for case in rest collect (types--is-bindings `(:Logical ,case)))))
+     (let ((rest-bind-alists
+            (cl-loop for case in rest
+                     collect (types--is-bindings `(:Logical ,case)))))
        (cl-loop for (varspec . type) in (types--is-bindings `(:Logical ,first))
-                for types = (cl-loop for entry in rest-binds
-                                     for entry-type = (alist-get varspec entry)
+                for types = (cl-loop for entry-alist in rest-bind-alists
+                                     for entry-type = (alist-get varspec entry-alist)
                                      always entry-type collect entry-type)
                 when types
                 collect (cons varspec (apply #'types-or type types)))))
     (_ nil)))
 
+(defun types--is-binding-type (type)
+  (apply #'types-and
+         (cl-loop for (varspec . type) in (types--is-bindings type)
+                  collect (list :Bind varspec type))))
+
 (defmacro types-with-is-bindings (format type &rest body)
   (declare (indent 2))
-  `(let ((binds (cl-loop for ((var . _) . type) in (types--is-bindings ,type)
-                         collect (cons var type)))
+  `(let ((binds (cl-loop for ((var . base-type) . type) in (types--is-bindings ,type)
+                         collect (cons var (types-and base-type type))))
          (format ,format))
      (types-with-path (list 0)
        (when format
@@ -430,7 +446,6 @@ Returns a list of (VARSPEC . TYPE)."
 
 
 ;;;; Exclude
-;;;; Exclude
 
 (defun types-exclude (type exclude)
   "Create a subtype of TYPE with some elements of EXCLUDE removed.
@@ -441,6 +456,9 @@ of (:Integer) excluded, so it will just return (:Number).
 
 In cases where EXCLUDE contains all elements of TYPE, return (:Logical),
 representing a never type."
+  (types--assert-type type)
+  (types--assert-type exclude)
+
   (pcase type
     (`(:Logical . ,cases)
      (apply #'types-or
@@ -459,6 +477,14 @@ representing a never type."
               finally return acc))
     ((guard (types-subtype? `(:Logical (,@reqs)) exclude)) `(:Logical))
     (_ (apply #'types-and reqs))))
+
+
+;;;; Is valid type
+
+(defun types--assert-type (type)
+  (or (and (listp type)
+           (keywordp (car type)))
+      (error "Not a valid type: %s" type)))
 
 
 ;;; ============================================================
@@ -548,8 +574,17 @@ representing a never type."
                 args)
          (error "Checker returned nil")))
     ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
-     (or (alist-get sym types--binds)
-         (error "Free variable: %s" sym)))
+
+     ;; Allow for type narrowing on variable names.
+     ;; For example, if a: Number | nil,
+     ;; then return the type Number&{a: Number} | nil
+     (if-let ((varspec (assoc sym types--binds))
+              (non-nil (types-exclude (cdr varspec) '(:Literal nil))))
+         (if (equal non-nil (cdr varspec)) (cdr varspec)
+           (types-or (types-and non-nil `(:Bind ,varspec ,non-nil))
+                     (types-and (cdr varspec) `(:Literal nil) `(:Bind ,varspec (:Literal nil)))))
+       (error "Free variable: %s" sym)))
+
     (expr (list :Literal expr))))
 
 
@@ -704,18 +739,20 @@ representing a never type."
 
 (types-define-checker if (cond then &optional _else)
   (let* ((cond-type (types-check-arg 1 cond)))
+    (byte-compile-warn "%s" (types-and cond-type '(:Literal nil)))
     (types-or
      (types-with-is-bindings "non-nil case:\\n%s" (types-exclude cond-type '(:Literal nil))
        (types-check-arg 2 then))
      (types-with-is-bindings "nil case:\\n%s" (types-and cond-type '(:Literal nil))
        (types-check-block 3)))))
 
-(types-define-checker when (cond &rest body)
+
+(types-define-checker when (cond &rest _body)
   (let* ((cond-type (types-check-arg 1 cond)))
     (types-with-is-bindings "%s" (types-exclude cond-type '(:Literal nil))
       (types-check-block 2))))
 
-(types-define-checker unless (cond &rest body)
+(types-define-checker unless (cond &rest _body)
   (let* ((cond-type (types-check-arg 1 cond)))
     (types-with-is-bindings "%s" (types-and cond-type '(:Literal nil))
       (types-check-block 2))))
@@ -786,36 +823,44 @@ representing a never type."
 
 ;;;; and/or
 
+(defun types--and-return-type (arg-types)
+  (if (null arg-types)
+      `(:Literal t)
+    (types-or
+     ;; In the nil case, ONE of the nil bindings matched (reduce with `types-or')
+     (cl-loop for arg-type in arg-types
+              for type = (types-and arg-type '(:Literal nil))
+              collect (types--is-binding-type type) into binds
+              finally return (types-and '(:Literal nil) (apply #'types-or binds)))
+     ;; In the non-nil case, ALL of the non-nil bindings matched (reduce with `types-and')
+     (cl-loop for arg-type in arg-types
+              for type = (types-exclude arg-type '(:Literal nil))
+              collect (types--is-binding-type type) into binds
+              finally return (apply #'types-and type binds)))))
+
+(defun types--or-return-type (arg-types)
+  (types-or
+   ;; In the nil case, ALL of the nil bindings matched (reduce with `types-and')
+   (cl-loop for arg-type in arg-types
+            for type = (types-and arg-type '(:Literal nil))
+            collect (types--is-binding-type type) into binds
+            finally return (types-and '(:Literal nil) (apply #'types-and binds)))
+   ;; In the non-nil case, ONE of the args matched (reduce with `types-or')
+   (cl-loop for arg-type in arg-types
+            collect (types-exclude arg-type '(:Literal nil)) into non-nil-types
+            finally return (apply #'types-or non-nil-types))))
+
 (types-define-checker and (&rest args)
-  (if (null args)
-      '(:Literal t)
-    (cl-loop for arg in args
-             for idx upfrom 1
-             for type = (types-check-arg idx arg)
-             unless (eq idx (length args))
-             append (types--is-bindings (types-exclude type '(:Literal nil))) into t-binds
-             append (types--is-bindings (types-and type '(:Literal nil))) into nil-binds
-             finally return
-             (types-or (apply #'types-and
-                              (types-and type '(:Literal nil))
-                              (cl-loop for (varspec . type) in nil-binds
-                                       collect (list :Bind varspec type)))
-                       (apply #'types-and
-                              (types-exclude type '(:Literal nil))
-                              (cl-loop for (varspec . type) in t-binds
-                                       collect (list :Bind varspec type)))))))
+  (types--and-return-type
+   (cl-loop for arg in args
+            for idx upfrom 1
+            collect (types-check-arg idx arg))))
 
 (types-define-checker or (&rest args)
-  (if (null args) `(:Literal nil)
-    (let* ((types (cl-loop for arg in args
-                           for idx upfrom 1
-                           collect (types-check-arg idx arg)))
-           ;; For all but the last type, strip (:Literal nil) from :Or unions,
-           ;; since a non-nil value would have short-circuited to return that value.
-           (no-nil (cl-loop for type in (butlast types)
-                            collect (types-exclude type '(:Literal nil))))
-           (last-type (car (last types))))
-      (apply #'types-or (append no-nil (list last-type))))))
+  (types--or-return-type
+   (cl-loop for arg in args
+            for idx upfrom 1
+            collect (types-check-arg idx arg))))
 
 
 ;;;; Predicates
