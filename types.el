@@ -257,18 +257,9 @@ Depth tracks < > and { } nesting."
 (defun types-subtype? (a b)
   "Can an object of type A be assigned to a variable of type B?"
   (pcase (list a b)
-    (`((:Literal ,value) (:Number)) (numberp value))
-    (`((:Literal ,value) (:Integer)) (and (numberp value) (eq (mod value 1) 0)))
-    (`((:Literal ,value) (:String)) (stringp value))
-    (`((:Literal ,value) (:Symbol)) (symbolp value))
-    (`((:Literal ,value) (:Boolean)) (or (null value) (eq value t)))
-    (`((:Literal ,value) (:Nil)) (null value))
-    (`((:Literal ,value) (:List ,elem))
-     (and (listp value) (cl-loop for e in value always (types-subtype? `(:Literal ,e) elem))))
-    (`((:Literal (,lval . ,rval)) (:Cons ,ltype ,rtype))
-     (and (types-subtype? `(:Literal ,lval) ltype)
-          (types-subtype? `(:Literal ,rval) rtype)))
+    ((guard (equal a b)) t)
 
+    ;; Logical
     (`(,_ (:Logical . ,clauses))
      ;; b is an Or of Ands - a must be subtype of at least one And-clause
      (cl-loop for clause in clauses
@@ -280,15 +271,28 @@ Depth tracks < > and { } nesting."
               always (cl-loop for case in clause
                               thereis (types-subtype? case b))))
 
-    ((guard (equal a b)) t)
+    ;; General
     (`(,_ (:Any)) t)
     ('((:Integer) (:Number)) t)
     (`((:List ,ae) (:List ,ab)) (types-subtype? ae ab))
     (`((:Cons ,al ,ar) (:Cons ,bl ,br)) (and (types-subtype? al bl) (types-subtype? ar br)))
     (`((:Cons ,l ,r) (:List ,elem)) (and (types-subtype? l elem) (types-subtype? r b)))
-    ;; This one doesn't quite work, because a list could be nil
-    ;; (`((:List ,elem) (:Cons ,l ,r)) (and (types-subtype? elem l) (types-subtype? a r)))
-    ))
+
+    ;; Non-nil
+    (`((:Literal ,value) (:NonNil)) (not (null value)))
+    (`((,(or :Cons :Integer :Number :String)) (:NonNil)) t)
+
+    ;; Literals
+    (`((:Literal ,value) (:Number)) (numberp value))
+    (`((:Literal ,value) (:Integer)) (and (numberp value) (eq (mod value 1) 0)))
+    (`((:Literal ,value) (:String)) (stringp value))
+    (`((:Literal ,value) (:Symbol)) (symbolp value))
+    (`((:Literal ,value) (:Boolean)) (or (null value) (eq value t)))
+    (`((:Literal ,value) (:List ,elem))
+     (and (listp value) (cl-loop for e in value always (types-subtype? `(:Literal ,e) elem))))
+    (`((:Literal (,lval . ,rval)) (:Cons ,ltype ,rtype))
+     (and (types-subtype? `(:Literal ,lval) ltype)
+          (types-subtype? `(:Literal ,rval) rtype)))))
 
 
 ;;;; Logical types
