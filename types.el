@@ -437,11 +437,11 @@ Returns a list of (VARSPEC . TYPE)."
                          collect (cons var (types-and base-type type))))
          (format ,format))
      (types-with-path (list 0)
-       (when format
-         (types-warn format
-                     (cl-loop for (var . type) in binds
-                              collect (format "%s: %s" var (types-format type)) into strs
-                              finally return (string-join strs "\\n")))))
+                      (when format
+                        (types-warn format
+                                    (cl-loop for (var . type) in binds
+                                             collect (format "%s: %s" var (types-format type)) into strs
+                                             finally return (string-join strs "\\n")))))
      (types-with-binds binds ,@body)))
 
 
@@ -485,6 +485,224 @@ representing a never type."
   (or (and (listp type)
            (keywordp (car type)))
       (error "Not a valid type: %s" type)))
+
+
+;;; ============================================================
+;;; Type
+;;;; Structs
+
+(cl-defstruct et-type cases)
+(cl-defstruct et-case factors binds)
+
+(defun et-datatype (dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
+(defun et-any () (make-et-type :cases (list (make-et-case :factors nil))))
+(defun et-never () (make-et-type :cases nil))
+
+;; Each FACTOR is a DATATYPE, which is one of
+;; (:Number/Integer/String/Symbol/Boolean)
+;; (:Literal VALUE)
+;; (:Cons LEFT RIGHT)
+;; (:List ELEM)
+;; (:Vector ELEM)
+;; (:HashMap KEY VALUE)
+;; (:Plist :KEY TYPE ...)
+
+
+;;;; Subtype
+
+(defun et-subtype? (a-type b-type)
+  ;; For a<b, we must have a-case<b FOR ALL a cases
+  (or (equal a-type b-type)
+      (cl-loop for a-case in (et-type-cases a-type)
+               always
+               ;; For a-case<b, we must have a-factor<b FOR ANY a factor
+               (cl-loop for a-factor in (et-case-factors a-case)
+                        thereis
+                        ;; For a-factor<b, we must have a-factor<b-case FOR ANY b case
+                        (cl-loop for b-case in (et-type-cases b-type)
+                                 thereis
+                                 ;; For a-factor<b-case, we must have a-factor<b-factor FOR ALL b factors
+                                 (cl-loop for b-factor in (et-case-factors b-case)
+                                          always (et--datatype-subtype? a-factor b-factor)))))))
+
+(defun et--datatype-subtype? (a b)
+  (pcase (list a b)
+    ((guard (equal a b)) t)
+
+    ;; General
+    ('((:Integer) (:Number)) t)
+    (`((:List ,ae) (:List ,be)) (et-subtype? ae be))
+    (`((:Cons ,al ,ar) (:Cons ,bl ,br)) (and (et-subtype? al bl) (et-subtype? ar br)))
+    (`((:Cons ,l ,r) (:List ,elem)) (and (et-subtype? l elem) (et-subtype? r b)))
+
+    ;; Literals
+    (`((:Literal ,value) (:Number)) (numberp value))
+    (`((:Literal ,value) (:Integer)) (and (numberp value) (eq (mod value 1) 0)))
+    (`((:Literal ,value) (:String)) (stringp value))
+    (`((:Literal ,value) (:Symbol)) (symbolp value))
+    (`((:Literal ,value) (:Boolean)) (or (null value) (eq value t)))
+    (`((:Literal ,value) (:List ,elem))
+     (and (listp value) (cl-loop for e in value always (et-subtype? `(:Literal ,e) elem))))
+    (`((:Literal (,lval . ,rval)) (:Cons ,ltype ,rtype))
+     (and (et-subtype? `(:Literal ,lval) ltype)
+          (et-subtype? `(:Literal ,rval) rtype)))))
+
+
+;;;; Disjoint
+
+(defun et-disjoint? (a-type b-type)
+  ;; For a/b, we must have a-case/b-case FOR ALL a cases and b cases
+  (cl-loop for a-case in (et-type-cases a-type)
+           always
+           (cl-loop for b-case in (et-type-cases b-type)
+                    always
+                    ;; For a-case/b-case, we must have a-factor/b-factor FOR ANY a factor and b factor
+                    (cl-loop for a-factor in (et-case-factors a-case)
+                             thereis
+                             (cl-loop for b-factor in (et-case-factors b-case)
+                                      thereis (et--datatype-disjoint? a-factor b-factor))))))
+
+(defun et--datatype-disjoint? (a b)
+  (let ((repr-types '(:Number :Integer :String :Symbol :Cons)))
+    (pcase (list a b)
+      ;; Different literals
+      (`((:Literal ,a-val) (:Literal ,b-val)) (not (equal a-val b-val)))
+
+      ;; Literal which is not an instance of a repr type
+      ((or `((:Literal ,val) ,other) `(,other (:Literal ,val)))
+       (and (memq (car other) repr-types)
+            (not (et--datatype-subtype? `(:Literal ,val) other))))
+
+      ;; Repr types are either subtypes of each other (:Integer<:Number) or disjoint
+      ((guard (and (memq (car a) repr-types)
+                   (memq (car b) repr-types)))
+       (not (or (et--datatype-subtype? a b) (et--datatype-subtype? b a)))))))
+
+
+;;;; Exclude
+
+(defun et-subtract (type remove)
+  "Create a subtype of TYPE with some elements of REMOVE removed.
+
+Nothing will be removed which is not in REMOVE. Aka, any element in TYPE
+but not in the subtraction is guaranteed to be in REMOVE. However, some
+types in the subtraction may also be in REMOVE."
+
+  ;; (A ∪ B) - C = (A - B) ∪ (A - C)
+  (cl-loop for a-case in (et-type-cases type)
+           collect
+           ;; (A ∩ B) - C = (A - C) ∩ (B - C)
+           (cl-loop for a-factor in (et-case-factors a-case)
+                    collect
+                    ;; A - (B ∪ C) = (A - B) ∩ (A - C)
+                    (cl-loop for b-case in (et-type-cases remove)
+                             ;; A - (B ∩ C) = (A - B) ∪ (A - C)
+                             collect
+                             (cl-loop for b-factor in (et-case-factors b-case)
+                                      collect (et--subtract-datatype a-factor b-factor)
+                                      into b-factor-results
+                                      ;; union of factor subtractions = list of cases with one factor each
+                                      finally return (apply #'et-or b-factor-results))
+                             into b-case-results
+                             ;; intersection of case subtractions
+                             finally return (apply #'et-and b-case-results))
+                    into a-factor-results
+                    finally return (apply #'types-or a-factor-results))
+           into a-case-results
+           finally return (apply #'types-and a-case-results)))
+
+(defun et--subtract-datatype (datatype remove)
+  "Helper function for `types-exclude' handling datatypes.
+
+Both DATATYPE and REMOVE are datatypes."
+  (pcase (list datatype remove)
+    ;; Return the never type
+    ((guard (et--datatype-subtype? datatype remove)) (make-et-type :cases nil))
+    ;; Nil removed from list is a cons
+    (`((:List ,elem) (:Literal nil))
+     (et-and (et-datatype datatype) (et-datatype `(:Cons ,elem ,(et-any)))))
+    ;; Cons removed from list is nil
+    (`((:List ,_) (:Cons ,_ ,_))
+     (et-datatype `(:Literal nil)))
+
+    (_ (et-datatype datatype))))
+
+
+;;;; Simplify
+
+(defun et--intersect-datatypes (a b)
+  "Attempt to merge two datatypes into a single equivalent datatype.
+
+Returns a single datatype, or nil if it is impossible."
+
+  (pcase (list a b)
+    ((guard (types-subtype? a b)) a)
+    ((guard (types-subtype? b a)) b)
+
+    ;; Merge list element
+    (`((:List ,a-elem) (:List ,b-elem)) `(:List ,(types-and a-elem b-elem)))
+
+    ;; Merge cons elements
+    (`((:Cons ,a-left ,a-right) (:Cons ,b-left ,b-right))
+     `(:Cons ,(types-and a-left b-left) ,(types-and a-right b-right)))
+
+    (_ nil)))
+
+(defun et--simplify-factors (factors)
+  "Given FACTORS, return an equivalent but simplified list of factors."
+
+  ;; Check if any types are incompatible
+  (when (cl-loop for (a . rest) on factors
+                 always (cl-loop for b in rest
+                                 always (not (et--datatype-disjoint? a b))))
+
+    ;; Search through every possible pair of factors to check if
+    ;; `et--intersect-datatypes' can merge them. If it can, then
+    ;; replace both factors with the merged factor.
+    (cl-loop for (next . tail) on factors
+             unless (cl-loop for new-tail on new-factors
+                             for simple = (et--intersect-datatypes next (car new-tail))
+                             when simple do (setcar new-tail simple)
+                             thereis simple)
+             collect next into new-factors
+             finally return new-factors)))
+
+(defun et-simplify (type)
+  "Simplify TYPE."
+
+  (cl-loop for (case . rest) on (et-type-cases type)
+           for simple-case =
+           (make-et-case :factors (et--simplify-factors (et-case-factors case))
+                         :binds (et-case-binds case))
+           unless
+           (cl-loop for c in (append new-cases rest)
+                    ;; case is a subtype of c, so case is redundant
+                    thereis (et-subtype? (make-et-type :cases (list simple-case))
+                                         (make-et-type :cases (list c))))
+           collect simple-case into new-cases
+           finally return (make-et-type :cases new-cases)))
+
+
+;;;; And/or
+
+(defun et-or (&rest types)
+  (cl-loop for type in types
+           append (et-type-cases type) into cases
+           finally return (et-simplify (make-et-type :cases cases))))
+
+(defun et-and (&rest types)
+  (pcase types
+    (`() (et-any))
+    (`(,only) only)
+    (`(,a ,b ,c . ,rest) (et-and a (apply #'et-and b c rest)))
+    (`(,a ,b)
+     (cl-loop for ac in (et-type-cases a)
+              append
+              (cl-loop for bc in (et-type-cases b)
+                       for factors = (append (et-case-factors ac) (et-case-factors bc))
+                       collect (make-et-case :factors factors :binds nil))
+              into all-cases
+              finally return (et-simplify (make-et-type :cases all-cases))))))
 
 
 ;;; ============================================================
@@ -615,7 +833,7 @@ representing a never type."
 
     (cl-assert (eq (nth position expr) subexpr))
     (types-with-path (list position)
-      (types-check))))
+                     (types-check))))
 
 
 ;;;; Check a block
@@ -630,8 +848,8 @@ representing a never type."
 
 (defmacro types-root-block (&rest body)
   (types--root (cons #'progn body)
-    (types-check-block 1)
-    types--current-expr))
+               (types-check-block 1)
+               types--current-expr))
 
 (defun types-root-check (expr)
   (types--root expr (types-check)))
@@ -653,109 +871,109 @@ representing a never type."
 ;;;; Let
 
 (types-define-checker let* (varlist &rest _body)
-  (let ((let-binds-rev nil))
-    ;; Process let forms
-    (cl-loop
-     for form in varlist
-     for idx upfrom 0
-     do
-     (types-with-path (list 1 idx)
-       (pcase form
-         (`(,var ,type ,val)
-          ;; Parse the type
-          (types-with-path (list 1) (setq type (types-parse type)))
+                      (let ((let-binds-rev nil))
+                        ;; Process let forms
+                        (cl-loop
+                         for form in varlist
+                         for idx upfrom 0
+                         do
+                         (types-with-path (list 1 idx)
+                                          (pcase form
+                                            (`(,var ,type ,val)
+                                             ;; Parse the type
+                                             (types-with-path (list 1) (setq type (types-parse type)))
 
-          ;; Type-check the value
-          (types-with-binds let-binds-rev
-            (types-with-path (list 2)
-              (types-resolve type)))
+                                             ;; Type-check the value
+                                             (types-with-binds let-binds-rev
+                                                               (types-with-path (list 2)
+                                                                                (types-resolve type)))
 
-          (setq types--current-expr (list var val))
-          (push (cons var type) let-binds-rev))
-         (`(,var ,_val)
-          (let ((type
-                 (types-with-binds let-binds-rev
-                   (types-with-path (list 1)
-                     (types-check)))))
-            (push (cons var type) let-binds-rev)
-            (types-with-path (list 0)
-              (types-warn "%s: %s" var (types-format type))))))))
+                                             (setq types--current-expr (list var val))
+                                             (push (cons var type) let-binds-rev))
+                                            (`(,var ,_val)
+                                             (let ((type
+                                                    (types-with-binds let-binds-rev
+                                                                      (types-with-path (list 1)
+                                                                                       (types-check)))))
+                                               (push (cons var type) let-binds-rev)
+                                               (types-with-path (list 0)
+                                                                (types-warn "%s: %s" var (types-format type))))))))
 
-    (types-with-binds let-binds-rev
-      (types-check-block 2))))
+                        (types-with-binds let-binds-rev
+                                          (types-check-block 2))))
 
 
 ;;;; Dolist
 
 (types-define-checker dolist (spec &rest)
-  (let (variable type)
-    (pcase spec
-      ;; With explicit type
-      (`(,var ,etype ,_val)
-       (types-with-path (list 1 1)
-         (setq type (types-parse etype)))
-       (setq variable var)
-       (types-with-path (list 1 2)
-         (types-resolve `(:List ,type))))
+                      (let (variable type)
+                        (pcase spec
+                          ;; With explicit type
+                          (`(,var ,etype ,_val)
+                           (types-with-path (list 1 1)
+                                            (setq type (types-parse etype)))
+                           (setq variable var)
+                           (types-with-path (list 1 2)
+                                            (types-resolve `(:List ,type))))
 
-      ;; With implicit type
-      (`(,var ,_val)
-       (setq variable var)
-       (types-with-path (list 1 1)
-         (pcase (types-check)
-           (`(:List ,elem) (setq type elem))
-           (other (error "Expected list, found %s" other))))
-       (types-with-path (list 1 0)
-         (types-warn "%s: %s" var (types-format type))))
+                          ;; With implicit type
+                          (`(,var ,_val)
+                           (setq variable var)
+                           (types-with-path (list 1 1)
+                                            (pcase (types-check)
+                                              (`(:List ,elem) (setq type elem))
+                                              (other (error "Expected list, found %s" other))))
+                           (types-with-path (list 1 0)
+                                            (types-warn "%s: %s" var (types-format type))))
 
-      (_ (error "Invalid dolist variable spec")))
+                          (_ (error "Invalid dolist variable spec")))
 
-    ;; Check the body
-    (types-with-binds (list (cons variable type))
-      (types-check-block 2))
+                        ;; Check the body
+                        (types-with-binds (list (cons variable type))
+                                          (types-check-block 2))
 
-    (list :Nil)))
+                        (list :Nil)))
 
 
 ;;;; Setq
 
 (types-define-checker setq (&rest args)
-  (unless (eq (mod (length args) 2) 0)
-    (types-with-path (list (length args))
-      (error "Unmatched variable")))
+                      (unless (eq (mod (length args) 2) 0)
+                        (types-with-path (list (length args))
+                                         (error "Unmatched variable")))
 
-  (cl-loop for (var _val) on args by #'cddr
-           for idx upfrom 0 by 2
-           for type = (or (alist-get var types--binds)
-                          (types-with-path (list (1+ idx))
-                            (error "Assignment to free variable")))
-           do (types-with-path (list (+ idx 2))
-                (types-resolve type))
+                      (cl-loop for (var _val) on args by #'cddr
+                               for idx upfrom 0 by 2
+                               for type = (or (alist-get var types--binds)
+                                              (types-with-path (list (1+ idx))
+                                                               (error "Assignment to free variable")))
+                               do (types-with-path (list (+ idx 2))
+                                                   (types-resolve type))
 
-           finally return type))
+                               finally return type))
 
 
 ;;;; If
 
 (types-define-checker if (cond then &optional _else)
-  (let* ((cond-type (types-check-arg 1 cond)))
-    (byte-compile-warn "%s" (types-and cond-type '(:Literal nil)))
-    (types-or
-     (types-with-is-bindings "non-nil case:\\n%s" (types-exclude cond-type '(:Literal nil))
-       (types-check-arg 2 then))
-     (types-with-is-bindings "nil case:\\n%s" (types-and cond-type '(:Literal nil))
-       (types-check-block 3)))))
+                      (let* ((cond-type (types-check-arg 1 cond)))
+                        (byte-compile-warn "%s" (types-and cond-type '(:Literal nil)))
+                        (types-or
+                         (types-with-is-bindings "non-nil case:\\n%s" (types-exclude cond-type '(:Literal nil))
+                           (types-check-arg 2 then))
+                         (types-with-is-bindings "nil case:\\n%s" (types-and cond-type '(:Literal nil))
+                           (types-check-block 3)))))
 
 
 (types-define-checker when (cond &rest _body)
-  (let* ((cond-type (types-check-arg 1 cond)))
-    (types-with-is-bindings "%s" (types-exclude cond-type '(:Literal nil))
-      (types-check-block 2))))
+                      (let* ((cond-type (types-check-arg 1 cond)))
+                        (types-with-is-bindings "%s" (types-exclude cond-type '(:Literal nil))
+                          (types-check-block 2))))
 
 (types-define-checker unless (cond &rest _body)
-  (let* ((cond-type (types-check-arg 1 cond)))
-    (types-with-is-bindings "%s" (types-and cond-type '(:Literal nil))
-      (types-check-block 2))))
+                      (let* ((cond-type (types-check-arg 1 cond)))
+                        (types-with-is-bindings "%s" (types-and cond-type '(:Literal nil))
+                          (types-check-block 2))))
 
 
 ;;; ============================================================
@@ -763,7 +981,7 @@ representing a never type."
 ;;;; Quoted
 
 (types-define-checker quote (expr)
-  (list :Literal expr))
+                      (list :Literal expr))
 
 
 ;;;; Arithmetic
@@ -775,7 +993,7 @@ representing a never type."
            for type = (types-check-arg idx arg)
            do (or (types-subtype? type '(:Number))
                   (types-with-path (list idx)
-                    (error "Argument must be a number, got %s" type)))
+                                   (error "Argument must be a number, got %s" type)))
            do (setq is-integer (and is-integer (types-subtype? type '(:Integer))))
            finally return (if is-integer (list :Integer) (list :Number))))
 
@@ -790,35 +1008,35 @@ representing a never type."
 ;;;; cons/list
 
 (types-define-checker cons (lval rval)
-  (list :Cons
-        (types-check-arg 1 lval)
-        (types-check-arg 2 rval)))
+                      (list :Cons
+                            (types-check-arg 1 lval)
+                            (types-check-arg 2 rval)))
 
 
 (types-define-checker list (&rest args)
-  (cl-loop with type = (list :Literal nil)
-           for arg in (reverse args)
-           for idx downfrom (length args)
-           do (setq type (list :Cons (types-check-arg idx arg) type))
-           finally return type))
+                      (cl-loop with type = (list :Literal nil)
+                               for arg in (reverse args)
+                               for idx downfrom (length args)
+                               do (setq type (list :Cons (types-check-arg idx arg) type))
+                               finally return type))
 
 
 ;;;; car/cdr
 
 (types-define-checker car (expr)
-  (let ((expr-type (types-check-arg 1 expr)))
-    (pcase expr-type
-      (`(:Cons ,car ,_) car)
-      (`(:List ,elem) (types-or `(:Literal nil) elem))
-      (_ (types-with-path 1 (error "Expected list or cons, found %s" expr-type))))))
+                      (let ((expr-type (types-check-arg 1 expr)))
+                        (pcase expr-type
+                          (`(:Cons ,car ,_) car)
+                          (`(:List ,elem) (types-or `(:Literal nil) elem))
+                          (_ (types-with-path 1 (error "Expected list or cons, found %s" expr-type))))))
 
 
 (types-define-checker cdr (expr)
-  (let ((expr-type (types-check-arg 1 expr)))
-    (pcase expr-type
-      (`(:Cons ,_ ,cdr) cdr)
-      (`(:List ,elem) `(:List ,elem))
-      (_ (types-with-path 1 (error "Expected list or cons, found %s" expr-type))))))
+                      (let ((expr-type (types-check-arg 1 expr)))
+                        (pcase expr-type
+                          (`(:Cons ,_ ,cdr) cdr)
+                          (`(:List ,elem) `(:List ,elem))
+                          (_ (types-with-path 1 (error "Expected list or cons, found %s" expr-type))))))
 
 
 ;;;; and/or
@@ -851,32 +1069,32 @@ representing a never type."
             finally return (apply #'types-or non-nil-types))))
 
 (types-define-checker and (&rest args)
-  (types--and-return-type
-   (cl-loop for arg in args
-            for idx upfrom 1
-            collect (types-check-arg idx arg))))
+                      (types--and-return-type
+                       (cl-loop for arg in args
+                                for idx upfrom 1
+                                collect (types-check-arg idx arg))))
 
 (types-define-checker or (&rest args)
-  (types--or-return-type
-   (cl-loop for arg in args
-            for idx upfrom 1
-            collect (types-check-arg idx arg))))
+                      (types--or-return-type
+                       (cl-loop for arg in args
+                                for idx upfrom 1
+                                collect (types-check-arg idx arg))))
 
 
 ;;;; Predicates
 
 (defmacro types-define-predicate (name type)
   `(types-define-checker ,name (expr)
-     (if (symbolp expr)
-         (let* ((varspec (or (assoc expr types--binds)
-                             (error "Invalid variable %s" expr)))
-                (type ',type)
-                (nil-type (types-exclude (cdr varspec) type)))
-           `(:Logical ((:Literal t) (:Bind ,varspec ,type))
-                      ((:Literal nil) (:Bind ,varspec ,nil-type))))
-       ;; Compile the argument
-       (types-check-arg 1 expr)
-       `(:Boolean))))
+                         (if (symbolp expr)
+                             (let* ((varspec (or (assoc expr types--binds)
+                                                 (error "Invalid variable %s" expr)))
+                                    (type ',type)
+                                    (nil-type (types-exclude (cdr varspec) type)))
+                               `(:Logical ((:Literal t) (:Bind ,varspec ,type))
+                                          ((:Literal nil) (:Bind ,varspec ,nil-type))))
+                           ;; Compile the argument
+                           (types-check-arg 1 expr)
+                           `(:Boolean))))
 
 (types-define-predicate stringp (:String))
 (types-define-predicate numberp (:Number))
