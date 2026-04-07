@@ -587,6 +587,11 @@ Depth tracks < > and { } nesting."
   `(let ((et--binds (append ,binds et--binds)))
      ,@body))
 
+(defmacro et-with-varspec-binds (binds &rest body)
+  (declare (indent 1))
+  `(let ((et--binds (append (cl-loop for ((v . _) . b) in ,binds collect (cons v b)) et--binds)))
+     ,@body))
+
 (defmacro et-with-type-binds (format type &rest body)
   (declare (indent 2))
   `(let ((binds (cl-loop for ((var . _) . type) in (et--type-binds ,type)
@@ -805,13 +810,13 @@ Depth tracks < > and { } nesting."
     (let ((type nil)
           ;; If we start out with (et-nil), we won't get any narrowing on the nil case,
           (nil-type (et-never))
-          (non-nil-binds )
+          (non-nil-binds nil)
           ;; If and is empty, it returns t
           (last-non-nil-type nil))
 
       (dolist (path paths)
         ;; The next case will only get evaluated if all previous were non-nil
-        (et-with-binds non-nil-binds
+        (et-with-varspec-binds non-nil-binds
           (et-with-path path
             (setq type (et-check))))
 
@@ -833,7 +838,7 @@ Depth tracks < > and { } nesting."
 
       (dolist (path paths)
         ;; The next case will only get evaluated if all previous were nil
-        (et-with-binds nil-binds
+        (et-with-varspec-binds nil-binds
           (et-with-path path
             (setq type (et-check))))
 
