@@ -60,6 +60,9 @@ BINDS is an alist of (variable-symbol . type)."
   factors
   binds)
 
+(cl-defmethod cl-print-object ((type et-type) stream)
+  (princ (et-format type) stream))
+
 (defun et-datatype (dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-dt (&rest dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-any () (make-et-type :cases (list (make-et-case :factors nil))))
@@ -161,7 +164,7 @@ BINDS is an alist of (variable-symbol . type)."
        (not (or (et--datatype-subtype? a b) (et--datatype-subtype? b a)))))))
 
 
-;;;; Exclude
+;;;; Subtract
 
 (defun et-subtract (type remove)
   "Create a subtype of TYPE with some elements of REMOVE removed.
@@ -181,7 +184,9 @@ types in the subtraction may also be in REMOVE."
                              ;; A - (B ∩ C) = (A - B) ∪ (A - C)
                              collect
                              (cl-loop for b-factor in (et-case-factors b-case)
-                                      collect (et--subtract-datatype a-factor b-factor)
+                                      collect (apply #'et-type-with-binds
+                                                     (et--subtract-datatype a-factor b-factor)
+                                                     (et-case-binds a-case))
                                       into b-factor-results
                                       ;; union of factor subtractions = list of cases with one factor each
                                       finally return (apply #'et-or b-factor-results))
@@ -189,17 +194,17 @@ types in the subtraction may also be in REMOVE."
                              ;; intersection of case subtractions
                              finally return (apply #'et-and b-case-results))
                     into a-factor-results
-                    finally return (apply #'et-or a-factor-results))
+                    finally return (apply #'et-and a-factor-results))
            into a-case-results
-           finally return (apply #'et-and a-case-results)))
+           finally return (apply #'et-or a-case-results)))
 
 (defun et--subtract-datatype (datatype remove)
-  "Helper function for `et-exclude' handling datatypes.
+  "Helper function for `et-subtract' handling datatypes.
 
 Both DATATYPE and REMOVE are datatypes."
   (pcase (list datatype remove)
     ;; Return the never type
-    ((guard (et--datatype-subtype? datatype remove)) (make-et-type :cases nil))
+    ((guard (et--datatype-subtype? datatype remove)) (et-never))
     ;; Nil removed from list is a cons
     (`((:List ,elem) (:Literal nil))
      (et-and (et-datatype datatype) (et-datatype `(:Cons ,elem ,(et-any)))))
@@ -233,36 +238,51 @@ Returns a single datatype, or nil if it is impossible."
 (defun et--simplify-factors (factors)
   "Given FACTORS, return an equivalent but simplified list of factors."
 
-  ;; Check if any types are incompatible
-  (when (cl-loop for (a . rest) on factors
-                 always (cl-loop for b in rest
-                                 always (not (et--datatype-disjoint? a b))))
-
-    ;; Search through every possible pair of factors to check if
-    ;; `et--intersect-datatypes' can merge them. If it can, then
-    ;; replace both factors with the merged factor.
-    (cl-loop for (next . tail) on factors
-             unless (cl-loop for new-tail on new-factors
-                             for simple = (et--intersect-datatypes next (car new-tail))
-                             when simple do (setcar new-tail simple)
-                             thereis simple)
-             collect next into new-factors
-             finally return new-factors)))
+  ;; Search through every possible pair of factors to check if
+  ;; `et--intersect-datatypes' can merge them. If it can, then
+  ;; replace both factors with the merged factor.
+  (cl-loop for (next . tail) on factors
+           unless (cl-loop for new-tail on new-factors
+                           for simple = (et--intersect-datatypes next (car new-tail))
+                           when simple do (setcar new-tail simple)
+                           thereis simple)
+           collect next into new-factors
+           finally return new-factors))
 
 (defun et-simplify (type)
   "Simplify TYPE."
 
-  (cl-loop for (case . rest) on (et-type-cases type)
-           for simple-case =
-           (make-et-case :factors (et--simplify-factors (et-case-factors case))
-                         :binds (et-case-binds case))
-           unless
-           (cl-loop for c in (append new-cases rest)
-                    ;; case is a subtype of c, so case is redundant
-                    thereis (et-subtype? (make-et-type :cases (list simple-case))
-                                         (make-et-type :cases (list c))))
-           collect simple-case into new-cases
-           finally return (make-et-type :cases new-cases)))
+  (let ((simple-cases
+         (cl-loop for (case . rest) on (et-type-cases type)
+                  ;; If any two factors are disjoint, then the case is empty
+                  when (cl-loop for (a . rest) on (et-case-factors case)
+                                always (cl-loop for b in rest
+                                                always (not (et--datatype-disjoint? a b))))
+                  collect (make-et-case :factors (et--simplify-factors (et-case-factors case))
+                                        :binds (et-case-binds case)))))
+
+    (cl-loop for (case . rest) on simple-cases
+             ;; Check if this case is redundant
+             unless (cl-loop for c in (append new-cases rest)
+                             ;; case is a subtype of c, so case is redundant
+                             thereis (and (et-subtype? (make-et-type :cases (list case))
+                                                       (make-et-type :cases (list c)))
+                                          (equal (et-case-binds c) (et-case-binds case))))
+             collect case into new-cases
+             finally return (make-et-type :cases new-cases))))
+
+
+;;; ============================================================
+;;; Typesystem helpers
+;;;; Merge bindings
+
+(defun et--merge-case-bindings (case-a case-b)
+  (let* ((a-binds (et-case-binds case-a))
+         (b-binds (et-case-binds case-b)))
+    (cl-loop for varlist in (seq-uniq (mapcar #'car (append a-binds b-binds)))
+             collect (cons varlist
+                           (et-and (or (alist-get varlist a-binds) (et-any))
+                                   (or (alist-get varlist b-binds) (et-any)))))))
 
 
 ;;;; And/or
@@ -270,7 +290,9 @@ Returns a single datatype, or nil if it is impossible."
 (defun et-or (&rest types)
   (cl-loop for type in types
            append (et-type-cases type) into cases
-           finally return (et-simplify (make-et-type :cases cases))))
+           finally return (et-simplify (make-et-type :cases cases))
+           ;; finally return (make-et-type :cases cases)
+           ))
 
 (defun et-and (&rest types)
   (pcase types
@@ -282,13 +304,15 @@ Returns a single datatype, or nil if it is impossible."
               append
               (cl-loop for bc in (et-type-cases b)
                        for factors = (append (et-case-factors ac) (et-case-factors bc))
-                       collect (make-et-case :factors factors :binds nil))
+                       collect (make-et-case
+                                :factors factors
+                                :binds (et--merge-case-bindings ac bc)))
               into all-cases
-              finally return (et-simplify (make-et-type :cases all-cases))))))
+              finally return (et-simplify (make-et-type :cases all-cases))
+              ;; finally return (make-et-type :cases all-cases)
+              ))))
 
 
-;;; ============================================================
-;;; Typesystem helpers
 ;;;; Parsing
 
 (defun et-parse (spec)
@@ -418,10 +442,11 @@ Depth tracks < > and { } nesting."
   "Format an `et-case' into a human-readable string."
   (let ((factors (et-case-factors case))
         (binds (et-case-binds case)))
-    (let ((parts (if (null factors) (list "anything") (mapcar #'et--format-datatype factors))))
+    (let ((parts (if (null factors) (list "anything")
+                   (mapcar #'et--format-datatype factors))))
       (when binds
         (cl-callf append parts
-          (cl-loop for (var . type) in binds
+          (cl-loop for ((var . _base) . type) in binds
                    collect (format "{%s: %s}" var (et-format type)))))
       (mapconcat #'identity parts " & "))))
 
@@ -471,7 +496,7 @@ Depth tracks < > and { } nesting."
 
 ;;; ============================================================
 ;;; Checking
-;;;; Global variables
+;;;; Path
 
 (defvar et--current-expr nil)
 (defvar et--current-path nil)
@@ -517,6 +542,9 @@ Depth tracks < > and { } nesting."
            (setf (nth (car (last ,path-var)) ,parent-var)
                  et--current-expr))))))
 
+
+;;;; Binds
+
 (defvar et--binds nil)
 
 (defmacro et-with-binds (binds &rest body)
@@ -528,26 +556,31 @@ Depth tracks < > and { } nesting."
   "Return bindings embedded in TYPE.
 
 Returns a list of (VARSPEC . TYPE)."
-
   (when-let ((alists (mapcar #'et-case-binds (et-type-cases type))))
     (cl-loop for (varspec . type) in (car alists)
-             for types = (cl-loop for alist in (cdr alists)
+             for types = (cl-loop for alist in alists
                                   for type = (alist-get varspec alist)
                                   always type collect type)
              when types
-             collect (cons varspec (apply #'et-or type types)))))
+             collect (cons varspec (apply #'et-or types)))))
 
 (defmacro et-with-type-binds (format type &rest body)
   (declare (indent 2))
-  `(let ((binds (et--type-binds ,type))
+  `(let ((binds (cl-loop for ((var . _) . type) in (et--type-binds ,type)
+                         collect (cons var type)))
          (format ,format))
      (et-with-path (list 0)
        (when format
          (et-warn format
+                  ;; (et-format ,type)
                   (cl-loop for (var . type) in binds
                            collect (format "%s: %s" var (et-format type)) into strs
-                           finally return (string-join strs "\\n")))))
+                           finally return (string-join strs "\\n"))
+                  )))
      (et-with-binds binds ,@body)))
+
+
+;;;; Root
 
 (defmacro et--root (expr &rest body)
   (declare (indent 1))
@@ -745,7 +778,6 @@ Returns a list of (VARSPEC . TYPE)."
 
 (et-define-checker if (cond then &optional _else)
   (let* ((cond-type (et-check-arg 1 cond)))
-    (byte-compile-warn "%s" (et-and cond-type (et-nil)))
     (et-or
      (et-with-type-binds "non-nil case:\\n%s" (et-subtract cond-type (et-nil))
        (et-check-arg 2 then))
@@ -781,7 +813,7 @@ Returns a list of (VARSPEC . TYPE)."
            for type = (et-check-arg idx arg)
            do (or (et-subtype? type (et-dt :Number))
                   (et-with-path (list idx)
-                    (error "Argument must be a number, got %s" type)))
+                    (error "Argument must be a number, got %s" (et-format type))))
            do (setq is-integer (and is-integer (et-subtype? type (et-dt :Integer))))
            finally return (et-dt (if is-integer :Integer :Number))))
 
@@ -827,60 +859,42 @@ Returns a list of (VARSPEC . TYPE)."
 
 ;;;; and/or
 
-(defun et--and-return-type (arg-types)
-  (if (null arg-types)
-      `(:Literal t)
-    (et-or
-     ;; In the nil case, ONE of the nil bindings matched (reduce with `et-or')
-     (cl-loop for arg-type in arg-types
-              for type = (et-and arg-type '(:Literal nil))
-              collect (et--is-binding-type type) into binds
-              finally return (et-and '(:Literal nil) (apply #'et-or binds)))
-     ;; In the non-nil case, ALL of the non-nil bindings matched (reduce with `et-and')
-     (cl-loop for arg-type in arg-types
-              for type = (et-exclude arg-type '(:Literal nil))
-              collect (et--is-binding-type type) into binds
-              finally return (apply #'et-and type binds)))))
+(defun et--and-return-type (paths)
+  (pcase paths
+    ('() (et-literal t))
+    (`(,first . ,rest)
+     (let ((type (et-with-path first (et-check))))
+       (if (null rest) type
+         (et-with-type-binds ">> %s" (et-subtract type (et-nil))
+           (et--and-return-type rest)))))))
 
-(defun et--or-return-type (arg-types)
-  (et-or
-   ;; In the nil case, ALL of the nil bindings matched (reduce with `et-and')
-   (cl-loop for arg-type in arg-types
-            for type = (et-and arg-type '(:Literal nil))
-            collect (et--is-binding-type type) into binds
-            finally return (et-and '(:Literal nil) (apply #'et-and binds)))
-   ;; In the non-nil case, ONE of the args matched (reduce with `et-or')
-   (cl-loop for arg-type in arg-types
-            collect (et-exclude arg-type '(:Literal nil)) into non-nil-types
-            finally return (apply #'et-or non-nil-types))))
+
+(defun et--or-return-type (paths)
+  (pcase paths
+    ('() (et-literal t))
+    (`(,first . ,rest)
+     (let ((type (et-with-path first (et-check))))
+       (if (null rest) type
+         (et-with-type-binds ">> %s" (et-and type (et-nil))
+           (et--or-return-type rest)))))))
 
 (et-define-checker and (&rest args)
-  (et--and-return-type
-   (cl-loop for arg in args
-            for idx upfrom 1
-            collect (et-check-arg idx arg))))
+  (et--and-return-type (mapcar #'list (number-sequence 1 (length args)))))
 
 (et-define-checker or (&rest args)
-  (et--or-return-type
-   (cl-loop for arg in args
-            for idx upfrom 1
-            collect (et-check-arg idx arg))))
+  (et--or-return-type (mapcar #'list (number-sequence 1 (length args)))))
 
 
 ;;;; Predicates
 
 (defmacro et-define-predicate (name type)
   `(et-define-checker ,name (expr)
-     (if (symbolp expr)
-         (let* ((varspec (or (assoc expr et--binds)
-                             (error "Invalid variable %s" expr)))
-                (type ,type)
-                (nil-type (et-subtract (cdr varspec) type)))
-           (et-or (et-type-with-binds (et-literal t) (cons varspec type))
-                  (et-type-with-binds (et-nil) (cons varspec nil-type))))
-       ;; Compile the argument
-       (et-check-arg 1 expr)
-       (et-dt :Boolean))))
+     (let ((type ,type)
+           (expr-type (et-check-arg 1 expr)))
+       (et-or (apply #'et-type-with-binds (et-literal t)
+                     (et--type-binds (et-and expr-type type)))
+              (apply #'et-type-with-binds (et-nil)
+                     (et--type-binds (et-subtract expr-type type)))))))
 
 (et-define-predicate stringp (et-dt :String))
 (et-define-predicate numberp (et-dt :Number))
