@@ -42,6 +42,8 @@
 
 
 ;;; ============================================================
+;;; Type definitions
+;;; ============================================================
 ;;; Typesystem core
 ;;;; Structs
 
@@ -75,6 +77,10 @@ BINDS is an alist of (variable-symbol . type)."
   (cl-loop for case in (et-type-cases type)
            collect (cl-loop for factor in (et-case-factors case)
                             collect factor)))
+
+(defun et-ever? (type)
+  "Return non-nil if TYPE is not the never type."
+  (> (length (et-type-cases type)) 0))
 
 ;; Each FACTOR is a DATATYPE, which is one of
 ;; (:Number/Integer/String/Symbol)
@@ -466,7 +472,7 @@ Depth tracks < > and { } nesting."
 
 ;;;; Printing
 
-(defvar et-pp-show-binds nil
+(defvar et-pp-show-binds t
   "Whether to display binds in `et-pp'.")
 
 (defun et-pp (type)
@@ -662,12 +668,13 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
      ;; For example, if a: Number | nil,
      ;; then return the type Number&{a: Number} | nil
      (let* ((var-type (or (et--get-var-bind sym) (error "Free variable: %s" sym)))
-            (non-nil (et-subtract var-type (et-nil)))
             (varspec (assoc sym et--binds)))
-       (if (equal non-nil var-type) var-type
-         (et-or (et--intersect-type-binds non-nil (list (cons varspec non-nil)))
-                (et--intersect-type-binds (et-and var-type (et-nil))
-                                          (list (cons varspec (et-nil))))))))
+       (cl-loop for case in (et-type-cases var-type)
+                for case-type = (make-et-type :cases (list case))
+                collect
+                (et--intersect-type-binds case-type (list (cons varspec case-type)))
+                into case-types
+                finally return (apply #'et-or case-types))))
 
     (expr (et-literal expr))))
 
@@ -863,7 +870,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 
 ;;; ============================================================
-;;; Types
+;;; Function types
 ;;;; Quoted
 
 (et-define-checker quote (expr)
@@ -924,24 +931,18 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 ;;;; Predicates
 
 (defmacro et-define-predicate (name type)
-  `(et-define-checker ,name (expr)
-     (let ((type ,type))
-       (if (symbolp expr)
-           (let* ((varspec (or (assoc expr et--binds) (error "Free variable %s" expr)))
-                  (var-type (et--get-var-bind expr))
-                  (and-type (et-and var-type type))
-                  (nil-type (et-subtract var-type type)))
-             (et-or (et--replace-type-binds (et-literal t) (list (cons varspec and-type)))
-                    (et--replace-type-binds (et-nil) (list (cons varspec nil-type)))))
+  `(et-define-checker ,name (_expr)
+     (let* ((type ,type)
+            (expr-type (et-check-path 1))
+            (t-case (et-and expr-type type))
+            (nil-case (et-subtract expr-type type))
+            (t-type (et--replace-type-binds (et-literal t) (et--type-binds t-case)))
+            (nil-type (et--replace-type-binds (et-nil) (et--type-binds nil-case))))
 
-         ;; Compile the argument
-         (let ((expr-type (et-check-path 1)))
-           (et-or (et--replace-type-binds
-                   (et-literal t)
-                   (et--type-binds (et-and expr-type type)))
-                  (et--replace-type-binds
-                   (et-nil)
-                   (et--type-binds (et-subtract expr-type type)))))))))
+       (if (et-ever? t-case)
+           (if (et-ever? nil-case) (et-or t-type nil-type) t-type)
+         (if (et-ever? nil-case) nil-type (et-never))))))
+
 
 (et-define-predicate stringp (et-dt :String))
 (et-define-predicate numberp (et-dt :Number))
