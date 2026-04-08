@@ -307,11 +307,16 @@ The new bindings for each case is determined is determined by calling
 FUNCTION with the old bindings for that case."
   (cl-loop for case in (et-type-cases type)
            for copy = (copy-et-case case)
-           do (setf (et-case-binds copy)
-                    ;; Remove useless new binds
-                    (cl-loop for (varspec . bind-type) in (funcall function (et-case-binds copy))
-                             unless (et-subtype? (cdr varspec) bind-type)
-                             collect (cons varspec (et-and (cdr varspec) bind-type))))
+           do (cl-loop for (varspec . bind-type) in (funcall function (et-case-binds copy))
+                       for and-type = (et--replace-type-binds (et-and (cdr varspec) bind-type) nil)
+                       ;; If the bind is never then remove this entire case
+                       when (not (et-ever? and-type))
+                       do (progn (setq copy nil) (cl-return nil))
+                       ;; Remove useless (any) new binds
+                       unless (et-subtype? (cdr varspec) bind-type)
+                       collect (cons varspec and-type) into new-binds
+                       finally do (setf (et-case-binds copy) new-binds))
+           when copy
            collect copy into case-copies
 
            finally return (make-et-type :cases case-copies)))
