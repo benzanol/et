@@ -61,7 +61,7 @@ BINDS is an alist of (variable-symbol . type)."
   binds)
 
 (cl-defmethod cl-print-object ((type et-type) stream)
-  (princ (et-format type) stream))
+  (princ (et-pp type) stream))
 
 (defun et-datatype (dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-dt (&rest dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
@@ -466,7 +466,7 @@ Depth tracks < > and { } nesting."
 
 ;;;; Printing
 
-(defun et-format (type)
+(defun et-pp (type)
   "Format an `et-type' into a human-readable string."
   (let ((cases (et-type-cases type)))
     (if (null cases)
@@ -482,7 +482,7 @@ Depth tracks < > and { } nesting."
       (when binds
         (cl-callf append parts
           (cl-loop for ((var . _base) . type) in binds
-                   collect (format "{%s: %s}" var (et-format type)))))
+                   collect (format "{%s: %s}" var (et-pp type)))))
       (mapconcat #'identity parts " & "))))
 
 (defun et--format-datatype (dt)
@@ -493,7 +493,7 @@ Depth tracks < > and { } nesting."
          (format "`%s'" val)
        (prin1-to-string val)))
     (`(:Cons ,left ,right)
-     (let* ((elems (list (et-format left))))
+     (let* ((elems (list (et-pp left))))
        (while (pcase right
                 ((and (pred et-type-p) r)
                  (let ((rcases (et-type-cases r)))
@@ -503,7 +503,7 @@ Depth tracks < > and { } nesting."
                      (let ((inner (car (et-case-factors (car rcases)))))
                        (pcase inner
                          (`(:Cons ,car-type ,cdr-type)
-                          (nconc elems (list (et-format car-type)))
+                          (nconc elems (list (et-pp car-type)))
                           (setq right cdr-type)
                           t)
                          (_ nil))))))))
@@ -520,11 +520,11 @@ Depth tracks < > and { } nesting."
              (format "(%s)" (mapconcat #'identity elems " "))
            (format "(%s . %s)"
                    (mapconcat #'identity elems " ")
-                   (et-format right))))))
+                   (et-pp right))))))
     (`(,(and kw (guard (keywordp kw))) . ,args)
      (let ((name (substring (symbol-name kw) 1)))
        (if args
-           (format "%s<%s>" name (mapconcat #'et-format args ", "))
+           (format "%s<%s>" name (mapconcat #'et-pp args ", "))
          name)))
     (_ (error "Invalid datatype: %S" dt))))
 
@@ -536,17 +536,19 @@ Depth tracks < > and { } nesting."
 (defvar et--current-expr nil)
 (defvar et--current-path nil)
 
-(defun et--error-advice (error string &rest args)
-  (if et--current-path
-      (apply error (format "%s\0;;flycheck-path:%s" string et--current-path)
-             args)
-    (apply error string args)))
-
-(advice-add #'error :around #'et--error-advice)
-
-(defun et-warn (msg &rest args)
-  (setq msg (format "%s\0;;flycheck-path:%s" msg et--current-path))
-  (apply #'byte-compile-warn msg args))
+(defmacro et-with-path (path &rest body)
+  (declare (indent 1))
+  (let ((path-var (make-symbol "path"))
+        (parent-var (make-symbol "parent")))
+    `(let* ((,path-var ,path)
+            (et--current-path (append et--current-path ,path-var))
+            (,parent-var (when ,path-var (et--traverse-tree (butlast ,path-var) et--current-expr)))
+            (et--current-expr (if ,path-var (nth (car (last ,path-var)) ,parent-var)
+                                et--current-expr)))
+       (unwind-protect (progn ,@body)
+         (when ,path-var
+           (setf (nth (car (last ,path-var)) ,parent-var)
+                 et--current-expr))))))
 
 (defmacro et--label-errors (expr)
   `(condition-case err ,expr
@@ -561,21 +563,6 @@ Depth tracks < > and { } nesting."
     (when (>= (car path) (length tree))
       (error "Index out of bounds: %s %s" (car path) tree))
     (et--traverse-tree (cdr path) (nth (car path) tree))))
-
-(defmacro et-with-path (path &rest body)
-  (declare (indent 1))
-  (let ((path-var (make-symbol "path"))
-        (parent-var (make-symbol "parent"))
-        (expr-var (make-symbol "expr")))
-    `(let* ((,path-var ,path)
-            (,parent-var (et--traverse-tree (butlast ,path-var) et--current-expr))
-            (,expr-var (nth (car (last ,path-var)) ,parent-var))
-            (et--current-path (append et--current-path ,path-var))
-            (et--current-expr ,expr-var))
-       (prog1 (progn ,@body)
-         (unless (eq et--current-expr ,expr-var)
-           (setf (nth (car (last ,path-var)) ,parent-var)
-                 et--current-expr))))))
 
 
 ;;;; Binds
@@ -593,23 +580,42 @@ Depth tracks < > and { } nesting."
   `(let ((et--binds (append ,binds et--binds)))
      ,@body))
 
-(defmacro et-with-varspec-binds (binds &rest body)
+(defmacro et-with-narrow-binds (binds &rest body)
   (declare (indent 1))
   `(let ((et--narrow-binds (append ,binds et--narrow-binds)))
      ,@body))
 
-(defmacro et-with-type-binds (format type &rest body)
-  (declare (indent 2))
-  `(let ((binds (et--type-binds ,type))
-         (format ,format))
-     (et-with-path (list 0)
-       (when format
-         (et-warn format
-                  ;; (et-format ,type)
-                  (cl-loop for ((var . _) . type) in binds
-                           collect (format "%s: %s" var (et-format type)) into strs
-                           finally return (string-join strs "\\n")))))
-     (et-with-varspec-binds binds ,@body)))
+(defun et-pp-binds (binds &optional sep)
+  (cl-loop for (var . type) in binds
+           collect (format "%s: %s" (if (symbolp var) var (car var)) (et-pp type)) into strs
+           finally return (string-join strs (or sep "\\n"))))
+
+
+;;;; Error/warn
+
+(defun et--error-advice (error string &rest args)
+  (if et--current-path
+      (apply error (format "%s\0;;flycheck-path:%s" string et--current-path)
+             args)
+    (apply error string args)))
+
+(advice-add #'error :around #'et--error-advice)
+
+(defun et-warn (path msg &rest args)
+  (setq msg (format "%s\0;;flycheck-path:%s" msg (append et--current-path path)))
+  (apply #'byte-compile-warn msg args))
+
+(defun et-warn-binds (&rest types)
+  "Display a list of binds to the user at path=(0).
+
+TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
+  (cl-loop for (fmt type) on types by #'cddr
+           for binds = (et--type-binds type)
+           when binds
+           collect (format fmt (et-pp-binds binds)) into strs
+           finally do
+           (when strs
+             (et-warn '(0) (string-join strs "\\n")))))
 
 
 ;;;; Root
@@ -658,38 +664,10 @@ Depth tracks < > and { } nesting."
     (expr (et-literal expr))))
 
 
-;;;; Check subexpression helper
+;;;; Check position helpers
 
-(defun et-check-arg (where subexpr)
-  "Type check an argument of the current expression, returning the type."
-  (cl-assert (and et--current-expr (listp et--current-expr)))
-  (let* ((expr et--current-expr)
-         (position
-          (cond
-           ((numberp where) where)
-
-           ((keywordp where)
-            ;; This method for calculating the position could fail.
-            ;; Suppose a function has arglist (arg1 arg2 &key mykey),
-            ;; and someone calls (func :mykey 7 :mykey 7). The
-            ;; position for where=:mykey and subexpr=7 would be
-            ;; determined to be 2, rather than the correct position of
-            ;; 4. A fully correct strategy would require parsing the
-            ;; function arglist.
-            (or (cl-loop for tail on (cdr expr)
-                         for idx upfrom 1
-                         when (and (eq (car tail) where) (eq (cadr tail) subexpr))
-                         do (cl-return (1+ idx)))
-                (error "Keyword argument %s with value %s not found" where subexpr)))
-
-           (t (error "WHERE must be either an argument index or keyword")))))
-
-    (cl-assert (eq (nth position expr) subexpr))
-    (et-with-path (list position)
-      (et-check))))
-
-
-;;;; Check expr tail helper
+(defsubst et-check-path (&rest path)
+  (et-with-path path (et-check)))
 
 (defun et-check-tail (start)
   (cl-loop for idx upfrom start below (length et--current-expr)
@@ -713,7 +691,7 @@ Depth tracks < > and { } nesting."
   (let ((expr-type (et-check)))
     (unless (et-subtype? expr-type type)
       (error "Type %s is not assignable to type %s"
-             (et-format expr-type) (et-format type)))))
+             (et-pp expr-type) (et-pp type)))))
 
 (defun et-root-resolve (type expr)
   (et--root expr (et-resolve type)))
@@ -749,8 +727,7 @@ Depth tracks < > and { } nesting."
                    (et-with-path (list 1)
                      (et-check)))))
             (push (cons var type) let-binds-rev)
-            (et-with-path (list 0)
-              (et-warn "%s: %s" var (et-format type))))))))
+            (et-warn '(0) "%s: %s" var (et-pp type)))))))
 
     (et-with-binds let-binds-rev
       (et-check-tail 2))))
@@ -776,8 +753,7 @@ Depth tracks < > and { } nesting."
          (pcase (et-type-factors (et-check))
            (`(((:List ,elem))) (setq type elem))
            (other (error "Expected list, found %s" other))))
-       (et-with-path (list 1 0)
-         (et-warn "%s: %s" var (et-format type))))
+       (et-warn '(1 0) "%s: %s" var (et-pp type)))
 
       (_ (error "Invalid dolist variable spec")))
 
@@ -797,7 +773,7 @@ Depth tracks < > and { } nesting."
 
   (cl-loop for (var _val) on args by #'cddr
            for idx upfrom 0 by 2
-           for type = (or (et--get-var-bind sym)
+           for type = (or (et--get-var-bind var)
                           (et-with-path (list (1+ idx))
                             (error "Assignment to free variable")))
            do (et-with-path (list (+ idx 2))
@@ -811,7 +787,7 @@ Depth tracks < > and { } nesting."
 (defun et--and-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were non-nil
   (let* ((non-nil-binds (et--type-binds (et-subtract cond-type (et-nil))))
-         (output-type (et-with-varspec-binds non-nil-binds (funcall checker)))
+         (output-type (et-with-narrow-binds non-nil-binds (funcall checker)))
 
          (output-non-nil (et-subtract output-type (et-nil)))
          ;; If `and' returns non-nil, then both non-nil binds will be true (intersect them)
@@ -826,7 +802,7 @@ Depth tracks < > and { } nesting."
 (defun et--or-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were nil
   (let* ((nil-binds (et--type-binds (et-and cond-type (et-nil))))
-         (output-type (et-with-varspec-binds nil-binds (funcall checker)))
+         (output-type (et-with-narrow-binds nil-binds (funcall checker)))
 
          (output-nil (et-and output-type (et-nil)))
          ;; If `or' returns nil, then both nil binds will be true (intersect them)
@@ -855,25 +831,27 @@ Depth tracks < > and { } nesting."
 
 ;;;; if
 
-(et-define-checker if (cond then &optional _else)
-  (let* ((cond-type (et-check-arg 1 cond)))
-    ;; (et-warn "%s" (et-format cond-type))
-    (et-or
-     (et-with-type-binds "non-nil case:\\n%s" (et-subtract cond-type (et-nil))
-       (et-check-arg 2 then))
-     (et-with-type-binds "nil case:\\n%s" (et-and cond-type (et-nil))
-       (et-check-tail 3)))))
+(et-define-checker if (_cond _then &rest _else)
+  (let* ((cond-type (et-check-path 1)))
 
+    (et-warn-binds "non-nil:\\n%s" (et-subtract cond-type (et-nil))
+                   "nil:\\n%s" (et-and cond-type (et-nil)))
 
-(et-define-checker when (cond &rest _body)
-  (let* ((cond-type (et-check-arg 1 cond)))
-    (et-with-type-binds "%s" (et-subtract cond-type (et-nil))
-      (et-check-tail 2))))
+    (et-or (et--and-return-type cond-type (lambda () (et-check-path 2)))
+           (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
 
-(et-define-checker unless (cond &rest _body)
-  (let* ((cond-type (et-check-arg 1 cond)))
-    (et-with-type-binds "%s" (et-and cond-type (et-nil))
-      (et-check-tail 2))))
+(et-define-checker when (_cond &rest then)
+  (let* ((cond-type (et-check-path 1)))
+    (et-warn-binds "non-nil:\\n%s" (et-subtract cond-type (et-nil)))
+    ;; Special case for empty then block because (when cond) always returns nil
+    (if (null then) (et-nil)
+      (et--and-return-type cond-type (lambda () (et-check-tail 2))))))
+
+(et-define-checker unless (_cond &rest _else)
+  (let* ((cond-type (et-check-path 1)))
+    (et-warn-binds "nil:\\n%s" (et-and cond-type (et-nil)))
+    ;; Special case for empty then block because (when cond) always returns nil
+    (et--or-return-type cond-type (lambda () (et-check-tail 2)))))
 
 
 ;;; ============================================================
@@ -888,12 +866,11 @@ Depth tracks < > and { } nesting."
 
 (defun et--check-arithmetic-function (args)
   (cl-loop with is-integer = t
-           for arg in args
-           for idx upfrom 1
-           for type = (et-check-arg idx arg)
+           for pos upfrom 1 to (length args)
+           for type = (et-check-path pos)
            do (or (et-subtype? type (et-dt :Number))
-                  (et-with-path (list idx)
-                    (error "Argument must be a number, got %s" (et-format type))))
+                  (et-with-path (list pos)
+                    (error "Argument must be a number, got %s" (et-pp type))))
            do (setq is-integer (and is-integer (et-subtype? type (et-dt :Integer))))
            finally return (et-dt (if is-integer :Integer :Number))))
 
@@ -907,31 +884,30 @@ Depth tracks < > and { } nesting."
 
 ;;;; cons/list
 
-(et-define-checker cons (lval rval)
+(et-define-checker cons (_lval _rval)
   (et-dt :Cons
-         (et-check-arg 1 lval)
-         (et-check-arg 2 rval)))
+         (et-check-path 1)
+         (et-check-path 2)))
 
 
 (et-define-checker list (&rest args)
   (cl-loop with type = (et-literal nil)
-           for arg in (reverse args)
-           for idx downfrom (length args)
-           do (setq type (et-dt :Cons (et-check-arg idx arg) type))
+           for idx downfrom (length args) to 1
+           do (setq type (et-dt :Cons (et-check-path idx) type))
            finally return type))
 
 
 ;;;; car/cdr
 
-(et-define-checker car (expr)
-  (pcase (et-type-factors (et-check-arg 1 expr))
+(et-define-checker car (_expr)
+  (pcase (et-type-factors (et-check-path 1))
     (`(((:Cons ,car ,_))) car)
     (`(((:List ,elem))) (et-or (et-nil) elem))
     (wrong (et-with-path 1 (error "Expected list or cons, found %s" wrong)))))
 
 
-(et-define-checker cdr (expr)
-  (pcase (et-type-factors (et-check-arg 1 expr))
+(et-define-checker cdr (_expr)
+  (pcase (et-type-factors (et-check-path 1))
     (`(((:Cons ,_ ,cdr))) cdr)
     (`(((:List ,elem))) (et-dt :List elem))
     (wrong (et-with-path 1 (error "Expected list or cons, found %s" wrong)))))
@@ -951,7 +927,7 @@ Depth tracks < > and { } nesting."
                     (et--replace-type-binds (et-nil) (list (cons varspec nil-type)))))
 
          ;; Compile the argument
-         (let ((expr-type (et-check-arg 1 expr)))
+         (let ((expr-type (et-check-path 1)))
            (et-or (et--replace-type-binds
                    (et-literal t)
                    (et--type-binds (et-and expr-type type)))
@@ -1024,12 +1000,30 @@ Depth tracks < > and { } nesting."
 
 ;;;; Testing checkers
 
-(et-define-checker et-assert-subtype (expr type)
-  (let ((expr-type (et-check-arg 1 expr)))
+(et-define-checker :assert-subtype (_expr type)
+  (let ((expr-type (et-check-path 1)))
     (or (et-subtype? expr-type (eval type))
-        (error "Not subtype: %s" (et-format expr-type)))
+        (error "Not subtype: %s" (et-pp expr-type)))
     (setq et--current-expr "dummy")
     (et-nil)))
+
+(et-define-checker :assert-error (_expr)
+  (condition-case _err (et-check-path 1)
+    (error (setq et--current-expr nil) (et-nil))
+    (:success (error "Didn't error"))))
+
+(et-define-checker :typeof (_expr)
+  (et-warn '(0) "%s" (et-pp (et-check-path 1)))
+  (setq et--current-expr nil)
+  (et-nil))
+
+(et-define-checker :narrows ()
+  (cl-loop for ((var . _) . type) in (reverse et--narrow-binds)
+           collect (format "%s: %s" var (et-pp type)) into strs
+           finally do
+           (et-warn '(0) "%s" (string-join strs "\\n")))
+  (setq et--current-expr nil)
+  (et-nil))
 
 
 ;;; ============================================================
