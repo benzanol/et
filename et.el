@@ -78,9 +78,9 @@ BINDS is an alist of (variable-symbol . type)."
            collect (cl-loop for factor in (et-case-factors case)
                             collect factor)))
 
-(defun et-ever? (type)
+(defun et-never? (type)
   "Return non-nil if TYPE is not the never type."
-  (> (length (et-type-cases type)) 0))
+  (null (et-type-cases type)))
 
 ;; Each FACTOR is a DATATYPE, which is one of
 ;; (:Number/Integer/String/Symbol)
@@ -308,9 +308,12 @@ FUNCTION with the old bindings for that case."
   (cl-loop for case in (et-type-cases type)
            for copy = (copy-et-case case)
            do (cl-loop for (varspec . bind-type) in (funcall function (et-case-binds copy))
-                       for and-type = (et--replace-type-binds (et-and (cdr varspec) bind-type) nil)
+                       for and-type = (et--replace-type-binds
+                                       (et-and (et--get-var-bind (car varspec))
+                                               bind-type)
+                                       nil)
                        ;; If the bind is never then remove this entire case
-                       when (not (et-ever? and-type))
+                       when (et-never? and-type)
                        do (progn (setq copy nil) (cl-return nil))
                        ;; Remove useless (any) new binds
                        unless (et-subtype? (cdr varspec) bind-type)
@@ -941,12 +944,11 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
             (expr-type (et-check-path 1))
             (t-case (et-and expr-type type))
             (nil-case (et-subtract expr-type type))
-            (t-type (et--replace-type-binds (et-literal t) (et--type-binds t-case)))
-            (nil-type (et--replace-type-binds (et-nil) (et--type-binds nil-case))))
-
-       (if (et-ever? t-case)
-           (if (et-ever? nil-case) (et-or t-type nil-type) t-type)
-         (if (et-ever? nil-case) nil-type (et-never))))))
+            (t-type (if (et-never? t-case) (et-never)
+                      (et--replace-type-binds (et-literal t) (et--type-binds t-case))))
+            (nil-type (if (et-never? nil-case) (et-never)
+                        (et--replace-type-binds (et-nil) (et--type-binds nil-case)))))
+       (et-or t-type nil-type))))
 
 
 (et-define-predicate stringp (et-dt :String))
@@ -991,7 +993,6 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
       ;; Find the macro call in the buffer and walk the path
       (with-current-buffer (flycheck-error-buffer err)
         (save-excursion
-          ;; (debug)
           (goto-char (flycheck-error-pos err)) ; start near the error
           (beginning-of-defun)
 
