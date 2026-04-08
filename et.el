@@ -466,6 +466,9 @@ Depth tracks < > and { } nesting."
 
 ;;;; Printing
 
+(defvar et-pp-show-binds nil
+  "Whether to display binds in `et-pp'.")
+
 (defun et-pp (type)
   "Format an `et-type' into a human-readable string."
   (let ((cases (et-type-cases type)))
@@ -475,15 +478,16 @@ Depth tracks < > and { } nesting."
 
 (defun et--format-case (case)
   "Format an `et-case' into a human-readable string."
-  (let ((factors (et-case-factors case))
-        (binds (et-case-binds case)))
-    (let ((parts (if (null factors) (list "anything")
-                   (mapcar #'et--format-datatype factors))))
-      (when binds
-        (cl-callf append parts
-          (cl-loop for ((var . _base) . type) in binds
-                   collect (format "{%s: %s}" var (et-pp type)))))
-      (mapconcat #'identity parts " & "))))
+  (let* ((factors (et-case-factors case))
+         (parts (if (null factors) (list "anything")
+                  (mapcar #'et--format-datatype factors)))
+         (and-str (mapconcat #'identity parts " & "))
+         (binds (et-case-binds case)))
+    (if (not (and binds et-pp-show-binds)) and-str
+      (cl-loop for ((var . _base) . type) in binds
+               collect (format "%s: %s" var (et-pp type)) into strs
+               finally return
+               (format "%s {%s}" and-str (string-join strs " "))))))
 
 (defun et--format-datatype (dt)
   "Format a single datatype factor into a human-readable string."
@@ -605,17 +609,21 @@ Depth tracks < > and { } nesting."
   (setq msg (format "%s\0;;flycheck-path:%s" msg (append et--current-path path)))
   (apply #'byte-compile-warn msg args))
 
-(defun et-warn-binds (&rest types)
+(defvar et-display-narrows nil
+  "Whether to display narrowed types on if/when/etc blocks.")
+
+(defun et-warn-narrows (&rest types)
   "Display a list of binds to the user at path=(0).
 
 TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
-  (cl-loop for (fmt type) on types by #'cddr
-           for binds = (et--type-binds type)
-           when binds
-           collect (format fmt (et-pp-binds binds)) into strs
-           finally do
-           (when strs
-             (et-warn '(0) (string-join strs "\\n")))))
+  (when et-display-narrows
+    (cl-loop for (fmt type) on types by #'cddr
+             for binds = (et--type-binds type)
+             when binds
+             collect (format fmt (et-pp-binds binds)) into strs
+             finally do
+             (when strs
+               (et-warn '(0) (string-join strs "\\n"))))))
 
 
 ;;;; Root
@@ -834,22 +842,22 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 (et-define-checker if (_cond _then &rest _else)
   (let* ((cond-type (et-check-path 1)))
 
-    (et-warn-binds "non-nil:\\n%s" (et-subtract cond-type (et-nil))
-                   "nil:\\n%s" (et-and cond-type (et-nil)))
+    (et-warn-narrows "non-nil:\\n%s" (et-subtract cond-type (et-nil))
+                     "nil:\\n%s" (et-and cond-type (et-nil)))
 
     (et-or (et--and-return-type cond-type (lambda () (et-check-path 2)))
            (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
 
 (et-define-checker when (_cond &rest then)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-binds "non-nil:\\n%s" (et-subtract cond-type (et-nil)))
+    (et-warn-narrows "non-nil:\\n%s" (et-subtract cond-type (et-nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (if (null then) (et-nil)
       (et--and-return-type cond-type (lambda () (et-check-tail 2))))))
 
 (et-define-checker unless (_cond &rest _else)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-binds "nil:\\n%s" (et-and cond-type (et-nil)))
+    (et-warn-narrows "nil:\\n%s" (et-and cond-type (et-nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (et--or-return-type cond-type (lambda () (et-check-tail 2)))))
 
