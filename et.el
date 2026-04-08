@@ -43,6 +43,51 @@
 
 ;;; ============================================================
 ;;; Type definitions
+;;;; Type aliases
+
+(defmacro et-define-alias (keyword arglist &rest body)
+  "Alias KEYWORD types to return a specific type."
+  (declare (indent 2))
+  (cl-assert (keywordp keyword))
+  (cl-assert (listp arglist))
+  `(put ,keyword 'et-type-alias
+        ,`(lambda . ,(cl--transform-lambda
+                      (cons arglist body)
+                      (format "et-alias%s" keyword)))))
+
+(defun et-expand-alias (datatype)
+  (pcase datatype
+    (`(,(and keyword (pred keywordp)) . ,args)
+     (when-let ((func (get keyword 'et-type-alias)))
+       (apply func args)))
+    (_ (error "Invalid datatype: %s" datatype))))
+
+(defun et-expand-aliases-if-any (datatypes)
+  "Expands all aliases in `datatypes', if any.
+
+If none of DATATYPES are aliases, then return nil. Otherwise, return a
+list of types representing expanded versions of DATATYPES.
+
+This is intended for use in `pcase' conditions for checking if any
+datatypes are non-root."
+  (when (cl-loop for dt in datatypes
+                 thereis (et-expand-alias dt))
+    (cl-loop for dt in datatypes
+             collect (or (et-expand-alias dt)
+                         (et-datatype dt)))))
+
+(et-define-alias :List (elem)
+  (et-or (et-nil)
+         (et-dt :Cons elem (et-dt :List elem))))
+
+(et-define-alias :Boolean ()
+  (et-or (et-literal t) (et-nil)))
+
+(et-define-alias :Tree (elem)
+  (et-or elem
+         (et-dt :List (et-dt :Tree elem))))
+
+
 ;;; ============================================================
 ;;; Typesystem core
 ;;;; Structs
@@ -86,51 +131,71 @@ BINDS is an alist of (variable-symbol . type)."
 ;; (:Number/Integer/String/Symbol)
 ;; (:Literal VALUE)
 ;; (:Cons LEFT RIGHT)
-;; (:List ELEM)
 
 
 ;;;; Subtype
 
-(defun et-subtype? (a-type b-type)
-  ;; For a<b, we must have a-case<b FOR ALL a cases
-  (or (equal a-type b-type)
-      (cl-loop for a-case in (et-type-cases a-type)
-               always
-               ;; For a-case<b, we must have a-factor<b FOR ANY a factor
-               (cl-loop for a-factor in (et-case-factors a-case)
-                        thereis
-                        ;; For a-factor<b, we must have a-factor<b-case FOR ANY b case
-                        (cl-loop for b-case in (et-type-cases b-type)
-                                 thereis
-                                 ;; For a-factor<b-case, we must have a-factor<b-factor FOR ALL b factors
-                                 (cl-loop for b-factor in (et-case-factors b-case)
-                                          always (et--datatype-subtype? a-factor b-factor)))))))
-
 (defun et--datatype-subtype? (a b)
   (pcase (list a b)
+    ((app et-expand-aliases-if-any `(,a-type ,b-type))
+     (et-subtype? a-type b-type))
+
     ((guard (equal a b)) t)
 
     ;; General
     ('((:Integer) (:Number)) t)
-    (`((:List ,ae) (:List ,be)) (et-subtype? ae be))
     (`((:Cons ,al ,ar) (:Cons ,bl ,br)) (and (et-subtype? al bl) (et-subtype? ar br)))
-    (`((:Cons ,l ,r) (:List ,elem))
-     (and (et-subtype? l elem) (et-subtype? r (et-datatype b))))
 
     ;; Literals
     (`((:Literal ,value) (:Number)) (numberp value))
     (`((:Literal ,value) (:Integer)) (and (numberp value) (eq (mod value 1) 0)))
     (`((:Literal ,value) (:String)) (stringp value))
     (`((:Literal ,value) (:Symbol)) (symbolp value))
-    (`((:Literal ,value) (:Boolean)) (or (null value) (eq value t)))
-    (`((:Literal ,value) (:List ,elem))
-     (and (listp value) (cl-loop for e in value always (et-subtype? (et-literal e) elem))))
     (`((:Literal (,lval . ,rval)) (:Cons ,ltype ,rtype))
      (and (et-subtype? (et-literal lval) ltype)
           (et-subtype? (et-literal rval) rtype)))))
 
+(defvar et--subtype-pending nil
+  "List of cons cells (A-TYPE . B-TYPE).")
+
+(defun et-subtype? (a-type b-type)
+  (or (equal a-type b-type)
+      (member (cons a-type b-type) et--subtype-pending)
+      (let ((et--subtype-pending (cons (cons a-type b-type) et--subtype-pending)))
+        ;; For a<b, we must have a-case<b FOR ALL a cases
+        (cl-loop for a-case in (et-type-cases a-type)
+                 always
+                 ;; For a-case<b, we must have a-factor<b FOR ANY a factor
+                 (cl-loop for a-factor in (et-case-factors a-case)
+                          thereis
+                          ;; For a-factor<b, we must have a-factor<b-case FOR ANY b case
+                          (cl-loop for b-case in (et-type-cases b-type)
+                                   thereis
+                                   ;; For a-factor<b-case, we must have a-factor<b-factor FOR ALL b factors
+                                   (cl-loop for b-factor in (et-case-factors b-case)
+                                            always (et--datatype-subtype? a-factor b-factor))))))))
+
 
 ;;;; Disjoint
+
+(defun et--datatype-disjoint? (a b)
+  (let ((repr-types '(:Number :Integer :String :Symbol :Cons)))
+    (pcase (list a b)
+      ((app et-expand-aliases-if-any `(,a-type ,b-type))
+       (et-disjoint? a-type b-type))
+
+      ;; Different literals
+      (`((:Literal ,a-val) (:Literal ,b-val)) (not (equal a-val b-val)))
+
+      ;; Literal which is not an instance of a repr type
+      ((or `((:Literal ,val) ,other) `(,other (:Literal ,val)))
+       (and (memq (car other) repr-types)
+            (not (et--datatype-subtype? `(:Literal ,val) other))))
+
+      ;; Repr types are either subtypes of each other (Integer<Number) or disjoint
+      ((guard (and (memq (car a) repr-types)
+                   (memq (car b) repr-types)))
+       (not (or (et--datatype-subtype? a b) (et--datatype-subtype? b a)))))))
 
 (defun et-disjoint? (a-type b-type)
   ;; For a/b, we must have a-case/b-case FOR ALL a cases and b cases
@@ -144,24 +209,20 @@ BINDS is an alist of (variable-symbol . type)."
                              (cl-loop for b-factor in (et-case-factors b-case)
                                       thereis (et--datatype-disjoint? a-factor b-factor))))))
 
-(defun et--datatype-disjoint? (a b)
-  (let ((repr-types '(:Number :Integer :String :Symbol :Cons)))
-    (pcase (list a b)
-      ;; Different literals
-      (`((:Literal ,a-val) (:Literal ,b-val)) (not (equal a-val b-val)))
-
-      ;; Literal which is not an instance of a repr type
-      ((or `((:Literal ,val) ,other) `(,other (:Literal ,val)))
-       (and (memq (car other) repr-types)
-            (not (et--datatype-subtype? `(:Literal ,val) other))))
-
-      ;; Repr types are either subtypes of each other (:Integer<:Number) or disjoint
-      ((guard (and (memq (car a) repr-types)
-                   (memq (car b) repr-types)))
-       (not (or (et--datatype-subtype? a b) (et--datatype-subtype? b a)))))))
-
 
 ;;;; Subtract
+
+(defun et--datatype-subtract (a b)
+  "Subtract A from B, like `et-subtract', but where A and B are datatypes."
+  (pcase (list a b)
+    ;; No need, as `et-subtype?' will do the expansion for us
+    ;; ((app et-expand-aliases-if-any `(,a-type ,b-type))
+    ;;  (et-subtract a-type b-type))
+
+    ;; Return the never type
+    ((guard (et--datatype-subtype? a b)) (et-never))
+
+    (_ (et-datatype a))))
 
 (defun et-subtract (type remove)
   "Create a subtype of TYPE with some elements of REMOVE removed.
@@ -182,7 +243,7 @@ types in the subtraction may also be in REMOVE."
                              collect
                              (cl-loop for b-factor in (et-case-factors b-case)
                                       collect (et--replace-type-binds
-                                               (et--subtract-datatype a-factor b-factor)
+                                               (et--datatype-subtract a-factor b-factor)
                                                (et-case-binds a-case))
                                       into b-factor-results
                                       ;; union of factor subtractions = list of cases with one factor each
@@ -197,36 +258,16 @@ types in the subtraction may also be in REMOVE."
            into a-case-results
            finally return (apply #'et-or a-case-results)))
 
-(defun et--subtract-datatype (datatype remove)
-  "Helper function for `et-subtract' handling datatypes.
-
-Both DATATYPE and REMOVE are datatypes."
-  (pcase (list datatype remove)
-    ;; Return the never type
-    ((guard (et--datatype-subtype? datatype remove)) (et-never))
-    ;; Nil removed from list is a cons
-    (`((:List ,elem) (:Literal nil))
-     (et-and (et-datatype datatype) (et-datatype `(:Cons ,elem ,(et-any)))))
-    ;; Cons removed from list is nil
-    (`((:List ,_) (:Cons ,_ ,_))
-     (et-datatype `(:Literal nil)))
-
-    (_ (et-datatype datatype))))
-
 
 ;;;; Simplify
 
-(defun et--intersect-datatypes (a b)
+(defun et--datatype-intersection (a b)
   "Attempt to merge two datatypes into a single equivalent datatype.
 
 Returns a single datatype, or nil if it is impossible."
-
   (pcase (list a b)
     ((guard (et--datatype-subtype? a b)) a)
     ((guard (et--datatype-subtype? b a)) b)
-
-    ;; Merge list element
-    (`((:List ,a-elem) (:List ,b-elem)) `(:List ,(et-and a-elem b-elem)))
 
     ;; Merge cons elements
     (`((:Cons ,a-left ,a-right) (:Cons ,b-left ,b-right))
@@ -238,19 +279,25 @@ Returns a single datatype, or nil if it is impossible."
   "Given FACTORS, return an equivalent but simplified list of factors."
 
   ;; Search through every possible pair of factors to check if
-  ;; `et--intersect-datatypes' can merge them. If it can, then
+  ;; `et--datatype-intersection' can merge them. If it can, then
   ;; replace both factors with the merged factor.
   (cl-loop for (next . tail) on factors
            unless (cl-loop for new-tail on new-factors
-                           for simple = (et--intersect-datatypes next (car new-tail))
+                           for simple = (et--datatype-intersection next (car new-tail))
                            when simple do (setcar new-tail simple)
                            thereis simple)
            collect next into new-factors
            finally return new-factors))
 
 (defun et-simplify (type)
-  "Simplify TYPE."
+  "Simplify TYPE.
 
+This function will fail to simplify certain aliases whose expansions
+could be simplified (specifically, aliases where neither are a subtype
+of the other). It would be possible to first expand out all aliases
+before performing simplification, but this would result in a simplified
+type with all aliases removed, and worse would cause an infinite loop
+for recursive aliases."
   (let ((simple-cases
          (cl-loop for (case . rest) on (et-type-cases type)
                   ;; If any two factors are disjoint, then the case is empty
