@@ -581,6 +581,12 @@ Depth tracks < > and { } nesting."
 ;;;; Binds
 
 (defvar et--binds nil)
+(defvar et--narrow-binds nil)
+
+(defun et--get-var-bind (var)
+  (when-let ((base-bind (assoc var et--binds)))
+    (or (alist-get base-bind et--narrow-binds)
+        (cdr base-bind))))
 
 (defmacro et-with-binds (binds &rest body)
   (declare (indent 1))
@@ -589,23 +595,21 @@ Depth tracks < > and { } nesting."
 
 (defmacro et-with-varspec-binds (binds &rest body)
   (declare (indent 1))
-  `(let ((et--binds (append (cl-loop for ((v . _) . b) in ,binds collect (cons v b)) et--binds)))
+  `(let ((et--narrow-binds (append ,binds et--narrow-binds)))
      ,@body))
 
 (defmacro et-with-type-binds (format type &rest body)
   (declare (indent 2))
-  `(let ((binds (cl-loop for ((var . _) . type) in (et--type-binds ,type)
-                         collect (cons var type)))
+  `(let ((binds (et--type-binds ,type))
          (format ,format))
      (et-with-path (list 0)
        (when format
          (et-warn format
                   ;; (et-format ,type)
-                  (cl-loop for (var . type) in binds
+                  (cl-loop for ((var . _) . type) in binds
                            collect (format "%s: %s" var (et-format type)) into strs
-                           finally return (string-join strs "\\n"))
-                  )))
-     (et-with-binds binds ,@body)))
+                           finally return (string-join strs "\\n")))))
+     (et-with-varspec-binds binds ,@body)))
 
 
 ;;;; Root
@@ -643,13 +647,13 @@ Depth tracks < > and { } nesting."
      ;; Allow for type narrowing on variable names.
      ;; For example, if a: Number | nil,
      ;; then return the type Number&{a: Number} | nil
-     (if-let ((varspec (assoc sym et--binds))
-              (non-nil (et-subtract (cdr varspec) (et-nil))))
-         (if (equal non-nil (cdr varspec)) (cdr varspec)
-           (et-or (et--intersect-type-binds non-nil (list (cons varspec non-nil)))
-                  (et--intersect-type-binds (et-and (cdr varspec) (et-nil))
-                                            (list (cons varspec (et-nil))))))
-       (error "Free variable: %s" sym)))
+     (let* ((var-type (or (et--get-var-bind sym) (error "Free variable: %s" sym)))
+            (non-nil (et-subtract var-type (et-nil)))
+            (varspec (assoc sym et--binds)))
+       (if (equal non-nil var-type) var-type
+         (et-or (et--intersect-type-binds non-nil (list (cons varspec non-nil)))
+                (et--intersect-type-binds (et-and var-type (et-nil))
+                                          (list (cons varspec (et-nil))))))))
 
     (expr (et-literal expr))))
 
@@ -793,7 +797,7 @@ Depth tracks < > and { } nesting."
 
   (cl-loop for (var _val) on args by #'cddr
            for idx upfrom 0 by 2
-           for type = (or (alist-get var et--binds)
+           for type = (or (et--get-var-bind sym)
                           (et-with-path (list (1+ idx))
                             (error "Assignment to free variable")))
            do (et-with-path (list (+ idx 2))
@@ -804,58 +808,49 @@ Depth tracks < > and { } nesting."
 
 ;;;; and/or
 
-(defun et--and-return-type (paths)
-  (if (null paths) (et-literal t)
+(defun et--and-return-type (cond-type checker)
+  ;; The next case will only get evaluated if all previous were non-nil
+  (let* ((non-nil-binds (et--type-binds (et-subtract cond-type (et-nil))))
+         (output-type (et-with-varspec-binds non-nil-binds (funcall checker)))
 
-    (let ((type nil)
-          ;; If we start out with (et-nil), we won't get any narrowing on the nil case,
-          (nil-type (et-never))
-          (non-nil-binds nil)
-          ;; If and is empty, it returns t
-          (last-non-nil-type nil))
+         (output-non-nil (et-subtract output-type (et-nil)))
+         ;; If `and' returns non-nil, then both non-nil binds will be true (intersect them)
+         (merged-non-nil-binds
+          (et--intersect-binds non-nil-binds (et--type-binds output-non-nil))))
 
-      (dolist (path paths)
-        ;; The next case will only get evaluated if all previous were non-nil
-        (et-with-varspec-binds non-nil-binds
-          (et-with-path path
-            (setq type (et-check))))
+    (et-or (et--replace-type-binds output-non-nil merged-non-nil-binds)
+           ;; If `and' returns nil, it could be from either `cond-type' OR `output-type' being nil
+           (et-and cond-type (et-nil))
+           (et-and output-type (et-nil)))))
 
-        ;; Returns nil if this case returned nil, OR any previous returned nil
-        (cl-callf et-or nil-type (et-and type (et-nil)))
+(defun et--or-return-type (cond-type checker)
+  ;; The next case will only get evaluated if all previous were nil
+  (let* ((nil-binds (et--type-binds (et-and cond-type (et-nil))))
+         (output-type (et-with-varspec-binds nil-binds (funcall checker)))
 
-        ;; Returns non-nil if this case AND all previous case returned non-nil
-        (setq last-non-nil-type (et-subtract type (et-nil)))
-        (cl-callf et--intersect-binds non-nil-binds
-          (et--type-binds last-non-nil-type)))
+         (output-nil (et-and output-type (et-nil)))
+         ;; If `or' returns nil, then both nil binds will be true (intersect them)
+         (merged-nil-binds
+          (et--intersect-binds nil-binds (et--type-binds output-nil))))
 
-      (et-or nil-type (et--replace-type-binds last-non-nil-type non-nil-binds)))))
-
-(defun et--or-return-type (paths)
-  (if (null paths) (et-nil)
-    (let ((type nil)
-          (nil-binds nil)
-          (non-nil (et-never)))
-
-      (dolist (path paths)
-        ;; The next case will only get evaluated if all previous were nil
-        (et-with-varspec-binds nil-binds
-          (et-with-path path
-            (setq type (et-check))))
-
-        ;; Returns nil if this case returned nil, AND all previous returned nil
-        (cl-callf et--intersect-binds nil-binds
-          (et--type-binds (et-and type (et-nil))))
-
-        ;; Returns non-nil if this case OR any previous case returned non-nil
-        (cl-callf et-or non-nil (et-subtract type (et-nil))))
-
-      (et-or non-nil (et--replace-type-binds (et-nil) nil-binds)))))
+    (et-or (et--replace-type-binds output-nil merged-nil-binds)
+           ;; If `or' returns non-nil, it could be from either `cond-type' OR `output-type'
+           (et-subtract cond-type (et-nil))
+           (et-subtract output-type (et-nil)))))
 
 (et-define-checker and (&rest args)
-  (et--and-return-type (mapcar #'list (number-sequence 1 (length args)))))
+  (cl-loop with acc-type = (et-literal t)
+           for pos upfrom 1 to (length args)
+           do (cl-callf et--and-return-type acc-type
+                (lambda () (et-with-path (list pos) (et-check))))
+           finally return acc-type))
 
 (et-define-checker or (&rest args)
-  (et--or-return-type (mapcar #'list (number-sequence 1 (length args)))))
+  (cl-loop with acc-type = (et-nil)
+           for pos upfrom 1 to (length args)
+           do (cl-callf et--or-return-type acc-type
+                (lambda () (et-with-path (list pos) (et-check))))
+           finally return acc-type))
 
 
 ;;;; if
@@ -948,10 +943,11 @@ Depth tracks < > and { } nesting."
   `(et-define-checker ,name (expr)
      (let ((type ,type))
        (if (symbolp expr)
-           (let* ((varspec (or (assoc expr et--binds)
-                               (error "Invalid variable %s" expr)))
-                  (nil-type (et-subtract (cdr varspec) type)))
-             (et-or (et--replace-type-binds (et-literal t) (list (cons varspec type)))
+           (let* ((varspec (or (assoc expr et--binds) (error "Free variable %s" expr)))
+                  (var-type (et--get-var-bind expr))
+                  (and-type (et-and var-type type))
+                  (nil-type (et-subtract var-type type)))
+             (et-or (et--replace-type-binds (et-literal t) (list (cons varspec and-type)))
                     (et--replace-type-binds (et-nil) (list (cons varspec nil-type)))))
 
          ;; Compile the argument
@@ -1024,6 +1020,16 @@ Depth tracks < > and { } nesting."
     nil))
 
 (add-hook 'flycheck-process-error-functions #'et--flycheck-reposition-error)
+
+
+;;;; Testing checkers
+
+(et-define-checker et-assert-subtype (expr type)
+  (let ((expr-type (et-check-arg 1 expr)))
+    (or (et-subtype? expr-type (eval type))
+        (error "Not subtype: %s" (et-format expr-type)))
+    (setq et--current-expr "dummy")
+    (et-nil)))
 
 
 ;;; ============================================================
