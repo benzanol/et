@@ -22,7 +22,7 @@
 ;;; Commentary:
 
 ;; EXPR-TYPE ::= SYMBOL (function name)
-;;            |  :number
+;;            |  :Number
 ;;            |  :string
 ;;            |  :symbol
 ;;
@@ -72,8 +72,8 @@ same name."
 (defun et-dt (&rest dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-any () (make-et-type :cases (list (make-et-case :factors nil))))
 (defun et-never () (make-et-type :cases nil))
-(defun et-literal (value) (et-datatype `(:Literal ,value)))
-(defun et-nil () (et-datatype `(:Literal nil)))
+(defun et-literal (value) (et-datatype `(:literal ,value)))
+(defun et-nil () (et-datatype `(:literal nil)))
 
 (defun et-type-factors (type)
   "Expand out the factors as a list of lists."
@@ -154,57 +154,58 @@ same name."
 (defmacro et-pcase-lambda (&rest patterns)
   `(lambda (&rest args) (pcase args ,@patterns)))
 
-(et-define-datatype :Literal
+
+;;;; Basic datatypes
+
+(et-define-datatype :literal
   ;; :read-only t
   :check-args (lambda (_)))
 
-(et-define-datatype :Number
+(et-define-datatype :number
   ;; :read-only t
   :check-args #'et--assert-no-args
-  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred numberp))) t)))
+  :supertype? (et-pcase-lambda (`(() (:literal ,(pred numberp))) t)))
 
-(et-define-datatype :Integer
+(et-define-datatype :integer
   ;; :read-only t
   :check-args #'et--assert-no-args
-  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred integerp))) t))
-  :subtype? (et-pcase-lambda (`(() (:Number)) t)))
+  :supertype? (et-pcase-lambda (`(() (:literal ,(pred integerp))) t))
+  :subtype? (et-pcase-lambda (`(() (:number)) t)))
 
-(et-define-datatype :String
+(et-define-datatype :string
   ;; :read-only t
   :check-args #'et--assert-no-args
-  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred stringp))) t)))
+  :supertype? (et-pcase-lambda (`(() (:literal ,(pred stringp))) t)))
 
-(et-define-datatype :Symbol
+(et-define-datatype :symbol
   ;; :read-only t
   :check-args #'et--assert-no-args
-  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred symbolp))) t)))
+  :supertype? (et-pcase-lambda (`(() (:literal ,(pred symbolp))) t)))
 
-(et-define-datatype :Boolean
-  ;; :read-only t
-  :check-args #'et--assert-no-args
-  :supertype? (et-pcase-lambda (`(() (:Literal ,(or 'nil 't))) t))
-  :subtype? (et-pcase-lambda (`(() (:Symbol)) t)))
-
-(et-define-datatype :Cons
+(et-define-datatype :cons
   ;; :read-only t
   :check-args (et-pcase-lambda
                (`(,(pred et-type-p) ,(pred et-type-p)) nil)
                (_ (error "Expected two type arguments")))
-  :subtype?
-  (et-pcase-lambda
-   (`((,l ,r) (:Cons ,l2 ,r2)) (and (et-subtype? l l2) (et-subtype? r r2))))
+  :subtype? (et-pcase-lambda
+             (`((,l ,r) (:cons ,l2 ,r2)) (and (et-subtype? l l2) (et-subtype? r r2))))
+  :supertype? (et-pcase-lambda
+               (`((,l ,r) (:literal ,val))
+                (and (consp val)
+                     (et-subtype? (et-literal (car val)) l)
+                     (et-subtype? (et-literal (cdr val)) r))))
   :non-disjoint?
   (et-pcase-lambda
-   (`((,l ,r) (:Cons ,l2 ,r2)) (or (not (et-disjoint? l l2)) (not (et-disjoint? r r2)))))
+   (`((,l ,r) (:cons ,l2 ,r2)) (or (not (et-disjoint? l l2)) (not (et-disjoint? r r2)))))
   :subtract
   (et-pcase-lambda
-   (`((,l ,r) (:Cons ,l2 ,r2)) (et-dt :Cons (et-subtract l l2) (et-subtract r r2))))
+   (`((,l ,r) (:cons ,l2 ,r2)) (et-dt :cons (et-subtract l l2) (et-subtract r r2))))
   :merge
   (et-pcase-lambda
-   (`((,l ,r) (:Cons ,l2 ,r2)) (et-dt :Cons (et-and l l2) (et-and r r2)))))
+   (`((,l ,r) (:cons ,l2 ,r2)) (et-dt :cons (et-and l l2) (et-and r r2)))))
 
 
-;;;; Type aliases
+;;;; Define aliases
 
 (defmacro et-define-alias (keyword arglist &rest body)
   "Alias KEYWORD types to return a specific type."
@@ -229,34 +230,41 @@ same name."
       (error "Type %s is already defined as a %s, canot redefine it as an alias"
              keyword kind)))
 
-  (when (get keyword 'et-datatype-read-only)
+  (when (get keyword 'et-alias-read-only)
     (error "Type %s is defined as read only" keyword))
 
   (when (plist-get props :read-only)
-    (put keyword 'et-datatype-read-only t))
+    (put keyword 'et-alias-read-only t))
 
-  (put keyword 'et-datatype-alias function))
+  (put keyword 'et-alias function))
 
-(defun et-expand-alias (datatype)
-  (pcase datatype
-    (`(,(and keyword (pred keywordp)) . ,args)
-     (when-let ((func (get keyword 'et-datatype-alias)))
-       (apply func args)))
-    (_ (error "Invalid datatype: %s" datatype))))
+(defun et-expand-alias (datatype-args)
+  (apply (or (get (car datatype-args) 'et-alias)
+             (error "Alias %s is not defined" (car datatype-args)))
+         (cdr datatype-args)))
 
-(defun et-expand-aliases-if-any (datatypes)
-  "Expands all aliases in `datatypes', if any.
 
-If none of DATATYPES are aliases, then return nil. Otherwise, return a
-list of types representing expanded versions of DATATYPES.
+;;;; Alias datatype
 
-This is intended for use in `pcase' conditions for checking if any
-datatypes are non-root."
-  (when (cl-loop for dt in datatypes
-                 thereis (et-expand-alias dt))
-    (cl-loop for dt in datatypes
-             collect (or (et-expand-alias dt)
-                         (et-datatype dt)))))
+(defmacro et--alias-fn (body)
+  `(lambda (args other)
+     (let ((self (et-expand-alias args))
+           (other (if (eq (car other) :alias) (et-expand-alias (cdr other))
+                    (et-datatype other))))
+       ,body)))
+
+(et-define-datatype :alias
+  :check-args (et-pcase-lambda
+               (`(,(pred keywordp) . ,args) nil)
+               (_ (error "Expected first argument to be a keyword")))
+  :subtype? (et--alias-fn (et-subtype? self other))
+  :supertype? (et--alias-fn (et-subtype? other self))
+  :non-disjoint? (et--alias-fn (not (et-disjoint? self other)))
+  :subtract (et--alias-fn (et-subtract self other))
+  :subtract-from (et--alias-fn (et-subtract other self))
+  :merge (et--alias-fn
+          (pcase (et-type-factors (et-and self other))
+            (`((,only)) only))))
 
 
 ;;;; Built-in aliases
@@ -265,17 +273,16 @@ datatypes are non-root."
   (et-or (et-literal t) (et-nil)))
 
 (et-define-alias :List (elem)
-  :builtin t
   (et-or (et-nil)
-         (et-dt :Cons elem (et-dt :List elem))))
+         (et-dt :cons elem (et-dt :alias :List elem))))
 
 (et-define-alias :Tree (elem)
   (et-or elem
-         (et-dt :List (et-dt :Tree elem))))
+         (et-dt :List (et-dt :alias :Tree elem))))
 
 
 ;;; ============================================================
-;;; 4 core type operations
+;;; Core type operations
 ;;;; Subtype
 
 (defun et--datatype-subtype? (a b)
@@ -524,8 +531,10 @@ FUNCTION with the old bindings for that case."
   "Parse a type keyword SPEC into an `et-type'.
 
 Syntax (within the keyword name, after the leading colon):
-  Foo            → (:Foo)
-  Foo<A~B>       → (:Foo (:A) (:B))
+  foo            → (:Foo)
+  foo<A~B>       → (:foo (:A) (:B))
+  Foo            → (:alias :Foo)
+  Foo<A~B>       → (:alias :Foo (:A) (:B))
   A|B            → union of A, B
   A&B            → intersection of A, B
   A|B&C          → union of A with intersection of B,C
@@ -559,12 +568,12 @@ Splits on | at depth 0, then & at depth 0, then parses atoms."
 
 Returns an `et-type' for any of:
   {EXPR}           — grouped compound expression, parsed recursively
-  nil              — (:Literal nil)
-  t                — (:Literal t)
-  str<STRING>      — (:Literal STRING)
-  sym<SYMBOL>      — (:Literal (intern SYMBOL))
-  num<NUMBER>      — (:Literal (string-to-number NUMBER))
-  Name             — plain datatype like (:Number), (:String), etc.
+  nil              — (:literal nil)
+  t                — (:literal t)
+  str<STRING>      — (:literal STRING)
+  sym<SYMBOL>      — (:literal (intern SYMBOL))
+  num<NUMBER>      — (:literal (string-to-number NUMBER))
+  Name             — plain datatype like (:number), (:string), etc.
   Name<T1~T2~...>  — generic datatype with et-type params"
   (let ((case-fold-search nil))
     (cond
@@ -578,9 +587,9 @@ Returns an `et-type' for any of:
      ((equal s "nil") (et-literal nil))
      ((equal s "t")   (et-literal t))
 
-     ;; Any/Never
-     ((equal s "Any") (et-any))
-     ((equal s "Never") (et-never))
+     ;; any/never
+     ((equal s "any") (et-any))
+     ((equal s "never") (et-never))
 
      ;; Name or Name<...>
      ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)" s)
@@ -590,8 +599,8 @@ Returns an `et-type' for any of:
         (if (= rest-start (length s))
             ;; Plain name, no angle brackets
             (if (string-match-p "^[A-Z]" name)
-                (et-datatype (list (intern (format ":%s" name))))
-              (error "Type name %s must be capitalized" name))
+                (et-dt :alias (intern (format ":%s" name)))
+              (et-dt (intern (format ":%s" name))))
 
           ;; Has <...> suffix
           (unless (eq (aref s rest-start) ?<)
@@ -601,21 +610,19 @@ Returns an `et-type' for any of:
           (setq inner (substring s (1+ rest-start) (1- (length s))))
 
           ;; Lowercase prefix → literal constructor
-          (if (string-match-p "^[a-z]" name)
-              (pcase name
-                ("sym" (et-literal (intern inner)))
-                ("str" (et-literal inner))
-                ("num" (et-literal (string-to-number inner)))
-                (_ (error "Invalid literal type: %s" name)))
-
-            ;; Uppercase generic: params are full et-type values
-            (let ((parts (et--split-at-depth inner ?~)))
-              (when (and (= (length parts) 1) (string-empty-p (car parts)))
-                (error "Empty type parameters in: %s" s))
-              (et-datatype
-               (cons (intern (format ":%s" name))
-                     (cl-loop for p in parts
-                              collect (et--parse-string p)))))))))
+          (pcase name
+            ("sym" (et-literal (intern inner)))
+            ("str" (et-literal inner))
+            ("num" (et-literal (string-to-number inner)))
+            (_
+             (when (string-empty-p inner) (error "Empty type parameters in: %s" s))
+             (let* ((parts (et--split-at-depth inner ?~))
+                    (body (cons (intern (format ":%s" name))
+                                (cl-loop for p in parts
+                                         collect (et--parse-string p)))))
+               (if (string-match-p "^[A-Z]" name)
+                   (et-datatype (cons :alias body))
+                 (et-datatype body))))))))
 
      (t (error "Invalid type syntax: %s" s)))))
 
@@ -662,11 +669,12 @@ Depth tracks < > and { } nesting."
 (defun et--format-datatype (dt)
   "Format a single datatype factor into a human-readable string."
   (pcase dt
-    (`(:Literal ,val)
+    (`(:alias . ,rest) (et--format-datatype rest))
+    (`(:literal ,val)
      (if (and (symbolp val) val (not (eq val t)))
          (format "`%s'" val)
        (prin1-to-string val)))
-    (`(:Cons ,left ,right)
+    (`(:cons ,left ,right)
      (let* ((elems (list (et-pp left))))
        (while (pcase right
                 ((and (pred et-type-p) r)
@@ -676,12 +684,12 @@ Depth tracks < > and { } nesting."
                               (null (et-case-binds (car rcases))))
                      (let ((inner (car (et-case-factors (car rcases)))))
                        (pcase inner
-                         (`(:Cons ,car-type ,cdr-type)
+                         (`(:cons ,car-type ,cdr-type)
                           (nconc elems (list (et-pp car-type)))
                           (setq right cdr-type)
                           t)
                          (_ nil))))))))
-       ;; Check if the tail is (:Literal nil)
+       ;; Check if the tail is (:literal nil)
        (let ((tail-nil-p
               (and (et-type-p right)
                    (let ((rcases (et-type-cases right)))
@@ -689,7 +697,7 @@ Depth tracks < > and { } nesting."
                           (let ((f (et-case-factors (car rcases))))
                             (and (= (length f) 1)
                                  (null (et-case-binds (car rcases)))
-                                 (equal (car f) '(:Literal nil)))))))))
+                                 (equal (car f) '(:literal nil)))))))))
          (if tail-nil-p
              (format "(%s)" (mapconcat #'identity elems " "))
            (format "(%s . %s)"
@@ -1047,11 +1055,11 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (cl-loop with is-integer = t
            for pos upfrom 1 to (length args)
            for type = (et-check-path pos)
-           do (or (et-subtype? type (et-dt :Number))
+           do (or (et-subtype? type (et-dt :number))
                   (et-with-path (list pos)
                     (error "Argument must be a number, got %s" (et-pp type))))
-           do (setq is-integer (and is-integer (et-subtype? type (et-dt :Integer))))
-           finally return (et-dt (if is-integer :Integer :Number))))
+           do (setq is-integer (and is-integer (et-subtype? type (et-dt :integer))))
+           finally return (et-dt (if is-integer :integer :number))))
 
 (et-define-checker + (&rest args) (et--check-arithmetic-function args))
 (et-define-checker - (&rest args) (et--check-arithmetic-function args))
@@ -1064,7 +1072,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 ;;;; cons/list
 
 (et-define-checker cons (_lval _rval)
-  (et-dt :Cons
+  (et-dt :cons
          (et-check-path 1)
          (et-check-path 2)))
 
@@ -1072,7 +1080,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 (et-define-checker list (&rest args)
   (cl-loop with type = (et-literal nil)
            for idx downfrom (length args) to 1
-           do (setq type (et-dt :Cons (et-check-path idx) type))
+           do (setq type (et-dt :cons (et-check-path idx) type))
            finally return type))
 
 
@@ -1080,14 +1088,14 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 (et-define-checker car (_expr)
   (pcase (et-type-factors (et-check-path 1))
-    (`(((:Cons ,car ,_))) car)
+    (`(((:cons ,car ,_))) car)
     (`(((:List ,elem))) (et-or (et-nil) elem))
     (wrong (et-with-path 1 (error "Expected list or cons, found %s" wrong)))))
 
 
 (et-define-checker cdr (_expr)
   (pcase (et-type-factors (et-check-path 1))
-    (`(((:Cons ,_ ,cdr))) cdr)
+    (`(((:cons ,_ ,cdr))) cdr)
     (`(((:List ,elem))) (et-dt :List elem))
     (wrong (et-with-path 1 (error "Expected list or cons, found %s" wrong)))))
 
@@ -1107,12 +1115,12 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
        (et-or t-type nil-type))))
 
 
-(et-define-predicate stringp (et-dt :String))
-(et-define-predicate numberp (et-dt :Number))
-(et-define-predicate integerp (et-dt :Integer))
-(et-define-predicate consp (et-dt :Cons (et-any) (et-any)))
+(et-define-predicate stringp (et-dt :string))
+(et-define-predicate numberp (et-dt :number))
+(et-define-predicate integerp (et-dt :integer))
+(et-define-predicate consp (et-dt :cons (et-any) (et-any)))
 ;; listp does not technically check if it is a valid list
-(et-define-predicate listp (et-or (et-dt nil) (et-dt :Cons (et-any) (et-any))))
+(et-define-predicate listp (et-or (et-dt nil) (et-dt :cons (et-any) (et-any))))
 (et-define-predicate null (et-nil))
 (et-define-predicate not (et-nil))
 

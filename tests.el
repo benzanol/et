@@ -30,41 +30,25 @@
 
 ;;; Code:
 ;;; ============================================================
-;;; Parse
-
-(cl-assert (equal (et-parse :Boolean) '(:Boolean)))
-(cl-assert (equal (et-parse :And<Boolean>) '(:And (:Boolean))))
-(cl-assert (equal (et-parse :And<Boolean~Integer>) '(:And (:Boolean) (:Integer))))
-(cl-assert (equal (et-parse :Or<Boolean~Integer>) '(:Or (:Boolean) (:Integer))))
-(cl-assert (equal (et-parse :Or<Boolean~Integer~String>) '(:Or (:Boolean) (:Integer) (:String))))
-(cl-assert (equal (et-parse :And<Or<Boolean~Integer>~String>)
-                  '(:And (:Or (:Boolean) (:Integer)) (:String))))
-(cl-assert (equal (et-parse :Or<And<Boolean~Integer>~And<String~Boolean>>)
-                  '(:Or (:And (:Boolean) (:Integer)) (:And (:String) (:Boolean)))))
-(cl-assert (equal (et-parse :Or<And<Or<Boolean~Integer>~String>~Boolean>)
-                  '(:Or (:And (:Or (:Boolean) (:Integer)) (:String)) (:Boolean))))
-
-
-;;; ============================================================
 ;;; Types
 ;;;; Primitives
 
-(et-assert-success (et-root-resolve :Number 1))
-(et-assert-success (et-root-resolve :Number 1.1))
-(et-assert-error (et-root-resolve :Number "1"))
+(et-assert-success (et-root-resolve :number 1))
+(et-assert-success (et-root-resolve :number 1.1))
+(et-assert-error (et-root-resolve :number "1"))
 
-(et-assert-success (et-root-resolve :Integer 1))
-(et-assert-error (et-root-resolve :Integer 1.1))
-(et-assert-error (et-root-resolve :Integer "1"))
+(et-assert-success (et-root-resolve :integer 1))
+(et-assert-error (et-root-resolve :integer 1.1))
+(et-assert-error (et-root-resolve :integer "1"))
 
-(et-assert-success (et-root-resolve :String "1"))
-(et-assert-error (et-root-resolve :String 1))
+(et-assert-success (et-root-resolve :string "1"))
+(et-assert-error (et-root-resolve :string 1))
 
-(et-assert-success (et-root-resolve :Symbol nil))
-(et-assert-success (et-root-resolve :Symbol t))
-(et-assert-error (et-root-resolve :Symbol 'a)) ; Not self-quoting
-(et-assert-error (et-root-resolve :Symbol 1))
-(et-assert-error (et-root-resolve :Symbol "1"))
+(et-assert-success (et-root-resolve :symbol nil))
+(et-assert-success (et-root-resolve :symbol t))
+(et-assert-error (et-root-resolve :symbol 'a)) ; Not self-quoting
+(et-assert-error (et-root-resolve :symbol 1))
+(et-assert-error (et-root-resolve :symbol "1"))
 
 (et-assert-success (et-root-resolve :Boolean t))
 (et-assert-success (et-root-resolve :Boolean nil))
@@ -75,112 +59,112 @@
 
 ;;;; Quoted
 
-(et-assert-success (et-root-resolve :Integer ''1))
-(et-assert-success (et-root-resolve :Number ''1.1))
-(et-assert-success (et-root-resolve :String ''"hi"))
-(et-assert-success (et-root-resolve :Symbol ''a))
-(et-assert-error (et-root-resolve :Integer ''1.1))
-(et-assert-error (et-root-resolve :Integer '''1))
-(et-assert-error (et-root-resolve :Number '''1.1))
-(et-assert-error (et-root-resolve :String '''"hi"))
-(et-assert-error (et-root-resolve :Symbol '''a))
+(et-assert-success (et-root-resolve :integer ''1))
+(et-assert-success (et-root-resolve :number ''1.1))
+(et-assert-success (et-root-resolve :string ''"hi"))
+(et-assert-success (et-root-resolve :symbol ''a))
+(et-assert-error (et-root-resolve :integer ''1.1))
+(et-assert-error (et-root-resolve :integer '''1))
+(et-assert-error (et-root-resolve :number '''1.1))
+(et-assert-error (et-root-resolve :string '''"hi"))
+(et-assert-error (et-root-resolve :symbol '''a))
 
-(et-assert-success (et-root-resolve :List<Integer> ''(1 2 3)))
-(et-assert-success (et-root-resolve :List<Symbol> ''(a b c)))
-(et-assert-success (et-root-resolve :List<Integer> ''()))
-(et-assert-error (et-root-resolve :List<Integer> ''(1 2 '3)))
-(et-assert-error (et-root-resolve :List<Integer> ''(1 2 3.3)))
-(et-assert-error (et-root-resolve :List<Integer> '''(1 2 3)))
-(et-assert-error (et-root-resolve :List<Integer> '''()))
+(et-assert-success (et-root-resolve :cons<any~any> ''(1 2 3)))
+(et-assert-success (et-root-resolve :List<symbol> ''(a b c)))
+(et-assert-success (et-root-resolve :List<integer> ''()))
+(et-assert-error (et-root-resolve :List<integer> ''(1 2 '3)))
+(et-assert-error (et-root-resolve :List<integer> ''(1 2 3.3)))
+(et-assert-error (et-root-resolve :List<integer> '''(1 2 3)))
+(et-assert-error (et-root-resolve :List<integer> '''()))
 
-(et-assert-success (et-root-resolve :Cons<Integer~Integer> ''(1 . 2)))
-(et-assert-error (et-root-resolve :Cons<Integer~Integer> ''(1 . 2.2)))
-(et-assert-error (et-root-resolve :Cons<Integer~Integer> ''(1.1 . 2)))
-(et-assert-success (et-root-resolve :Cons<Symbol~List<String>> ''(a "2" "3")))
+(et-assert-success (et-root-resolve :cons<integer~integer> ''(1 . 2)))
+(et-assert-error (et-root-resolve :cons<integer~integer> ''(1 . 2.2)))
+(et-assert-error (et-root-resolve :cons<integer~integer> ''(1.1 . 2)))
+(et-assert-success (et-root-resolve :cons<symbol~List<string>> ''(a "2" "3")))
 
 
-;;;; And/or
+;;;; and/or
 
-;; And - value must satisfy all constituent types
+;; and - value must satisfy all constituent types
 (et-assert-success (et-root-resolve :Boolean&Boolean t))
-(et-assert-success (et-root-resolve :Boolean&Symbol&Boolean t))
-(et-assert-error   (et-root-resolve :Boolean&Integer t))
-(et-assert-error   (et-root-resolve :Boolean&Integer 1))
-(et-assert-error   (et-root-resolve :Boolean&Integer nil))
+(et-assert-success (et-root-resolve :Boolean&symbol&Boolean t))
+(et-assert-error   (et-root-resolve :Boolean&integer t))
+(et-assert-error   (et-root-resolve :Boolean&integer 1))
+(et-assert-error   (et-root-resolve :Boolean&integer nil))
 
-;; Two Or types
-(et-assert-success (et-root-resolve :Boolean|Integer t))
-(et-assert-success (et-root-resolve :Boolean|Integer nil))
-(et-assert-success (et-root-resolve :Boolean|Integer 1))
-(et-assert-error   (et-root-resolve :Boolean|Integer "1"))
-(et-assert-error   (et-root-resolve :Boolean|Integer 'a))
+;; Two or types
+(et-assert-success (et-root-resolve :Boolean|integer t))
+(et-assert-success (et-root-resolve :Boolean|integer nil))
+(et-assert-success (et-root-resolve :Boolean|integer 1))
+(et-assert-error   (et-root-resolve :Boolean|integer "1"))
+(et-assert-error   (et-root-resolve :Boolean|integer 'a))
 
-;; Three Or types
-(et-assert-success (et-root-resolve :Boolean|Integer|String t))
-(et-assert-success (et-root-resolve :Boolean|Integer|String 1))
-(et-assert-success (et-root-resolve :Boolean|Integer|String "1"))
-(et-assert-error   (et-root-resolve :Boolean|Integer|String 'a))
+;; Three or types
+(et-assert-success (et-root-resolve :Boolean|integer|string t))
+(et-assert-success (et-root-resolve :Boolean|integer|string 1))
+(et-assert-success (et-root-resolve :Boolean|integer|string "1"))
+(et-assert-error   (et-root-resolve :Boolean|integer|string 'a))
 
-;; Nested - And inside Or
-(et-assert-success (et-root-resolve :Integer|Boolean&Symbol t))
-(et-assert-success (et-root-resolve :Integer|Boolean&Symbol 1))
-(et-assert-error   (et-root-resolve :Integer|Boolean&Symbol 'a))
+;; Nested - and inside or
+(et-assert-success (et-root-resolve :integer|Boolean&symbol t))
+(et-assert-success (et-root-resolve :integer|Boolean&symbol 1))
+(et-assert-error   (et-root-resolve :integer|Boolean&symbol 'a))
 
-;; Nested - Or inside And
-(et-assert-success (et-root-resolve :Boolean&{Symbol|Integer} t))
-(et-assert-success (et-root-resolve :Boolean&{Symbol|Integer} nil))
-(et-assert-error   (et-root-resolve :Boolean&{Symbol|Integer} 1))
+;; Nested - or inside and
+(et-assert-success (et-root-resolve :Boolean&{symbol|integer} t))
+(et-assert-success (et-root-resolve :Boolean&{symbol|integer} nil))
+(et-assert-error   (et-root-resolve :Boolean&{symbol|integer} 1))
 
 
 ;;;; cons
 
-(et-assert-success (et-root-resolve :Cons<Integer~String> '(cons 1 "2")))
-(et-assert-error (et-root-resolve :Cons<Integer~String> '(cons "1" 2)))
-(et-assert-success (et-root-resolve :Cons<Integer~List<String>> '(cons 1 nil)))
-(et-assert-success (et-root-resolve :Cons<Integer~List<String>> '(cons 1 (cons "2" nil))))
+(et-assert-success (et-root-resolve :cons<integer~string> '(cons 1 "2")))
+(et-assert-error (et-root-resolve :cons<integer~string> '(cons "1" 2)))
+(et-assert-success (et-root-resolve :cons<integer~List<string>> '(cons 1 nil)))
+(et-assert-success (et-root-resolve :cons<integer~List<string>> '(cons 1 (cons "2" nil))))
 
-(et-assert-success (et-root-resolve :List<Integer> '(cons 1 (cons 2 nil))))
-(et-assert-error (et-root-resolve :List<Integer> '(cons 1 (cons "2" nil))))
-(et-assert-error (et-root-resolve :List<Integer> '(cons "1" (cons 2 nil))))
-(et-assert-error (et-root-resolve :List<Integer> '(cons 1 (cons 2 t))))
+(et-assert-success (et-root-resolve :List<integer> '(cons 1 (cons 2 nil))))
+(et-assert-error (et-root-resolve :List<integer> '(cons 1 (cons "2" nil))))
+(et-assert-error (et-root-resolve :List<integer> '(cons "1" (cons 2 nil))))
+(et-assert-error (et-root-resolve :List<integer> '(cons 1 (cons 2 t))))
 
 
 ;;;; list
 
-(et-assert-success (et-root-resolve :Cons<Integer~List<String>> '(list 1 "2")))
-(et-assert-error (et-root-resolve :Cons<Integer~String> '(list "1" 2)))
-(et-assert-error (et-root-resolve :Cons<Integer~String> '(list)))
+(et-assert-success (et-root-resolve :cons<integer~List<string>> '(list 1 "2")))
+(et-assert-error (et-root-resolve :cons<integer~string> '(list "1" 2)))
+(et-assert-error (et-root-resolve :cons<integer~string> '(list)))
 
-(et-assert-success (et-root-resolve :List<Integer> '(list 1 2 3)))
-(et-assert-success (et-root-resolve :List<Integer> '(list 1)))
-(et-assert-error (et-root-resolve :List<Integer> '(list 1 "2" 3)))
+(et-assert-success (et-root-resolve :List<integer> '(list 1 2 3)))
+(et-assert-success (et-root-resolve :List<integer> '(list 1)))
+(et-assert-error (et-root-resolve :List<integer> '(list 1 "2" 3)))
 
 
 ;;;; car
 
-(et-assert-success (et-root-resolve :Integer '(car (list 1 2.2 3))))
-(et-assert-error (et-root-resolve :Integer '(car (list 1.1 2 3))))
-(et-assert-success (et-root-resolve :Integer '(car (cons 1 "3"))))
-(et-assert-success (et-root-resolve :List<Integer> '(car (cons (list 1) "3"))))
-(et-assert-success (et-root-resolve :Cons<Integer~Any> '(car (cons (list 1) "3"))))
-(et-assert-success (et-root-resolve :Integer '(car (car (cons (list 1) "3")))))
-(et-assert-error (et-root-resolve :Integer '(car (car (cons (list 1.1) "3")))))
+(et-assert-success (et-root-resolve :integer '(car (list 1 2.2 3))))
+(et-assert-error (et-root-resolve :integer '(car (list 1.1 2 3))))
+(et-assert-success (et-root-resolve :integer '(car (cons 1 "3"))))
+(et-assert-success (et-root-resolve :List<integer> '(car (cons (list 1) "3"))))
+(et-assert-success (et-root-resolve :cons<integer~any> '(car (cons (list 1) "3"))))
+(et-assert-success (et-root-resolve :integer '(car (car (cons (list 1) "3")))))
+(et-assert-error (et-root-resolve :integer '(car (car (cons (list 1.1) "3")))))
 
 
 ;;;; cdr
 
-(et-assert-success (et-root-resolve :List<Number> '(cdr (list 1 2.2 3))))
-(et-assert-success (et-root-resolve :List<Integer> '(cdr (list 1.1 2 3))))
-(et-assert-error (et-root-resolve :List<Integer> '(car (list 1 2.2 3))))
+(et-assert-success (et-root-resolve :List<number> '(cdr (list 1 2.2 3))))
+(et-assert-success (et-root-resolve :List<integer> '(cdr (list 1.1 2 3))))
+(et-assert-error (et-root-resolve :List<integer> '(car (list 1 2.2 3))))
 
-(et-assert-success (et-root-resolve :Integer '(cdr (cons "1" 2))))
-(et-assert-error (et-root-resolve :Integer '(cdr (cons 1 "2"))))
+(et-assert-success (et-root-resolve :integer '(cdr (cons "1" 2))))
+(et-assert-error (et-root-resolve :integer '(cdr (cons 1 "2"))))
 
-(et-assert-success (et-root-resolve :List<Integer> '(cdr (cons "1" (list 2)))))
-(et-assert-success (et-root-resolve :Cons<Integer~Any> '(cdr (cons "1" (list 2)))))
-(et-assert-success (et-root-resolve :Cons<Integer~Boolean> '(cdr (cons "1" (list 2)))))
-(et-assert-error (et-root-resolve :Cons<Integer~Boolean> '(cdr (cons "1" (list 2 3)))))
-(et-assert-success (et-root-resolve :Integer '(car (cdr (cons "1" (list 2))))))
+(et-assert-success (et-root-resolve :List<integer> '(cdr (cons "1" (list 2)))))
+(et-assert-success (et-root-resolve :cons<integer~any> '(cdr (cons "1" (list 2)))))
+(et-assert-success (et-root-resolve :cons<integer~Boolean> '(cdr (cons "1" (list 2)))))
+(et-assert-error (et-root-resolve :cons<integer~Boolean> '(cdr (cons "1" (list 2 3)))))
+(et-assert-success (et-root-resolve :integer '(car (cdr (cons "1" (list 2))))))
 
 (et-assert-success (et-root-resolve :Boolean '(cdr (cdr (cdr (list 1 2 3))))))
 (et-assert-error (et-root-resolve :Boolean '(cdr (cdr (list 1 2 3)))))
@@ -192,39 +176,39 @@
 ;; Setting type binds to an incompatible type returns never
 (cl-assert
  (equal
-  (let ((vs (cons 'a (et-or (et-dt :Integer) (et-dt :String)))))
+  (let ((vs (cons 'a (et-or (et-dt :integer) (et-dt :string)))))
     (et-with-binds (list vs)
-      (et-with-narrow-binds (list (cons vs (et-dt :Integer)))
-        (et--replace-type-binds (et-literal t) (list (cons vs (et-dt :String)))))))
+      (et-with-narrow-binds (list (cons vs (et-dt :integer)))
+        (et--replace-type-binds (et-literal t) (list (cons vs (et-dt :string)))))))
   (et-never)))
 
 ;; A few hard type narrowing cases
 (et-root-block
- (let* ((b :String|Integer|nil 4))
+ (let* ((b :string|integer|nil 4))
    (if (and b (or (null b) (stringp b)))
-       (:assert-subtype b (et-dt :String))
-     (:assert-subtype b (et-or (et-nil) (et-dt :Integer)))
-     (:assert-error (:assert-subtype b (et-or (et-nil) (et-dt :String)))))
+       (:assert-subtype b (et-dt :string))
+     (:assert-subtype b (et-or (et-nil) (et-dt :integer)))
+     (:assert-error (:assert-subtype b (et-or (et-nil) (et-dt :string)))))
    (if (not b)
        (:assert-subtype b (et-nil))
-     (:assert-subtype b (et-or (et-dt :String) (et-dt :Integer))))
+     (:assert-subtype b (et-or (et-dt :string) (et-dt :integer))))
    (if (not (not b))
-       (:assert-subtype b (et-or (et-dt :String) (et-dt :Integer)))
+       (:assert-subtype b (et-or (et-dt :string) (et-dt :integer)))
      (:assert-subtype b (et-nil)))
    (if (not (not (not (not b))))
-       (:assert-subtype b (et-or (et-dt :String) (et-dt :Integer)))
+       (:assert-subtype b (et-or (et-dt :string) (et-dt :integer)))
      (:assert-subtype b (et-nil)))
    (if (not (not (not (stringp b))))
-       (:assert-subtype b (et-or (et-nil) (et-dt :Integer)))
-     (:assert-subtype b (et-dt :String)))))
+       (:assert-subtype b (et-or (et-nil) (et-dt :integer)))
+     (:assert-subtype b (et-dt :string)))))
 
 ;; Test narrowing across variables
 (et-root-block
- (let* ((a :String|Integer|nil 4)
+ (let* ((a :string|integer|nil 4)
         (b a))
    (when (stringp b)
-     (:assert-subtype a (et-dt :String)))
-   (:assert-error (:assert-subtype a (et-dt :String)))))
+     (:assert-subtype a (et-dt :string)))
+   (:assert-error (:assert-subtype a (et-dt :string)))))
 
 
 ;; ============================================================
