@@ -43,53 +43,6 @@
 
 ;;; ============================================================
 ;;; Type definitions
-;;;; Type aliases
-
-(defmacro et-define-alias (keyword arglist &rest body)
-  "Alias KEYWORD types to return a specific type."
-  (declare (indent 2))
-  (cl-assert (keywordp keyword))
-  (cl-assert (listp arglist))
-  `(put ,keyword 'et-type-alias
-        ,`(lambda . ,(cl--transform-lambda
-                      (cons arglist body)
-                      (format "et-alias%s" keyword)))))
-
-(defun et-expand-alias (datatype)
-  (pcase datatype
-    (`(,(and keyword (pred keywordp)) . ,args)
-     (when-let ((func (get keyword 'et-type-alias)))
-       (apply func args)))
-    (_ (error "Invalid datatype: %s" datatype))))
-
-(defun et-expand-aliases-if-any (datatypes)
-  "Expands all aliases in `datatypes', if any.
-
-If none of DATATYPES are aliases, then return nil. Otherwise, return a
-list of types representing expanded versions of DATATYPES.
-
-This is intended for use in `pcase' conditions for checking if any
-datatypes are non-root."
-  (when (cl-loop for dt in datatypes
-                 thereis (et-expand-alias dt))
-    (cl-loop for dt in datatypes
-             collect (or (et-expand-alias dt)
-                         (et-datatype dt)))))
-
-(et-define-alias :List (elem)
-  (et-or (et-nil)
-         (et-dt :Cons elem (et-dt :List elem))))
-
-(et-define-alias :Boolean ()
-  (et-or (et-literal t) (et-nil)))
-
-(et-define-alias :Tree (elem)
-  (et-or elem
-         (et-dt :List (et-dt :Tree elem))))
-
-
-;;; ============================================================
-;;; Typesystem core
 ;;;; Structs
 
 (cl-defstruct et-type
@@ -101,9 +54,14 @@ CASES is a list of `et-case' instances being unioned."
 (cl-defstruct et-case
   "Struct representing a case of an et type.
 
-FACTORS is a list of datatypes which being intersected.
+FACTORS is a list of datatypes which being intersected. Each DATATYPE
+has the form (KEYWORD ARGS...).
 
-BINDS is an alist of (variable-symbol . type)."
+BINDS is an alist of (VARSPEC . TYPE). VARSPEC is a reference to one of
+the entries in `et--binds', so it is a cons cell mapping the variable
+symbol its original type. This makes it easier to discern whether the
+variable being narrowed is being shadowed by another variable of the
+same name."
   factors
   binds)
 
@@ -127,33 +85,203 @@ BINDS is an alist of (variable-symbol . type)."
   "Return non-nil if TYPE is not the never type."
   (null (et-type-cases type)))
 
-;; Each FACTOR is a DATATYPE, which is one of
-;; (:Number/Integer/String/Symbol)
-;; (:Literal VALUE)
-;; (:Cons LEFT RIGHT)
+
+;;;; Data types
+
+;; A datatype keyword has the following symbol properties:
+;;
+;; et-datatype - The keyword of the property
+;;
+;; et-datatype-check-args: (ARGS...) -> NIL (errors if args are invalid)
+;;
+;; et-datatype-read-only - Prevent future definitions from overwriting
+;;
+;;
+;; The following optional properties correspond to major type
+;; operations:
+;;
+;; :subtype?: (ARGS OTHER-DATATYPE) -> BOOLEAN - Check if I am a
+;;   subtype of OTHER-DATATYPE.
+;;
+;; :supertype?: (ARGS OTHER-DATATYPE) -> BOOLEAN - Check if I am a
+;;   supertype of OTHER-DATATYPE. Favor using `subtype?' instead when
+;;   possible.
+;;
+;; :non-disjoint?: (ARGS OTHER-DATATYPE) -> BOOLEAN - By default, it
+;;   is assumed that any two datatypes which are not subtypes of each
+;;   other are disjoint. Return t if I am not necessarily disjoint
+;;   from OTHER-DATATYPE. t does not mean I am definitely disjoint,
+;;   but nil means I am definitely disjoint.
+;;
+;; :subtract: (ARGS OTHER-DATATYPE) -> TYPE or NIL - Subtract
+;;   OTHER-DATATYPE from myself, or return nil if the subtraction is
+;;   undefined.
+;;
+;; :subtract-from: (ARGS OTHER-DATATYPE) -> TYPE or NIL - Subtract
+;;   myself from OTHER-DATATYPE, or return nil if the subtraction is
+;;   undefined.
+;;
+;; :merge: (ARGS OTHER-DATATYPE) -> DATATYPE or NIL - Create a new
+;;   datatype which satisfies both myself and OTHER-DATATYPE.
+;;
+
+(defmacro et-define-datatype (keyword &rest props)
+  "Alias KEYWORD types to return a specific type.
+
+\(fn keyword &key check-args subtype? supertype? non-disjoint? subtract subtract-from read-only)"
+  (declare (indent 1))
+  (cl-assert (keywordp keyword))
+
+  (defconst et--datatype-properties
+    '(check-args subtype? supertype? non-disjoint? subtract subtract-from merge read-only))
+
+  `(ignore
+    (when (get ,keyword 'et-datatype-read-only)
+      (error "Cannot overwrite read-only datatype"))
+    (put ,keyword 'et-datatype ,keyword)
+    ,@(cl-loop for key in et--datatype-properties
+               for value = (plist-get props (intern (format ":%s" key)))
+               collect `(put ,keyword ',(intern (format "et-datatype-%s" key)) ,value))))
+
+(defmacro et-datatype-funcall (method datatype &rest extra-args)
+  `(let ((dt ,datatype))
+     (funcall (or (get (car dt) ',(intern (format "et-datatype-%s" method))) #'ignore)
+              (cdr dt) ,@extra-args)))
+
+(defun et--assert-no-args (&rest args)
+  (when args (error "No arguments allowed")))
+
+(defmacro et-pcase-lambda (&rest patterns)
+  `(lambda (&rest args) (pcase args ,@patterns)))
+
+(et-define-datatype :Literal
+  ;; :read-only t
+  :check-args (lambda (_)))
+
+(et-define-datatype :Number
+  ;; :read-only t
+  :check-args #'et--assert-no-args
+  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred numberp))) t)))
+
+(et-define-datatype :Integer
+  ;; :read-only t
+  :check-args #'et--assert-no-args
+  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred integerp))) t))
+  :subtype? (et-pcase-lambda (`(() (:Number)) t)))
+
+(et-define-datatype :String
+  ;; :read-only t
+  :check-args #'et--assert-no-args
+  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred stringp))) t)))
+
+(et-define-datatype :Symbol
+  ;; :read-only t
+  :check-args #'et--assert-no-args
+  :supertype? (et-pcase-lambda (`(() (:Literal ,(pred symbolp))) t)))
+
+(et-define-datatype :Boolean
+  ;; :read-only t
+  :check-args #'et--assert-no-args
+  :supertype? (et-pcase-lambda (`(() (:Literal ,(or 'nil 't))) t))
+  :subtype? (et-pcase-lambda (`(() (:Symbol)) t)))
+
+(et-define-datatype :Cons
+  ;; :read-only t
+  :check-args (et-pcase-lambda
+               (`(,(pred et-type-p) ,(pred et-type-p)) nil)
+               (_ (error "Expected two type arguments")))
+  :subtype?
+  (et-pcase-lambda
+   (`((,l ,r) (:Cons ,l2 ,r2)) (and (et-subtype? l l2) (et-subtype? r r2))))
+  :non-disjoint?
+  (et-pcase-lambda
+   (`((,l ,r) (:Cons ,l2 ,r2)) (or (not (et-disjoint? l l2)) (not (et-disjoint? r r2)))))
+  :subtract
+  (et-pcase-lambda
+   (`((,l ,r) (:Cons ,l2 ,r2)) (et-dt :Cons (et-subtract l l2) (et-subtract r r2))))
+  :merge
+  (et-pcase-lambda
+   (`((,l ,r) (:Cons ,l2 ,r2)) (et-dt :Cons (et-and l l2) (et-and r r2)))))
 
 
+;;;; Type aliases
+
+(defmacro et-define-alias (keyword arglist &rest body)
+  "Alias KEYWORD types to return a specific type."
+  (declare (indent 2))
+  (cl-assert (keywordp keyword))
+  (cl-assert (listp arglist))
+
+  (let ((plist nil))
+    (while (keywordp (car body))
+      (setq plist (nconc plist (list (pop body) (pop body)))))
+
+    `(et--define-alias
+      ,keyword
+      ,`(lambda . ,(cl--transform-lambda
+                    (cons arglist body)
+                    (format "et-alias%s" keyword)))
+      (list ,@plist))))
+
+(defun et--define-alias (keyword function props)
+  (let ((kind (get keyword 'et-datatype-kind)))
+    (unless (or (null kind) (eq kind 'alias))
+      (error "Type %s is already defined as a %s, canot redefine it as an alias"
+             keyword kind)))
+
+  (when (get keyword 'et-datatype-read-only)
+    (error "Type %s is defined as read only" keyword))
+
+  (when (plist-get props :read-only)
+    (put keyword 'et-datatype-read-only t))
+
+  (put keyword 'et-datatype-alias function))
+
+(defun et-expand-alias (datatype)
+  (pcase datatype
+    (`(,(and keyword (pred keywordp)) . ,args)
+     (when-let ((func (get keyword 'et-datatype-alias)))
+       (apply func args)))
+    (_ (error "Invalid datatype: %s" datatype))))
+
+(defun et-expand-aliases-if-any (datatypes)
+  "Expands all aliases in `datatypes', if any.
+
+If none of DATATYPES are aliases, then return nil. Otherwise, return a
+list of types representing expanded versions of DATATYPES.
+
+This is intended for use in `pcase' conditions for checking if any
+datatypes are non-root."
+  (when (cl-loop for dt in datatypes
+                 thereis (et-expand-alias dt))
+    (cl-loop for dt in datatypes
+             collect (or (et-expand-alias dt)
+                         (et-datatype dt)))))
+
+
+;;;; Built-in aliases
+
+(et-define-alias :Boolean ()
+  (et-or (et-literal t) (et-nil)))
+
+(et-define-alias :List (elem)
+  :builtin t
+  (et-or (et-nil)
+         (et-dt :Cons elem (et-dt :List elem))))
+
+(et-define-alias :Tree (elem)
+  (et-or elem
+         (et-dt :List (et-dt :Tree elem))))
+
+
+;;; ============================================================
+;;; 4 core type operations
 ;;;; Subtype
 
 (defun et--datatype-subtype? (a b)
-  (pcase (list a b)
-    ((app et-expand-aliases-if-any `(,a-type ,b-type))
-     (et-subtype? a-type b-type))
-
-    ((guard (equal a b)) t)
-
-    ;; General
-    ('((:Integer) (:Number)) t)
-    (`((:Cons ,al ,ar) (:Cons ,bl ,br)) (and (et-subtype? al bl) (et-subtype? ar br)))
-
-    ;; Literals
-    (`((:Literal ,value) (:Number)) (numberp value))
-    (`((:Literal ,value) (:Integer)) (and (numberp value) (eq (mod value 1) 0)))
-    (`((:Literal ,value) (:String)) (stringp value))
-    (`((:Literal ,value) (:Symbol)) (symbolp value))
-    (`((:Literal (,lval . ,rval)) (:Cons ,ltype ,rtype))
-     (and (et-subtype? (et-literal lval) ltype)
-          (et-subtype? (et-literal rval) rtype)))))
+  (or (equal a b)
+      (et-datatype-funcall subtype? a b)
+      (et-datatype-funcall supertype? b a)))
 
 (defvar et--subtype-pending nil
   "List of cons cells (A-TYPE . B-TYPE).")
@@ -179,23 +307,15 @@ BINDS is an alist of (variable-symbol . type)."
 ;;;; Disjoint
 
 (defun et--datatype-disjoint? (a b)
-  (let ((repr-types '(:Number :Integer :String :Symbol :Cons)))
-    (pcase (list a b)
-      ((app et-expand-aliases-if-any `(,a-type ,b-type))
-       (et-disjoint? a-type b-type))
+  (not (or (equal a b)
 
-      ;; Different literals
-      (`((:Literal ,a-val) (:Literal ,b-val)) (not (equal a-val b-val)))
+           (et-datatype-funcall non-disjoint? a b)
+           (et-datatype-funcall non-disjoint? b a)
 
-      ;; Literal which is not an instance of a repr type
-      ((or `((:Literal ,val) ,other) `(,other (:Literal ,val)))
-       (and (memq (car other) repr-types)
-            (not (et--datatype-subtype? `(:Literal ,val) other))))
-
-      ;; Repr types are either subtypes of each other (Integer<Number) or disjoint
-      ((guard (and (memq (car a) repr-types)
-                   (memq (car b) repr-types)))
-       (not (or (et--datatype-subtype? a b) (et--datatype-subtype? b a)))))))
+           (et-datatype-funcall subtype? a b)
+           (et-datatype-funcall supertype? a b)
+           (et-datatype-funcall subtype? b a)
+           (et-datatype-funcall supertype? b a))))
 
 (defun et-disjoint? (a-type b-type)
   ;; For a/b, we must have a-case/b-case FOR ALL a cases and b cases
@@ -214,15 +334,10 @@ BINDS is an alist of (variable-symbol . type)."
 
 (defun et--datatype-subtract (a b)
   "Subtract A from B, like `et-subtract', but where A and B are datatypes."
-  (pcase (list a b)
-    ;; No need, as `et-subtype?' will do the expansion for us
-    ;; ((app et-expand-aliases-if-any `(,a-type ,b-type))
-    ;;  (et-subtract a-type b-type))
-
-    ;; Return the never type
-    ((guard (et--datatype-subtype? a b)) (et-never))
-
-    (_ (et-datatype a))))
+  (or (et-datatype-funcall subtract a b)
+      (et-datatype-funcall subtract-from b a)
+      (and (et--datatype-subtype? a b) (et-never))
+      a))
 
 (defun et-subtract (type remove)
   "Create a subtype of TYPE with some elements of REMOVE removed.
@@ -265,15 +380,9 @@ types in the subtraction may also be in REMOVE."
   "Attempt to merge two datatypes into a single equivalent datatype.
 
 Returns a single datatype, or nil if it is impossible."
-  (pcase (list a b)
-    ((guard (et--datatype-subtype? a b)) a)
-    ((guard (et--datatype-subtype? b a)) b)
-
-    ;; Merge cons elements
-    (`((:Cons ,a-left ,a-right) (:Cons ,b-left ,b-right))
-     `(:Cons ,(et-and a-left b-left) ,(et-and a-right b-right)))
-
-    (_ nil)))
+  (or (et-datatype-funcall merge a b)
+      (and (et--datatype-subtype? a b) a)
+      (and (et--datatype-subtype? b a) b)))
 
 (defun et--simplify-factors (factors)
   "Given FACTORS, return an equivalent but simplified list of factors."
