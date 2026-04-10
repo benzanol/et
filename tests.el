@@ -30,7 +30,23 @@
 
 ;;; Code:
 ;;; ============================================================
-;;; Types
+;;; Typesystem
+
+;; This tests a very particular line in `et-subtype?'. Specifically,
+;; at each subtype factor, before iterating through the supertype
+;; factors, it checks whether the subtype datatype wants to check if
+;; it is a subtype of the entire supertype, instead of checking
+;; whether it is a subtype of each individual factor of the supertype.
+;; The datatype List<integer> is a subtype of the provided nil|cons,
+;; but it is a subtype of neither case individually, so this test only
+;; passes when the described code path is working correctly.
+(et-assert-true
+ (et-subtype? (et-parse :List<integer>)
+              (et-parse :nil|cons<number~List<integer>>)))
+
+
+;;; ============================================================
+;;; Expressions
 ;;;; Primitives
 
 (et-assert-success (et-root-resolve :number 1))

@@ -72,7 +72,8 @@ same name."
 (defun et-dt (&rest dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-any () (make-et-type :cases (list (make-et-case :factors nil))))
 (defun et-never () (make-et-type :cases nil))
-(defun et-literal (value) (et-datatype `(:literal ,value)))
+(defun et-literal (value) (et-dt :literal value))
+(defun et-alias (&rest args) (et-datatype (cons :alias args)))
 (defun et-nil () (et-datatype `(:literal nil)))
 
 (defun et-type-factors (type)
@@ -107,6 +108,9 @@ same name."
 ;;   supertype of OTHER-DATATYPE. Favor using `subtype?' instead when
 ;;   possible.
 ;;
+;; :type-subtype?: (ARGS OTHER-TYPE) -> BOOLEAN - Check if I am a
+;;   subtype of OTHER-TYPE.
+;;
 ;; :non-disjoint?: (ARGS OTHER-DATATYPE) -> BOOLEAN - By default, it
 ;;   is assumed that any two datatypes which are not subtypes of each
 ;;   other are disjoint. Return t if I am not necessarily disjoint
@@ -133,7 +137,7 @@ same name."
   (cl-assert (keywordp keyword))
 
   (defconst et--datatype-properties
-    '(check-args subtype? supertype? non-disjoint? subtract subtract-from merge read-only))
+    '(check-args subtype? supertype? type-subtype? non-disjoint? subtract subtract-from merge read-only))
 
   `(ignore
     (when (get ,keyword 'et-datatype-read-only)
@@ -145,8 +149,11 @@ same name."
 
 (defmacro et-datatype-funcall (method datatype &rest extra-args)
   `(let ((dt ,datatype))
-     (funcall (or (get (car dt) ',(intern (format "et-datatype-%s" method))) #'ignore)
+     (funcall (or (et-get-datatype-property ,method dt) #'ignore)
               (cdr dt) ,@extra-args)))
+
+(defmacro et-get-datatype-property (prop datatype)
+  `(get (car ,datatype) ',(intern (format "et-datatype-%s" prop))))
 
 (defun et--assert-no-args (&rest args)
   (when args (error "No arguments allowed")))
@@ -284,6 +291,7 @@ same name."
   :check-args (et-pcase-lambda
                (`(,(pred keywordp) . ,args) nil)
                (_ (error "Expected first argument to be a keyword")))
+  :type-subtype? (lambda (args other-type) (et-subtype? (et-expand-alias args) other-type))
   :subtype? (et--alias-fn (et-subtype? self other))
   :supertype? (et--alias-fn (et-subtype? other self))
   :non-disjoint? (et--alias-fn (not (et-disjoint? self other)))
@@ -330,12 +338,15 @@ same name."
                  ;; For a-case<b, we must have a-factor<b FOR ANY a factor
                  (cl-loop for a-factor in (et-case-factors a-case)
                           thereis
-                          ;; For a-factor<b, we must have a-factor<b-case FOR ANY b case
-                          (cl-loop for b-case in (et-type-cases b-type)
-                                   thereis
-                                   ;; For a-factor<b-case, we must have a-factor<b-factor FOR ALL b factors
-                                   (cl-loop for b-factor in (et-case-factors b-case)
-                                            always (et--datatype-subtype? a-factor b-factor))))))))
+                          ;; Some datatypes allow checking if all of b-type is a supertype at once
+                          (if (et-get-datatype-property type-subtype? a-factor)
+                              (et-datatype-funcall type-subtype? a-factor b-type)
+                            ;; For a-factor<b, we must have a-factor<b-case FOR ANY b case
+                            (cl-loop for b-case in (et-type-cases b-type)
+                                     thereis
+                                     ;; For a-factor<b-case, we must have a-factor<b-factor FOR ALL b factors
+                                     (cl-loop for b-factor in (et-case-factors b-case)
+                                              always (et--datatype-subtype? a-factor b-factor)))))))))
 
 
 ;;;; Disjoint
@@ -1163,6 +1174,12 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 (defmacro et-assert-success (expr)
   (ignore (eval expr)))
+
+(defmacro et-assert-true (expr)
+  (or (eval expr) (error "Returned nil")))
+
+(defmacro et-assert-nil (expr)
+  (when (eval expr) (error "Returned non-nil")))
 
 
 ;;;; Flycheck move error
