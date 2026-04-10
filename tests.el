@@ -52,67 +52,149 @@
               (et-parse :List<number>)))
 
 
-;;;; Inferring
+;;;; Inferring subtypes
 
 ;; Inferring outside of an infer boundary should error
-(et-assert-error (et-subtype? (et-dt :number) (et-dt :infer 'a)))
+(et-assert-error (et-subtype? (et-dt :number) (et-dt :infer-subtype 'a)))
+(et-assert-error (et-subtype? (et-dt :number) (et-dt :infer-supertype 'a)))
+;; Inferring in the wrong direction should error
+(et-assert-error
+ (et-infer-subtype [a]
+   (et-dt :number) (et-dt :infer-subtype 'a)))
+(et-assert-error
+ (et-infer-supertype [a]
+   (et-dt :number) (et-dt :infer-supertype 'a)))
 
-(et-assert-equal
- (et-infer-types [a]
-   (et-alias :List (et-dt :infer 'a))
-   (et-parse :List<integer>))
- `((a . ,(et-dt :integer))))
+(et-assert-equal (list (et-dt :integer))
+  (et-infer-subtype [a]
+    (et-alias :List a)
+    (et-parse :List<integer>)))
 
 ;; Cons cell matching against list
 
-(et-assert-equal
- (et-infer-types [a]
-   (et-dt :cons (et-dt :infer 'a) (et-alias :List (et-dt :integer)))
-   (et-parse :List<integer>))
- `((a . ,(et-dt :integer))))
+(et-assert-equal (list (et-dt :integer))
+  (et-infer-subtype [a]
+    (et-dt :cons a (et-alias :List (et-dt :integer)))
+    (et-parse :List<integer>)))
 
 ;; Change the tail type to :number from the above example. Inferring
 ;; should fail if the rest of the infer type doesn't match the
 ;; concrete type, even if the variable matches something.
-(et-assert-error
- (et-infer-types [a]
-   (et-dt :cons (et-dt :infer 'a) (et-alias :List (et-dt :number)))
+(et-assert-nil
+ (et-infer-subtype [a]
+   (et-dt :cons a (et-alias :List (et-dt :number)))
    (et-parse :List<integer>)))
 
 ;; List cell matching against cons cell
 
-(et-assert-equal
- (et-infer-types [a]
-   (et-alias :List (et-dt :infer 'a))
-   (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
- `((a . ,(et-dt :integer))))
+(et-assert-equal (list (et-dt :integer))
+  (et-infer-subtype [a]
+    (et-alias :List a)
+    (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer))))))
 
-(et-assert-error
- (et-infer-types [a]
-   (et-alias :List (et-dt :infer 'a))
+(et-assert-nil
+ (et-infer-subtype [a]
+   (et-alias :List a)
    (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
 
 ;; Matching two variables
 
-(et-assert-equal
- (et-infer-types [a b]
-   (et-alias :List (et-raw-or (et-dt :infer 'a) (et-dt :infer 'b)))
-   (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
- `((a . ,(et-dt :integer)) (b . ,(et-dt :integer))))
+(et-assert-equal (list (et-dt :integer) (et-dt :integer))
+  (et-infer-subtype [a b]
+    (et-alias :List (et-raw-or a b))
+    (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer))))))
 
 ;; Came across accidentally, and thought it was a bug, but b=any
 ;; technically does satisfy the subtype.
-(et-assert-equal
- (et-infer-types [a b]
-   (et-alias :List (et-raw-and (et-dt :infer 'a) (et-dt :infer 'b)))
-   (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
- `((a . ,(et-dt :integer)) (b . ,(et-any))))
+(et-assert-equal (list (et-dt :integer) (et-any))
+  (et-infer-subtype [a b]
+    (et-alias :List (et-raw-and a b))
+    (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer))))))
 
-(et-assert-equal
- (et-infer-types [a b]
-   (et-dt :cons (et-dt :infer 'a) (et-dt :cons (et-dt :integer) (et-dt :infer 'b)))
-   (et-alias :List (et-dt :integer)))
- `((a . ,(et-dt :integer)) (b . ,(et-alias :List (et-dt :integer)))))
+(et-assert-equal (list (et-dt :integer) (et-alias :List (et-dt :integer)))
+  (et-infer-subtype [a b]
+    (et-dt :cons a (et-dt :cons (et-dt :integer) b))
+    (et-alias :List (et-dt :integer))))
+
+
+;;;; Supertypes vs subtypes
+
+(et-assert-equal (list (et-or (et-dt :integer) (et-dt :string)))
+  (et-infer-supertype [elem]
+    (et-dt :cons elem elem)
+    (et-dt :cons (et-dt :integer) (et-dt :string))))
+(et-assert-nil
+ (et-infer-subtype [elem]
+   (et-dt :cons elem elem)
+   (et-dt :cons (et-dt :integer) (et-dt :string))))
+
+(et-assert-equal (list (et-raw-or (et-dt :cons (et-dt :integer) (et-nil)) (et-dt :integer)))
+  (et-infer-supertype [elem]
+    (et-raw-and elem (et-dt :cons elem (et-nil)))
+    (et-dt :cons (et-dt :integer) (et-nil))))
+(et-assert-nil
+ (et-infer-subtype [elem]
+   (et-raw-or elem (et-dt :cons elem (et-nil)))
+   (et-dt :cons (et-dt :integer) (et-nil))))
+
+
+;;;; Typing car with infer
+
+;; Say we want to infer the return type of `nth'. This determines the
+;; elem type to be integer, implying that subtype inference is
+;; invalid.
+(et-assert-equal (list (et-dt :integer))
+  (et-infer-subtype [elem]
+    (et-alias :List elem)
+    (et-or (et-literal 4) (et-alias :List (et-dt :integer)))))
+;; Whereas supertype inference correctly determines that it is invalid
+(et-assert-nil
+ (et-infer-supertype [elem]
+   (et-alias :List elem)
+   (et-or (et-literal 4) (et-alias :List (et-dt :integer)))))
+
+;; Contrast these two
+(et-assert-equal (list (et-dt :number))
+  (et-infer-supertype [elem]
+    (et-dt :cons elem elem)
+    (et-dt :cons (et-dt :integer) (et-dt :number))))
+(et-assert-equal (list (et-dt :integer))
+  (et-infer-subtype [elem]
+    (et-dt :cons elem elem)
+    (et-dt :cons (et-dt :integer) (et-dt :number))))
+
+;; Finally, the car type we desired
+(et-assert-equal (list (et-dt :integer))
+  (et-infer-supertype [elem]
+    (et-raw-or (et-dt :cons elem (et-any))
+               (et-dt :infer-supertype 'elem (et-nil))) ; This case isn't needed
+    (et-dt :cons (et-dt :integer) (et-alias :List (et-dt :number)))))
+;; This seems like it works
+(et-assert-equal (list (et-raw-or (et-nil) (et-dt :number)))
+  (et-infer-supertype [elem]
+    (et-raw-or (et-dt :cons elem (et-any)) elem)
+    (et-alias :List (et-dt :number))))
+;; However, elem can match to things other than nil
+(et-assert-equal (list (et-raw-or (et-dt :string) (et-nil) (et-dt :number)))
+  (et-infer-supertype [elem]
+    (et-raw-or (et-dt :cons elem (et-any)) elem)
+    (et-raw-or (et-dt :string) (et-alias :List (et-dt :number)))))
+;; So we need to restrict it -- this is our final `car' strategy
+(et-assert-equal (list (et-raw-or (et-nil) (et-dt :number)))
+  (et-infer-supertype [elem]
+    (et-raw-or (et-dt :cons elem (et-any))
+               (et-dt :infer-supertype 'elem (et-nil)))
+    (et-alias :List (et-dt :number))))
+(et-assert-equal (list (et-dt :string))
+  (et-infer-supertype [elem]
+    (et-raw-or (et-dt :cons elem (et-any))
+               (et-dt :infer-supertype 'elem (et-nil)))
+    (et-dt :cons (et-dt :string) (et-dt :integer))))
+(et-assert-nil
+ (et-infer-supertype [elem]
+   (et-raw-or (et-dt :cons elem (et-any))
+              (et-dt :infer-supertype 'elem (et-nil)))
+   (et-raw-or (et-dt :string) (et-alias :List (et-dt :number)))))
 
 
 ;;; ============================================================

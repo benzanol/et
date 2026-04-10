@@ -217,7 +217,7 @@ same name."
 (defvar et--inferring-types nil
   "Alist of symbol -> type.")
 
-(et-define-datatype :infer
+(et-define-datatype :infer-subtype
   ;; :read-only t
   :check-args (lambda (arg) (or (symbolp arg) (error "Argument must be a symbol")))
   :type-subtype? (lambda (args other-type)
@@ -227,17 +227,48 @@ same name."
   :supertype? (lambda (_args _other)
                 (error "Cannot check if an infer type is a supertype")))
 
-(defmacro et-infer-types (vars subtype supertype)
+(defmacro et-infer-subtype (vars subtype supertype)
   "Infer all variables in SUBTYPE so that it matches SUPERTYPE."
   (declare (indent 1))
   (cl-assert (vectorp vars))
-  `(let ((subtype ,subtype)
-         (supertype ,supertype)
-         (et--inferring-types
-          (list ,@(cl-loop for var across vars collect `(cons ',var (et-any))))))
-     (or (et-subtype? subtype supertype)
-         (error "Does not match: %s in %s" (et-pp subtype) (et-pp supertype)))
-     et--inferring-types))
+  `(let* (,@(cl-loop for var across vars collect `(,var (et-dt :infer-subtype ',var)))
+          (subtype ,subtype)
+          (supertype ,supertype)
+          (et--inferring-types
+           (list ,@(cl-loop for var across vars collect `(cons ',var (et-any))))))
+     (when (et-subtype? subtype supertype)
+       (cl-loop for (_ . type) in et--inferring-types
+                always (not (et-never? type))
+                collect type))))
+
+(et-define-datatype :infer-supertype
+  ;; :read-only t
+  :check-args (lambda (arg &optional req)
+                (or (symbolp arg) (error "Argument must be a symbol"))
+                (when req (or (et-type-p req) (error "Requirement must be a type"))))
+  :subtype? (lambda (_args _other)
+              (error "Cannot check if an infer type is a supertype"))
+  :supertype? (lambda (args other)
+                (let ((entry (assoc (car args) et--inferring-types)))
+                  (unless entry (error "Not inferring a type %s" (car args)))
+                  (if (and (cadr args) (not (et-subtype? (et-datatype other) (cadr args))))
+                      nil ; Does not fit the constraint
+                    (setcdr entry (et-or (cdr entry) (et-datatype other)))
+                    t))))
+
+(defmacro et-infer-supertype (vars supertype subtype)
+  "Infer all variables in SUPERTYPE so that it matches SUBTYPE."
+  (declare (indent 1))
+  (cl-assert (vectorp vars))
+  `(let* (,@(cl-loop for var across vars collect `(,var (et-dt :infer-supertype ',var)))
+          (subtype ,subtype)
+          (supertype ,supertype)
+          (et--inferring-types
+           (list ,@(cl-loop for var across vars collect `(cons ',var (et-never))))))
+     (when (et-subtype? subtype supertype)
+       (cl-loop for (_ . type) in et--inferring-types
+                always (not (et-never? type))
+                collect type))))
 
 
 ;;;; Define aliases
@@ -383,7 +414,7 @@ same name."
   (or (et-datatype-funcall subtract a b)
       (et-datatype-funcall subtract-from b a)
       (and (et--datatype-subtype? a b) (et-never))
-      a))
+      (et-datatype a)))
 
 (defun et-subtract (type remove)
   "Create a subtype of TYPE with some elements of REMOVE removed.
@@ -872,7 +903,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
      (or (apply (or (get func 'et-checker)
                     (error "No checker for function: %s" func))
                 args)
-         (error "Checker returned nil")))
+         (error "Checker for %s returned nil" func)))
     ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
 
      ;; Allow for type narrowing on variable names.
@@ -928,35 +959,35 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 ;;;; let
 
 (et-define-checker let* (varlist &rest _body)
-  (let ((let-binds-rev nil))
-    ;; Process let forms
-    (cl-loop
-     for form in varlist
-     for idx upfrom 0
-     do
-     (et-with-path (list 1 idx)
-       (pcase form
-         (`(,var ,type ,val)
-          ;; Parse the type
-          (et-with-path (list 1) (setq type (et-parse type)))
+  ;; Process let forms
+  (cl-loop
+   with let-binds-rev = nil
+   for form in varlist
+   for idx upfrom 0
+   do
+   (et-with-path (list 1 idx)
+     (pcase form
+       ;; Binding with a type annotation
+       (`(,var ,type ,val)
+        ;; Parse the type
+        (et-with-path (list 1) (setq type (et-parse type)))
+        ;; Ensure the value fits the type
+        (et-with-binds let-binds-rev (et-with-path (list 2) (et-resolve type)))
+        ;; Push the binding
+        (setq et--current-expr (list var val))
+        (push (cons var type) let-binds-rev))
 
-          ;; Type-check the value
-          (et-with-binds let-binds-rev
-            (et-with-path (list 2)
-              (et-resolve type)))
+       ;; Binding with no type annotation
+       (`(,var ,_val)
+        (let ((type (et-with-binds let-binds-rev (et-with-path (list 1) (et-check)))))
+          (push (cons var type) let-binds-rev)
+          (et-warn '(0) "%s: %s" var (et-pp type))))
 
-          (setq et--current-expr (list var val))
-          (push (cons var type) let-binds-rev))
-         (`(,var ,_val)
-          (let ((type
-                 (et-with-binds let-binds-rev
-                   (et-with-path (list 1)
-                     (et-check)))))
-            (push (cons var type) let-binds-rev)
-            (et-warn '(0) "%s: %s" var (et-pp type)))))))
+       (wrong (error "Invalid let binding: %s" wrong))))
 
-    (et-with-binds let-binds-rev
-      (et-check-tail 2))))
+   finally return
+   (et-with-binds let-binds-rev
+     (et-check-tail 2))))
 
 
 ;;;; dolist
@@ -966,19 +997,19 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
     (pcase spec
       ;; With explicit type
       (`(,var ,etype ,_val)
-       (et-with-path (list 1 1)
-         (setq type (et-parse etype)))
+       (et-with-path `(1 1) (setq type (et-parse etype)))
        (setq variable var)
-       (et-with-path (list 1 2)
-         (et-resolve (et-dt :List type))))
+       ;; Ensure the value fits the type
+       (et-with-path `(1 2) (et-resolve (et-alias :List type))))
 
       ;; With implicit type
       (`(,var ,_val)
        (setq variable var)
-       (et-with-path (list 1 1)
-         (pcase (et-type-factors (et-check))
-           (`(((:List ,elem))) (setq type elem))
-           (other (error "Expected list, found %s" other))))
+       (et-with-path `(1 1)
+         (let* ((list-type (et-check))
+                (infer (et-infer-subtype [elem] (et-alias :List elem) list-type)))
+           (unless infer (error "Expected list, found %s" (et-pp list-type)))
+           (setq type (car infer))))
        (et-warn '(1 0) "%s: %s" var (et-pp type)))
 
       (_ (error "Invalid dolist variable spec")))
@@ -1126,17 +1157,20 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 ;;;; car/cdr
 
 (et-define-checker car (_expr)
-  (pcase (et-type-factors (et-check-path 1))
-    (`(((:cons ,car ,_))) car)
-    (`(((:List ,elem))) (et-or (et-nil) elem))
-    (wrong (et-with-path 1 (error "Expected list or cons, found %s" wrong)))))
-
+  (let* ((type (et-check-path 1))
+         (infer (et-infer-supertype [car]
+                  (et-raw-or (et-dt :cons car (et-any))
+                             (et-dt :infer-supertype 'car (et-nil)))
+                  type)))
+    (or (car infer) (error "Expected cons or nil, got %s" (et-pp type)))))
 
 (et-define-checker cdr (_expr)
-  (pcase (et-type-factors (et-check-path 1))
-    (`(((:cons ,_ ,cdr))) cdr)
-    (`(((:List ,elem))) (et-dt :List elem))
-    (wrong (et-with-path 1 (error "Expected list or cons, found %s" wrong)))))
+  (let* ((type (et-check-path 1))
+         (infer (et-infer-supertype [cdr]
+                  (et-raw-or (et-dt :cons (et-any) cdr)
+                             (et-dt :infer-supertype 'cdr (et-nil)))
+                  type)))
+    (or (car infer) (error "Expected cons or nil, got %s" (et-pp type)))))
 
 
 ;;;; Predicates
@@ -1177,6 +1211,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (ignore (eval expr)))
 
 (defmacro et-assert-equal (expr1 expr2)
+  (declare (indent 1))
   (let ((v1 (eval expr1))
         (v2 (eval expr2)))
     (or (equal v1 v2) (error "Expressions not equal: \"%s\" \"%s\"" v1 v2))))
