@@ -218,6 +218,7 @@ same name."
   "Alist of symbol -> type.")
 
 (defmacro et-infer-types (vars supertype subtype)
+  "Infer all variables in SUPERTYPE so that it matches SUBTYPE."
   (declare (indent 1))
   (cl-assert (vectorp vars))
   `(let ((subtype ,subtype)
@@ -1174,6 +1175,11 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 (defmacro et-assert-success (expr)
   (ignore (eval expr)))
+
+(defmacro et-assert-equal (expr1 expr2)
+  (let ((v1 (eval expr1))
+        (v2 (eval expr2)))
+    (or (equal v1 v2) (error "Expressions not equal: \"%s\" \"%s\"" v1 v2))))
 
 (defmacro et-assert-true (expr)
   (or (eval expr) (error "Returned nil")))

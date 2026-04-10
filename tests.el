@@ -45,6 +45,46 @@
               (et-parse :nil|cons<number~List<integer>>)))
 
 
+;;; Inferring
+
+;; Inferring outside of an infer boundary should error
+(et-assert-error (et-subtype? (et-dt :number) (et-dt :infer 'a)))
+
+(et-assert-equal
+ (et-infer-types [a]
+   (et-alias :List (et-dt :infer 'a))
+   (et-parse :List<integer>))
+ `((a . ,(et-dt :integer))))
+
+(et-assert-equal
+ (et-infer-types [a]
+   (et-or (et-nil)
+          (et-dt :cons
+                 (et-dt :infer 'a)
+                 (et-alias :List (et-dt :number))))
+   (et-parse :List<integer>))
+ `((a . ,(et-dt :integer))))
+
+(et-assert-equal
+ (et-infer-types [a]
+   (et-alias :List (et-dt :infer 'a))
+   (et-or (et-nil)
+          (et-dt :cons
+                 (et-dt :number)
+                 (et-alias :List (et-dt :integer)))))
+ `((a . ,(et-dt :integer))))
+
+;; This is a necessary product of how infer is implemented, with
+;; subtype being concrete and supertype being unknown. Maybe this is
+;; undesired and should be changed in the future. However, `nil' is
+;; technically a list of any, so I guess it makes sense.
+(et-assert-equal
+ (et-infer-types [a]
+   (et-alias :List (et-dt :infer 'a))
+   (et-nil))
+ `((a . ,(et-any))))
+
+
 ;;; ============================================================
 ;;; Expressions
 ;;;; Primitives
