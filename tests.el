@@ -31,6 +31,7 @@
 ;;; Code:
 ;;; ============================================================
 ;;; Typesystem
+;;;; Subtype
 
 ;; This tests a very particular line in `et-subtype?'. Specifically,
 ;; at each subtype factor, before iterating through the supertype
@@ -44,8 +45,14 @@
  (et-subtype? (et-parse :List<integer>)
               (et-parse :nil|cons<number~List<integer>>)))
 
+;; This one works without the special path described above, but check
+;; it too for good measure
+(et-assert-true
+ (et-subtype? (et-parse :nil|cons<number~List<integer>>)
+              (et-parse :List<number>)))
 
-;;; Inferring
+
+;;;; Inferring
 
 ;; Inferring outside of an infer boundary should error
 (et-assert-error (et-subtype? (et-dt :number) (et-dt :infer 'a)))
@@ -56,33 +63,56 @@
    (et-parse :List<integer>))
  `((a . ,(et-dt :integer))))
 
+;; Cons cell matching against list
+
 (et-assert-equal
  (et-infer-types [a]
-   (et-or (et-nil)
-          (et-dt :cons
-                 (et-dt :infer 'a)
-                 (et-alias :List (et-dt :number))))
+   (et-dt :cons (et-dt :infer 'a) (et-alias :List (et-dt :integer)))
    (et-parse :List<integer>))
  `((a . ,(et-dt :integer))))
 
+;; Change the tail type to :number from the above example. Inferring
+;; should fail if the rest of the infer type doesn't match the
+;; concrete type, even if the variable matches something.
+(et-assert-error
+ (et-infer-types [a]
+   (et-dt :cons (et-dt :infer 'a) (et-alias :List (et-dt :number)))
+   (et-parse :List<integer>)))
+
+;; List cell matching against cons cell
+
 (et-assert-equal
  (et-infer-types [a]
    (et-alias :List (et-dt :infer 'a))
-   (et-or (et-nil)
-          (et-dt :cons
-                 (et-dt :number)
-                 (et-alias :List (et-dt :integer)))))
+   (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
  `((a . ,(et-dt :integer))))
 
-;; This is a necessary product of how infer is implemented, with
-;; subtype being concrete and supertype being unknown. Maybe this is
-;; undesired and should be changed in the future. However, `nil' is
-;; technically a list of any, so I guess it makes sense.
-(et-assert-equal
+(et-assert-error
  (et-infer-types [a]
    (et-alias :List (et-dt :infer 'a))
-   (et-nil))
- `((a . ,(et-any))))
+   (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
+
+;; Matching two variables
+
+(et-assert-equal
+ (et-infer-types [a b]
+   (et-alias :List (et-raw-or (et-dt :infer 'a) (et-dt :infer 'b)))
+   (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
+ `((a . ,(et-dt :integer)) (b . ,(et-dt :integer))))
+
+;; Came across accidentally, and thought it was a bug, but b=any
+;; technically does satisfy the subtype.
+(et-assert-equal
+ (et-infer-types [a b]
+   (et-alias :List (et-raw-and (et-dt :infer 'a) (et-dt :infer 'b)))
+   (et-or (et-nil) (et-dt :cons (et-dt :number) (et-alias :List (et-dt :integer)))))
+ `((a . ,(et-dt :integer)) (b . ,(et-any))))
+
+(et-assert-equal
+ (et-infer-types [a b]
+   (et-dt :cons (et-dt :infer 'a) (et-dt :cons (et-dt :integer) (et-dt :infer 'b)))
+   (et-alias :List (et-dt :integer)))
+ `((a . ,(et-dt :integer)) (b . ,(et-alias :List (et-dt :integer)))))
 
 
 ;;; ============================================================

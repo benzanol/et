@@ -201,7 +201,7 @@ same name."
                 (and (consp val)
                      (et-subtype? (et-literal (car val)) l)
                      (et-subtype? (et-literal (cdr val)) r))))
-  :non-disjoint?
+  :non-disjoint
   (et-pcase-lambda
    (`((,l ,r) (:cons ,l2 ,r2)) (or (not (et-disjoint? l l2)) (not (et-disjoint? r r2)))))
   :subtract
@@ -212,13 +212,23 @@ same name."
    (`((,l ,r) (:cons ,l2 ,r2)) (et-dt :cons (et-and l l2) (et-and r r2)))))
 
 
-;;;; Infer datatype
+;;;; Infer
 
 (defvar et--inferring-types nil
   "Alist of symbol -> type.")
 
-(defmacro et-infer-types (vars supertype subtype)
-  "Infer all variables in SUPERTYPE so that it matches SUBTYPE."
+(et-define-datatype :infer
+  ;; :read-only t
+  :check-args (lambda (arg) (or (symbolp arg) (error "Argument must be a symbol")))
+  :type-subtype? (lambda (args other-type)
+                   (let ((entry (assoc (car args) et--inferring-types)))
+                     (unless entry (error "Not inferring a type %s" (car args)))
+                     (setcdr entry (et-and (cdr entry) other-type))))
+  :supertype? (lambda (_args _other)
+                (error "Cannot check if an infer type is a supertype")))
+
+(defmacro et-infer-types (vars subtype supertype)
+  "Infer all variables in SUBTYPE so that it matches SUPERTYPE."
   (declare (indent 1))
   (cl-assert (vectorp vars))
   `(let ((subtype ,subtype)
@@ -228,16 +238,6 @@ same name."
      (or (et-subtype? subtype supertype)
          (error "Does not match: %s in %s" (et-pp subtype) (et-pp supertype)))
      et--inferring-types))
-
-(et-define-datatype :infer
-  ;; :read-only t
-  :check-args (lambda (arg) (or (symbolp arg) (error "Argument must be a symbol")))
-  :supertype? (lambda (args other)
-                (let ((entry (assoc (car args) et--inferring-types)))
-                  (unless entry (error "Not inferring a type %s" (car args)))
-                  (setcdr entry (et-and (cdr entry) (et-datatype other)))))
-  :subtype? (lambda (_args _other)
-              (error "Cannot check if an infer type is a subtype")))
 
 
 ;;;; Define aliases
@@ -537,14 +537,15 @@ FUNCTION with the old bindings for that case."
 
 ;;;; And/or
 
-(defun et-or (&rest types)
+(defun et-and (&rest types) (et-simplify (apply #'et-raw-and types)))
+(defun et-or (&rest types) (et-simplify (apply #'et-raw-or types)))
+
+(defun et-raw-or (&rest types)
   (cl-loop for type in types
            append (et-type-cases type) into cases
-           finally return (et-simplify (make-et-type :cases cases))
-           ;; finally return (make-et-type :cases cases)
-           ))
+           finally return (make-et-type :cases cases)))
 
-(defun et-and (&rest types)
+(defun et-raw-and (&rest types)
   (pcase types
     (`() (et-any))
     (`(,only) only)
@@ -559,9 +560,7 @@ FUNCTION with the old bindings for that case."
                                 :binds (et--intersect-binds
                                         (et-case-binds ac) (et-case-binds bc))))
               into all-cases
-              finally return (et-simplify (make-et-type :cases all-cases))
-              ;; finally return (make-et-type :cases all-cases)
-              ))))
+              finally return (make-et-type :cases all-cases)))))
 
 
 ;;;; Parsing
@@ -744,9 +743,10 @@ Depth tracks < > and { } nesting."
                    (et-pp right))))))
     (`(,(and kw (guard (keywordp kw))) . ,args)
      (let ((name (substring (symbol-name kw) 1)))
-       (if args
-           (format "%s<%s>" name (mapconcat #'et-pp args ", "))
-         name)))
+       (cl-loop for arg in args
+                collect (if (et-type-p arg) (et-pp arg) (format "%s" arg)) into strs
+                finally return
+                (if strs (format "%s<%s>" name (string-join strs ", ")) name))))
     (_ (error "Invalid datatype: %S" dt))))
 
 
