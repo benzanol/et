@@ -205,6 +205,33 @@ same name."
    (`((,l ,r) (:cons ,l2 ,r2)) (et-dt :cons (et-and l l2) (et-and r r2)))))
 
 
+;;;; Infer datatype
+
+(defvar et--inferring-types nil
+  "Alist of symbol -> type.")
+
+(defmacro et-infer-types (vars supertype subtype)
+  (declare (indent 1))
+  (cl-assert (vectorp vars))
+  `(let ((subtype ,subtype)
+         (supertype ,supertype)
+         (et--inferring-types
+          (list ,@(cl-loop for var across vars collect `(cons ',var (et-any))))))
+     (or (et-subtype? subtype supertype)
+         (error "Does not match: %s in %s" (et-pp subtype) (et-pp supertype)))
+     et--inferring-types))
+
+(et-define-datatype :infer
+  ;; :read-only t
+  :check-args (lambda (arg) (or (symbolp arg) (error "Argument must be a symbol")))
+  :supertype? (lambda (args other)
+                (let ((entry (assoc (car args) et--inferring-types)))
+                  (unless entry (error "Not inferring a type %s" (car args)))
+                  (setcdr entry (et-and (cdr entry) (et-datatype other)))))
+  :subtype? (lambda (_args _other)
+              (error "Cannot check if an infer type is a subtype")))
+
+
 ;;;; Define aliases
 
 (defmacro et-define-alias (keyword arglist &rest body)
