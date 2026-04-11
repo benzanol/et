@@ -70,11 +70,15 @@ same name."
 
 (defun et-datatype (dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-dt (&rest dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
+(defun et-literal (value) (et-dt :literal value))
+(defun et-alias (name &rest args)
+  (or (get name 'et-alias) (error "Alias does not exist: %s" name))
+  (et-datatype (cons :alias (cons name args))))
+
 (defun et-any () (make-et-type :cases (list (make-et-case :factors nil))))
 (defun et-never () (make-et-type :cases nil))
-(defun et-literal (value) (et-dt :literal value))
-(defun et-alias (&rest args) (et-datatype (cons :alias args)))
 (defun et-nil () (et-datatype `(:literal nil)))
+(defun et-t () (et-datatype `(:literal t)))
 
 (defun et-type-factors (type)
   "Expand out the factors as a list of lists."
@@ -608,7 +612,7 @@ FUNCTION with the old bindings for that case."
 
 ;;;; Parsing
 
-(defun et-parse (spec &optional replace)
+(defun et-parse (spec)
   "Parse a type keyword SPEC into an `et-type'.
 
 Syntax (within the keyword name, after the leading colon):
@@ -622,17 +626,36 @@ Syntax (within the keyword name, after the leading colon):
 
 Operator precedence: & binds tighter than |.
 Type names must match [A-Z][a-zA-Z0-9]*."
-  (pcase spec
-    ((pred et-type-p) spec)
-    (`(,(and name (pred keywordp)) . ,args)
-     (let ((case-fold-search nil))
-       (apply (if (string-match-p "^:[a-z]" (symbol-name name)) #'et-dt #'et-alias)
-              name (cl-loop for arg in args
-                            collect (et-parse arg replace)))))
-    ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) replace))
-    (_ (error "Invalid type spec: %s" spec))))
+  (let ((case-fold-search nil))
+    (pcase spec
+      ((pred et-type-p) spec)
+      ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1)))
+      ((pred stringp) (et--parse-string spec))
 
-(defun et--parse-string (s replace)
+      (`(:or . ,args) (apply #'et-or (mapcar #'et-parse args)))
+      (`(:and . ,args) (apply #'et-and (mapcar #'et-parse args)))
+      (`(:any) (et-any))
+      (`(:never) (et-never))
+      (`(:nil) (et-nil))
+      (`(:t) (et-t))
+
+      (`(:sym ,str) (et-literal (if (symbolp str) str (intern str))))
+      (`(:str ,str) (et-literal str))
+      (`(:num ,str) (et-literal (if (numberp str) str (string-to-number str))))
+
+      (`(:infer ,var . ,rest)
+       (et-dt :infer-supertype var (when (car rest) (et-parse (car rest)))))
+      (`(:infer-subtype ,var . ,rest)
+       (et-dt :infer-subtype var (when (car rest) (et-parse (car rest)))))
+
+      (`(,(and name (pred keywordp)) . ,args)
+       (if (string-match-p "^:[A-Z]" (symbol-name name))
+           (apply #'et-alias name (mapcar #'et-parse args))
+         (apply #'et-dt name (mapcar #'et-parse args))))
+
+      (_ (error "Invalid type spec: %s" spec)))))
+
+(defun et--parse-string (s)
   "Parse type string S (no leading colon) into an `et-type'.
 Splits on | at depth 0, then & at depth 0, then parses atoms."
   (when (string-empty-p s)
@@ -644,75 +667,32 @@ Splits on | at depth 0, then & at depth 0, then parses atoms."
            (cl-loop for and-seg in (et--split-at-depth or-seg ?&)
                     when (string-empty-p and-seg)
                     do (error "Empty segment in intersection type: %s" s)
-                    collect (et--parse-atom and-seg replace) into and-parts
-                    finally return (apply #'et-and and-parts))
+                    collect (et--parse-atom and-seg) into and-parts
+                    finally return (apply #'et-raw-and and-parts))
            into or-parts
-           finally return (apply #'et-or or-parts)))
+           finally return (apply #'et-raw-or or-parts)))
 
-(defun et--parse-atom (s replace)
-  "Parse a single type atom into an `et-type'.
+(defun et--parse-atom (s)
+  "Parse a single type atom into an `et-type'."
+  (if (eq (aref s 0) ?{)
+      ;; {expr} — grouped/parenthesized compound expression
+      (if (eq (aref s (1- (length s))) ?})
+          (et--parse-string (substring s 1 -1))
+        (error "Unclosed brace in: %s" s))
 
-Returns an `et-type' for any of:
-  {EXPR}           — grouped compound expression, parsed recursively
-  nil              — (:literal nil)
-  t                — (:literal t)
-  str<STRING>      — (:literal STRING)
-  sym<SYMBOL>      — (:literal (intern SYMBOL))
-  num<NUMBER>      — (:literal (string-to-number NUMBER))
-  Name             — plain datatype like (:number), (:string), etc.
-  Name<T1~T2~...>  — generic datatype with et-type params"
-  (let ((case-fold-search nil))
-    (if (eq (aref s 0) ?{)
-        ;; {expr} — grouped/parenthesized compound expression
-        (progn
-          (unless (eq (aref s (1- (length s))) ?})
-            (error "Unclosed brace in: %s" s))
-          (et--parse-string (substring s 1 -1) replace))
+    (unless (string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)\\(?:<\\(.*\\)>\\)?$" s)
+      (error "Invalid type syntax: %s" s))
 
-      (unless (string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)" s)
-        (error "Invalid type syntax: %s" s))
-
-      ;; Name or Name<...>
-      (let ((name (match-string 1 s))
-            (rest-start (match-end 1))
-            (inner nil))
-        (if (= rest-start (length s))
-            ;; Plain name, no angle brackets
-            (pcase name
-              ("any" (et-any))
-              ("never" (et-never))
-              ("t" (et-literal t))
-              ("nil" (et-nil))
-              ((guard (string-match-p "^[a-z]" name))
-               (et-dt (intern (format ":%s" name))))
-              (_
-               (let ((sym (intern name)))
-                 (or (alist-get sym replace)
-                     (and (alist-get sym et--inferring-types)
-                          (et-dt (or et--inferring-strategy (error "No inferring strategy")) sym))
-                     (et-dt :alias (intern (format ":%s" name)))))))
-
-          ;; Has <...> suffix
-          (unless (eq (aref s rest-start) ?<)
-            (error "Unexpected character after type name in: %s" s))
-          (unless (eq (aref s (1- (length s))) ?>)
-            (error "Unclosed angle bracket in: %s" s))
-          (setq inner (substring s (1+ rest-start) (1- (length s))))
-
-          ;; Lowercase prefix → literal constructor
-          (pcase name
-            ("sym" (et-literal (intern inner)))
-            ("str" (et-literal inner))
-            ("num" (et-literal (string-to-number inner)))
-            (_
-             (when (string-empty-p inner) (error "Empty type parameters in: %s" s))
-             (let* ((parts (et--split-at-depth inner ?~))
-                    (body (cons (intern (format ":%s" name))
-                                (cl-loop for p in parts
-                                         collect (et--parse-string p replace)))))
-               (if (string-match-p "^[A-Z]" name)
-                   (et-datatype (cons :alias body))
-                 (et-datatype body))))))))))
+    ;; Name or Name<...>
+    (pcase (list (intern (concat ":" (match-string 1 s))) (match-string 2 s))
+      (`(,name nil) (et-parse (list name)))
+      (`(,(and name (or :sym :str :num)) ,str) (et-parse (list name str)))
+      (`(,(and name (or :infer :infer-subtype)) ,inner)
+       (or (string-match "^\\([A-Z][a-zA-Z0-9]*\\)\\(?::\\(.*\\)\\)?$" inner)
+           (error "Invalid infer format: %s" inner))
+       (et-parse (list name (intern (match-string 1 inner)) (match-string 2 inner))))
+      (`(,name ,inner)
+       (et-parse (cons name (et--split-at-depth inner ?~)))))))
 
 (defun et--split-at-depth (s delim)
   "Split string S on character DELIM at depth 0 only.
@@ -1221,6 +1201,10 @@ generic variable should be uppercase.
 
 
 ;;;; car/cdr
+
+(et-define-type-checker car [T]
+  (or (:cons T :never))
+  )
 
 (et-define-checker car (_expr)
   (let* ((type (et-check-path 1))
