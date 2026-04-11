@@ -200,6 +200,28 @@ same name."
   (et-pcase-lambda
    (`((,l ,r) (:cons ,l2 ,r2)) (list :cons (et-raw-and l l2) (et-raw-and r r2)))))
 
+(et-define-datatype :vector
+  ;; :read-only t
+  :check-args (et-pcase-lambda
+               (`(,(pred et-type-p)) nil)
+               (_ (error "Expected one type arguments")))
+  :subtype? (et-pcase-lambda
+             (`((,elem) (:vector ,other)) (et-subtype? elem other)))
+  :supertype? (et-pcase-lambda
+               (`((,elem) (:literal ,val))
+                (and (vectorp val)
+                     (cl-loop for item across val
+                              always (et-subtype? (et-literal item) elem)))))
+  :non-disjoint
+  (et-pcase-lambda
+   (`((,elem) (:vector ,other)) (not (et-disjoint? elem other))))
+  :subtract
+  (et-pcase-lambda
+   (`((,elem) (:vector ,other)) (et-dt :vector (et-subtract elem other))))
+  :merge
+  (et-pcase-lambda
+   (`((,elem) (:vector ,other)) (list :vector (et-raw-and elem other)))))
+
 
 ;;;; Infer
 

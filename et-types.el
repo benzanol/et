@@ -80,7 +80,7 @@
        (setq variable var)
        (et-with-path `(1 1)
          (let* ((list-type (et-check))
-                (infer (et-infer-subtype [elem] (et-alias :List elem) list-type)))
+                (infer (et-infer-subtype [:Elem] :List<Elem> list-type)))
            (unless infer (error "Expected list, found %s" (et-pp list-type)))
            (setq type (car infer))))
        (et-warn '(1 0) "%s: %s" var (et-pp type)))
@@ -227,14 +227,33 @@
            finally return type))
 
 
-;;;; car/cdr
+;;;; Sequence access
 
 (et-define-type-checker car [:T]
-  (:or :infer<T=nil> (:cons :T :any))
+  (:or :infer<T=nil@nil> (:cons :T :any))
   :T)
 
 (et-define-type-checker cdr [:T]
-  (:or :infer<T=nil> (:cons :any :T))
+  (:or :infer<T=nil@nil> (:cons :any :T))
+  :T)
+
+(et-define-type-checker nth [:T]
+  :integer
+  (:List :T)
+  (:or :nil :T))
+
+(et-define-type-checker nthcdr [:T]
+  :integer
+  (:List :T)
+  (:List :T))
+
+(et-define-type-checker length []
+  (:or :string (:List :any) (:vector :any))
+  :integer)
+
+(et-define-type-checker aref [:T]
+  (:or (:vector :T) :infer<T=integer@string>)
+  :integer
   :T)
 
 
@@ -269,4 +288,4 @@
 (provide 'et-types)
 
 
-;;; et.el ends here
+;;; et-types.el ends here
