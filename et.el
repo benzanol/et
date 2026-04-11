@@ -231,12 +231,6 @@ same name."
   :supertype? (lambda (_args _other)
                 (error "Cannot check if an infer type is a supertype")))
 
-(defmacro et-infer-subtype (vars subtype supertype)
-  "Infer all variables in SUBTYPE so that it matches SUPERTYPE."
-  (declare (indent 1))
-  (cl-assert (vectorp vars))
-  `(et--infer ',(append vars nil) ,subtype ,supertype t))
-
 (et-define-datatype :infer-supertype
   ;; :read-only t
   :check-args (lambda (arg &optional req)
@@ -252,11 +246,17 @@ same name."
                     (setcdr entry (et-or (cdr entry) (et-datatype other)))
                     t))))
 
+(defmacro et-infer-subtype (vars subtype supertype)
+  "Infer all variables in SUBTYPE so that it matches SUPERTYPE."
+  (declare (indent 1))
+  (cl-assert (vectorp vars))
+  `(et--infer ',(append vars nil) ,(et--pre-parse subtype) ,(et--pre-parse supertype) t))
+
 (defmacro et-infer-supertype (vars supertype subtype)
   "Infer all variables in SUPERTYPE so that it matches SUBTYPE."
   (declare (indent 1))
   (cl-assert (vectorp vars))
-  `(et--infer ',(append vars nil) ,subtype ,supertype nil))
+  `(et--infer ',(append vars nil) ,(et--pre-parse subtype) ,(et--pre-parse supertype) nil))
 
 
 ;;;; Define aliases
@@ -583,6 +583,11 @@ FUNCTION with the old bindings for that case."
 
 
 ;;;; Parsing
+
+(defun et--pre-parse (expr)
+  (cond ((keywordp expr) (et-parse expr))
+        ((and (listp expr) (keywordp (car expr))) (et-parse expr))
+        (t expr)))
 
 (defun et-parse (spec)
   "Parse a type keyword SPEC into an `et-type'.

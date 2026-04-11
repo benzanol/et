@@ -238,15 +238,6 @@
   :T)
 
 
-(et-define-checker cdr (_expr)
-  (let* ((type (et-check-path 1))
-         (infer (et-infer-supertype [cdr]
-                  (et-raw-or (et-dt :cons (et-any) cdr)
-                             (et-dt :infer-supertype 'cdr (et-nil)))
-                  type)))
-    (or (car infer) (error "Expected cons or nil, got %s" (et-pp type)))))
-
-
 ;;;; Predicates
 
 (defmacro et-define-predicate (name type)
