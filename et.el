@@ -72,7 +72,7 @@ same name."
 (defun et-dt (&rest dt) (make-et-type :cases (list (make-et-case :factors (list dt)))))
 (defun et-literal (value) (et-dt :literal value))
 (defun et-alias (name &rest args)
-  (or (get name 'et-alias) (error "Alias does not exist: %s" name))
+  ;; (or (get name 'et-alias) (error "Alias does not exist: %s" name))
   (et-datatype (cons :alias (cons name args))))
 
 (defun et-any () (make-et-type :cases (list (make-et-case :factors nil))))
@@ -221,8 +221,20 @@ same name."
 (defvar et--inferring-types nil
   "Alist of symbol -> type.")
 
-(defvar et--inferring-strategy nil
-  "Either :infer-subtype or :infer-supertype.")
+(defun et--infer (vars subtype supertype is-subtype?)
+  (let* ((et--inferring-types
+          (cl-loop for var in vars
+                   collect (cons var (if is-subtype? (et-any) (et-never)))))
+         (datatype (if is-subtype? :infer-subtype :infer-supertype))
+         (replacements
+          (cl-loop for var in vars
+                   collect (cons (et-alias var) (et-dt datatype var)))))
+    (setq subtype (et--replace-in-type subtype replacements))
+    (setq supertype (et--replace-in-type supertype replacements))
+    (when (et-subtype? subtype supertype)
+      (cl-loop for (_ . type) in et--inferring-types
+               always (or (not is-subtype?) (not (et-never? type)))
+               collect type))))
 
 (et-define-datatype :infer-subtype
   ;; :read-only t
@@ -238,14 +250,7 @@ same name."
   "Infer all variables in SUBTYPE so that it matches SUPERTYPE."
   (declare (indent 1))
   (cl-assert (vectorp vars))
-  `(let* (,@(cl-loop for var across vars collect `(,var (et-dt :infer-subtype ',var)))
-          (et--inferring-strategy :infer-subtype)
-          (et--inferring-types
-           (list ,@(cl-loop for var across vars collect `(cons ',var (et-any))))))
-     (when (et-subtype? (et-parse ,subtype) (et-parse ,supertype))
-       (cl-loop for (_ . type) in et--inferring-types
-                always (not (et-never? type))
-                collect type))))
+  `(et--infer ',(append vars nil) ,subtype ,supertype t))
 
 (et-define-datatype :infer-supertype
   ;; :read-only t
@@ -266,25 +271,7 @@ same name."
   "Infer all variables in SUPERTYPE so that it matches SUBTYPE."
   (declare (indent 1))
   (cl-assert (vectorp vars))
-  `(let* (,@(cl-loop for var across vars collect `(,var (et-dt :infer-supertype ',var)))
-          (et--inferring-strategy :infer-supertype)
-          (et--inferring-types
-           (list ,@(cl-loop for var across vars collect `(cons ',var (et-never))))))
-     (when (et-subtype? (et-parse ,subtype) (et-parse ,supertype))
-       (cl-loop for (_ . type) in et--inferring-types
-                collect type))))
-
-(defmacro et-infer-supertype-and (vars supertype subtype template)
-  "Infer all variables in SUPERTYPE so that it matches SUBTYPE.
-
-Then, replace the resulting inferred variables into TEMPLATE."
-  (declare (indent 1))
-  (cl-assert (vectorp vars))
-  `(let* ((results (or (et-infer-supertype ,vars ,supertype ,subtype)
-                       (error "Type %s did not match %s" (et-pp subtype) (et-pp supertype))))
-          ,@(cl-loop for var in vars for idx upfrom 0
-                     collect `(,var (nth ,idx results))))
-     ,template))
+  `(et--infer ',(append vars nil) ,subtype ,supertype nil))
 
 
 ;;;; Define aliases
@@ -632,8 +619,8 @@ Type names must match [A-Z][a-zA-Z0-9]*."
       ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1)))
       ((pred stringp) (et--parse-string spec))
 
-      (`(:or . ,args) (apply #'et-or (mapcar #'et-parse args)))
-      (`(:and . ,args) (apply #'et-and (mapcar #'et-parse args)))
+      (`(:or . ,args) (apply #'et-raw-or (mapcar #'et-parse args)))
+      (`(:and . ,args) (apply #'et-raw-and (mapcar #'et-parse args)))
       (`(:any) (et-any))
       (`(:never) (et-never))
       (`(:nil) (et-nil))
@@ -688,7 +675,7 @@ Splits on | at depth 0, then & at depth 0, then parses atoms."
       (`(,name nil) (et-parse (list name)))
       (`(,(and name (or :sym :str :num)) ,str) (et-parse (list name str)))
       (`(,(and name (or :infer :infer-subtype)) ,inner)
-       (or (string-match "^\\([A-Z][a-zA-Z0-9]*\\)\\(?::\\(.*\\)\\)?$" inner)
+       (or (string-match "^\\([A-Z][a-zA-Z0-9]*\\)\\(?:=\\(.*\\)\\)?$" inner)
            (error "Invalid infer format: %s" inner))
        (et-parse (list name (intern (match-string 1 inner)) (match-string 2 inner))))
       (`(,name ,inner)
@@ -778,6 +765,36 @@ Depth tracks < > and { } nesting."
                 finally return
                 (if strs (format "%s<%s>" name (string-join strs ", ")) name))))
     (_ (error "Invalid datatype: %S" dt))))
+
+
+;;;; Replacing
+
+(defun et--map-factors (type function)
+  (cl-loop with type-copy = (copy-et-type type)
+           for case in (et-type-cases type)
+           collect
+           (cl-loop with case-copy = (copy-et-case case)
+                    for factor in (et-case-factors case)
+                    collect (funcall function factor) into new-factors
+                    finally do (setf (et-case-factors case-copy) new-factors)
+                    finally return case-copy)
+           into new-cases
+           finally do (setf (et-type-cases type-copy) new-cases)
+           finally return type-copy))
+
+(defun et--replace-in-type (type alist)
+  "Return a copy of TYPE with all mappings in ALIST replaced.
+
+ALIST is a list of (TARGET . REPLACEMENT)."
+  (et--map-factors
+   type
+   (lambda (factor)
+     (or (alist-get factor alist nil nil #'equal)
+         (cl-loop for arg in (cdr factor)
+                  collect (if (not (et-type-p arg)) arg
+                            (et--replace-in-type arg alist))
+                  into new-args
+                  finally return (cons (car factor) new-args))))))
 
 
 ;;; ============================================================
@@ -892,8 +909,9 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (cl-assert (symbolp expr-type))
   (cl-assert (listp arglist))
 
-  `(setf (get ',expr-type 'et-checker)
-         (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type)))))
+  `(prog1 ',expr-type
+     (setf (get ',expr-type 'et-checker)
+           (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type))))))
 
 (defmacro et-define-type-checker (func &rest arguments)
   "Define a checker using argument and return types.
@@ -908,36 +926,38 @@ generic variable should be uppercase.
   (cl-assert (symbolp func))
 
   (let ((generics (when (vectorp (car arguments))
+                    ;; Make sure the generics have the correct format
                     (cl-loop for var across (car arguments)
                              do (or (symbolp var) (error "Generics vector should contain symbols"))
                              do (or (let ((case-fold-search nil))
-                                      (string-match-p "^[A-Z]" 'a))
+                                      (string-match-p "^[A-Z]" (format "%s" var)))
                                     (error "Var should start with an uppercase letter")))
                     (pop arguments))))
     (unless arguments (error "No return type specified"))
 
     `(et-define-checker ,func (&rest exprs)
-       (let ((args ,(list '\` (butlast arguments)))
-             (return ,(list '\` (car (last arguments)))))
+       (let ((arg-types (list ,@(mapcar #'et-parse (butlast arguments))))
+             (return-type (list ,(et-parse (car (last arguments))))))
 
-         (or (eq (length args) (length exprs))
-             (error "Wrong number of arguments. Expected %s, got %s" (length args) (length exprs)))
+         (or (eq (length arg-types) (length exprs))
+             (error "Wrong number of arguments. Expected %s, got %s" (length arg-types) (length exprs)))
 
-         (let ((generic-values (list ,@(make-list (length generics) `(et-never))))
+         (let ((generic-types (list ,@(make-list (length generics) `(et-never))))
                type infer)
-           (dotimes (i (length args))
+           (dotimes (i (length arg-types))
              (setq type (et-check-path (1+ i)))
-             (setq infer (or (et-infer-supertype ,generics (nth i args) type)
+             (setq infer (or (et-infer-supertype ,generics (nth i arg-types) type)
                              (error "Invalid argument %s, expected %s" (nth i exprs)
-                                    (et-pp (et-parse (nth i args))))))
-             (cl-loop for tail on generic-values
+                                    (et-pp (nth i arg-types)))))
+             (cl-loop for tail on generic-types
                       for result in infer
                       unless (et-never? result)
                       do (cl-callf et-or (car tail) result)))
-           (et-parse return
-                     (cl-loop for g across ,generics
-                              for val in generic-values
-                              collect (cons g val))))))))
+           (et--replace-in-type
+            return-type
+            (cl-loop for g across ,generics
+                     for type in generic-types
+                     collect (cons g type))))))))
 
 
 ;;;; Check
@@ -1203,7 +1223,8 @@ generic variable should be uppercase.
 ;;;; car/cdr
 
 (et-define-type-checker car [T]
-  (or (:cons T :never))
+  (:or :infer<T=nil> (:cons :T :any))
+  :T
   )
 
 (et-define-checker car (_expr)
