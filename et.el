@@ -217,6 +217,9 @@ same name."
 (defvar et--inferring-types nil
   "Alist of symbol -> type.")
 
+(defvar et--inferring-strategy nil
+  "Either :infer-subtype or :infer-supertype.")
+
 (et-define-datatype :infer-subtype
   ;; :read-only t
   :check-args (lambda (arg) (or (symbolp arg) (error "Argument must be a symbol")))
@@ -232,11 +235,10 @@ same name."
   (declare (indent 1))
   (cl-assert (vectorp vars))
   `(let* (,@(cl-loop for var across vars collect `(,var (et-dt :infer-subtype ',var)))
-          (subtype ,subtype)
-          (supertype ,supertype)
+          (et--inferring-strategy :infer-subtype)
           (et--inferring-types
            (list ,@(cl-loop for var across vars collect `(cons ',var (et-any))))))
-     (when (et-subtype? subtype supertype)
+     (when (et-subtype? (et-parse ,subtype) (et-parse ,supertype))
        (cl-loop for (_ . type) in et--inferring-types
                 always (not (et-never? type))
                 collect type))))
@@ -261,14 +263,24 @@ same name."
   (declare (indent 1))
   (cl-assert (vectorp vars))
   `(let* (,@(cl-loop for var across vars collect `(,var (et-dt :infer-supertype ',var)))
-          (subtype ,subtype)
-          (supertype ,supertype)
+          (et--inferring-strategy :infer-supertype)
           (et--inferring-types
            (list ,@(cl-loop for var across vars collect `(cons ',var (et-never))))))
-     (when (et-subtype? subtype supertype)
+     (when (et-subtype? (et-parse ,subtype) (et-parse ,supertype))
        (cl-loop for (_ . type) in et--inferring-types
-                always (not (et-never? type))
                 collect type))))
+
+(defmacro et-infer-supertype-and (vars supertype subtype template)
+  "Infer all variables in SUPERTYPE so that it matches SUBTYPE.
+
+Then, replace the resulting inferred variables into TEMPLATE."
+  (declare (indent 1))
+  (cl-assert (vectorp vars))
+  `(let* ((results (or (et-infer-supertype ,vars ,supertype ,subtype)
+                       (error "Type %s did not match %s" (et-pp subtype) (et-pp supertype))))
+          ,@(cl-loop for var in vars for idx upfrom 0
+                     collect `(,var (nth ,idx results))))
+     ,template))
 
 
 ;;;; Define aliases
@@ -596,7 +608,7 @@ FUNCTION with the old bindings for that case."
 
 ;;;; Parsing
 
-(defun et-parse (spec)
+(defun et-parse (spec &optional replace)
   "Parse a type keyword SPEC into an `et-type'.
 
 Syntax (within the keyword name, after the leading colon):
@@ -610,12 +622,17 @@ Syntax (within the keyword name, after the leading colon):
 
 Operator precedence: & binds tighter than |.
 Type names must match [A-Z][a-zA-Z0-9]*."
-  (cond ((et-type-p spec) spec)
-        ((and (listp spec) (keywordp (car spec))) (et-datatype spec))
-        ((keywordp spec) (et--parse-string (substring (symbol-name spec) 1)))
-        ((error "Invalid type spec: %s" spec))))
+  (pcase spec
+    ((pred et-type-p) spec)
+    (`(,(and name (pred keywordp)) . ,args)
+     (let ((case-fold-search nil))
+       (apply (if (string-match-p "^:[a-z]" (symbol-name name)) #'et-dt #'et-alias)
+              name (cl-loop for arg in args
+                            collect (et-parse arg replace)))))
+    ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) replace))
+    (_ (error "Invalid type spec: %s" spec))))
 
-(defun et--parse-string (s)
+(defun et--parse-string (s replace)
   "Parse type string S (no leading colon) into an `et-type'.
 Splits on | at depth 0, then & at depth 0, then parses atoms."
   (when (string-empty-p s)
@@ -627,12 +644,12 @@ Splits on | at depth 0, then & at depth 0, then parses atoms."
            (cl-loop for and-seg in (et--split-at-depth or-seg ?&)
                     when (string-empty-p and-seg)
                     do (error "Empty segment in intersection type: %s" s)
-                    collect (et--parse-atom and-seg) into and-parts
+                    collect (et--parse-atom and-seg replace) into and-parts
                     finally return (apply #'et-and and-parts))
            into or-parts
            finally return (apply #'et-or or-parts)))
 
-(defun et--parse-atom (s)
+(defun et--parse-atom (s replace)
   "Parse a single type atom into an `et-type'.
 
 Returns an `et-type' for any of:
@@ -645,31 +662,35 @@ Returns an `et-type' for any of:
   Name             — plain datatype like (:number), (:string), etc.
   Name<T1~T2~...>  — generic datatype with et-type params"
   (let ((case-fold-search nil))
-    (cond
-     ;; {expr} — grouped/parenthesized compound expression
-     ((eq (aref s 0) ?{)
-      (unless (eq (aref s (1- (length s))) ?})
-        (error "Unclosed brace in: %s" s))
-      (et--parse-string (substring s 1 -1)))
+    (if (eq (aref s 0) ?{)
+        ;; {expr} — grouped/parenthesized compound expression
+        (progn
+          (unless (eq (aref s (1- (length s))) ?})
+            (error "Unclosed brace in: %s" s))
+          (et--parse-string (substring s 1 -1) replace))
 
-     ;; Literal nil / t
-     ((equal s "nil") (et-literal nil))
-     ((equal s "t")   (et-literal t))
+      (unless (string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)" s)
+        (error "Invalid type syntax: %s" s))
 
-     ;; any/never
-     ((equal s "any") (et-any))
-     ((equal s "never") (et-never))
-
-     ;; Name or Name<...>
-     ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)" s)
+      ;; Name or Name<...>
       (let ((name (match-string 1 s))
             (rest-start (match-end 1))
             (inner nil))
         (if (= rest-start (length s))
             ;; Plain name, no angle brackets
-            (if (string-match-p "^[A-Z]" name)
-                (et-dt :alias (intern (format ":%s" name)))
-              (et-dt (intern (format ":%s" name))))
+            (pcase name
+              ("any" (et-any))
+              ("never" (et-never))
+              ("t" (et-literal t))
+              ("nil" (et-nil))
+              ((guard (string-match-p "^[a-z]" name))
+               (et-dt (intern (format ":%s" name))))
+              (_
+               (let ((sym (intern name)))
+                 (or (alist-get sym replace)
+                     (and (alist-get sym et--inferring-types)
+                          (et-dt (or et--inferring-strategy (error "No inferring strategy")) sym))
+                     (et-dt :alias (intern (format ":%s" name)))))))
 
           ;; Has <...> suffix
           (unless (eq (aref s rest-start) ?<)
@@ -688,12 +709,10 @@ Returns an `et-type' for any of:
              (let* ((parts (et--split-at-depth inner ?~))
                     (body (cons (intern (format ":%s" name))
                                 (cl-loop for p in parts
-                                         collect (et--parse-string p)))))
+                                         collect (et--parse-string p replace)))))
                (if (string-match-p "^[A-Z]" name)
                    (et-datatype (cons :alias body))
-                 (et-datatype body))))))))
-
-     (t (error "Invalid type syntax: %s" s)))))
+                 (et-datatype body))))))))))
 
 (defun et--split-at-depth (s delim)
   "Split string S on character DELIM at depth 0 only.
@@ -886,7 +905,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
        ,@body)))
 
 
-;;;; Checkers
+;;;; Define checker
 
 (defmacro et-define-checker (expr-type arglist &rest body)
   (declare (indent 2))
@@ -895,6 +914,37 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
   `(setf (get ',expr-type 'et-checker)
          (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type)))))
+
+(defmacro et-define-type-checker (func generics &rest args-and-return)
+  (declare (indent 2))
+  (cl-assert (symbolp func))
+  (cl-assert (vectorp generics))
+
+  `(et-define-checker ,func (&rest exprs)
+     (let ((args ,(list '\` (butlast args-and-return)))
+           (return ,(list '\` (car (last args-and-return)))))
+
+       (or (eq (length args) (length exprs))
+           (error "Wrong number of arguments. Expected %s, got %s" (length args) (length exprs)))
+
+       (let ((generic-values (list ,@(make-list (length generics) `(et-never))))
+             type infer)
+         (dotimes (i (length args))
+           (setq type (et-check-path (1+ i)))
+           (setq infer (or (et-infer-supertype ,generics (nth i args) type)
+                           (error "Invalid argument %s, expected %s" (nth i exprs)
+                                  (et-pp (et-parse (nth i args))))))
+           (cl-loop for tail on generic-values
+                    for result in infer
+                    unless (et-never? result)
+                    do (cl-callf et-or (car tail) result)))
+         (et-parse return
+                   (cl-loop for g across ,generics
+                            for val in generic-values
+                            collect (cons g val)))))))
+
+
+;;;; Check
 
 (defun et-check ()
   "Returns the type of the current expr, if typechecking did not error."
