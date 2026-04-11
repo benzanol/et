@@ -915,33 +915,49 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   `(setf (get ',expr-type 'et-checker)
          (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type)))))
 
-(defmacro et-define-type-checker (func generics &rest args-and-return)
+(defmacro et-define-type-checker (func &rest arguments)
+  "Define a checker using argument and return types.
+
+FUNC is the function to define the checker for.
+
+GENERICS is a vector of symbols, representing generic variables. Each
+generic variable should be uppercase.
+
+\(fn FUNC [GENERICS] ARGS... RETURN)"
   (declare (indent 2))
   (cl-assert (symbolp func))
-  (cl-assert (vectorp generics))
 
-  `(et-define-checker ,func (&rest exprs)
-     (let ((args ,(list '\` (butlast args-and-return)))
-           (return ,(list '\` (car (last args-and-return)))))
+  (let ((generics (when (vectorp (car arguments))
+                    (cl-loop for var across (car arguments)
+                             do (or (symbolp var) (error "Generics vector should contain symbols"))
+                             do (or (let ((case-fold-search nil))
+                                      (string-match-p "^[A-Z]" 'a))
+                                    (error "Var should start with an uppercase letter")))
+                    (pop arguments))))
+    (unless arguments (error "No return type specified"))
 
-       (or (eq (length args) (length exprs))
-           (error "Wrong number of arguments. Expected %s, got %s" (length args) (length exprs)))
+    `(et-define-checker ,func (&rest exprs)
+       (let ((args ,(list '\` (butlast arguments)))
+             (return ,(list '\` (car (last arguments)))))
 
-       (let ((generic-values (list ,@(make-list (length generics) `(et-never))))
-             type infer)
-         (dotimes (i (length args))
-           (setq type (et-check-path (1+ i)))
-           (setq infer (or (et-infer-supertype ,generics (nth i args) type)
-                           (error "Invalid argument %s, expected %s" (nth i exprs)
-                                  (et-pp (et-parse (nth i args))))))
-           (cl-loop for tail on generic-values
-                    for result in infer
-                    unless (et-never? result)
-                    do (cl-callf et-or (car tail) result)))
-         (et-parse return
-                   (cl-loop for g across ,generics
-                            for val in generic-values
-                            collect (cons g val)))))))
+         (or (eq (length args) (length exprs))
+             (error "Wrong number of arguments. Expected %s, got %s" (length args) (length exprs)))
+
+         (let ((generic-values (list ,@(make-list (length generics) `(et-never))))
+               type infer)
+           (dotimes (i (length args))
+             (setq type (et-check-path (1+ i)))
+             (setq infer (or (et-infer-supertype ,generics (nth i args) type)
+                             (error "Invalid argument %s, expected %s" (nth i exprs)
+                                    (et-pp (et-parse (nth i args))))))
+             (cl-loop for tail on generic-values
+                      for result in infer
+                      unless (et-never? result)
+                      do (cl-callf et-or (car tail) result)))
+           (et-parse return
+                     (cl-loop for g across ,generics
+                              for val in generic-values
+                              collect (cons g val))))))))
 
 
 ;;;; Check
