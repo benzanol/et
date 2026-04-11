@@ -302,6 +302,12 @@
 (et-assert-success (et-root-resolve :List<integer> '(list 1)))
 (et-assert-error (et-root-resolve :List<integer> '(list 1 "2" 3)))
 
+(et-assert-success (et-root-check-call car :never))
+(et-assert-success (et-root-check-call car :nil))
+(et-assert-success (et-root-check-call car :nil|cons<integer~string>))
+(et-assert-error (et-root-check-call car :nil|cons<integer~string>|string))
+(et-assert-error (et-root-check-call car :any))
+
 
 ;;;; car
 
@@ -312,6 +318,12 @@
 (et-assert-success (et-root-resolve :cons<integer~any> '(car (cons (list 1) "3"))))
 (et-assert-success (et-root-resolve :integer '(car (car (cons (list 1) "3")))))
 (et-assert-error (et-root-resolve :integer '(car (car (cons (list 1.1) "3")))))
+
+(et-assert-success (et-root-check-call cdr :never))
+(et-assert-success (et-root-check-call cdr :nil))
+(et-assert-success (et-root-check-call cdr :nil|cons<integer~string>))
+(et-assert-error (et-root-check-call cdr :nil|cons<integer~string>|string))
+(et-assert-error (et-root-check-call cdr :any))
 
 
 ;;;; cdr

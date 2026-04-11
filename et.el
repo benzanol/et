@@ -897,18 +897,6 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
                (et-warn '(0) (string-join strs "\\n"))))))
 
 
-;;;; Root
-
-(defmacro et--root (expr &rest body)
-  (declare (indent 1))
-  `(progn
-     (cl-assert (null et--current-expr))
-     (cl-assert (null et--current-path))
-     (cl-assert (null et--binds))
-     (let ((et--current-expr ,expr))
-       ,@body)))
-
-
 ;;;; Define checker
 
 (defmacro et-define-checker (expr-type arglist &rest body)
@@ -1009,6 +997,15 @@ generic variable should be uppercase.
 
 ;;;; Root level functions
 
+(defmacro et--root (expr &rest body)
+  (declare (indent 1))
+  `(progn
+     (cl-assert (null et--current-expr))
+     (cl-assert (null et--current-path))
+     (cl-assert (null et--binds))
+     (let ((et--current-expr ,expr))
+       ,@body)))
+
 (defmacro et-root-block (&rest body)
   (et--root (cons #'progn body)
     (et-check-tail 1)
@@ -1016,6 +1013,15 @@ generic variable should be uppercase.
 
 (defun et-root-check (expr)
   (et--root expr (et-check)))
+
+(defmacro et-root-check-call (func &rest arg-types)
+  (let* ((vars (cl-loop for type in arg-types
+                        for idx upfrom 1
+                        collect (cons (intern (format "var%s" idx))
+                                      (et-parse type)))))
+    `(et--root ',(cons func (mapcar #'car vars))
+       (et-with-binds ',vars
+         (et-check)))))
 
 (defun et-resolve (type)
   (setq type (et-parse type))
