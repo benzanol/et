@@ -198,7 +198,7 @@ same name."
    (`((,l ,r) (:cons ,l2 ,r2)) (et-dt :cons (et-subtract l l2) (et-subtract r r2))))
   :merge
   (et-pcase-lambda
-   (`((,l ,r) (:cons ,l2 ,r2)) (et-dt :cons (et-and l l2) (et-and r r2)))))
+   (`((,l ,r) (:cons ,l2 ,r2)) (list :cons (et-raw-and l l2) (et-raw-and r r2)))))
 
 
 ;;;; Infer
@@ -458,6 +458,8 @@ Returns a single datatype, or nil if it is impossible."
   (cl-loop for (next . tail) on factors
            unless (cl-loop for new-tail on new-factors
                            for simple = (et--datatype-intersection next (car new-tail))
+                           when simple do (unless (keywordp (car simple))
+                                            (error "Invalid datatype: %s" simple))
                            when simple do (setcar new-tail simple)
                            thereis simple)
            collect next into new-factors
@@ -475,12 +477,11 @@ for recursive aliases."
   (let ((simple-cases
          (cl-loop for (case . rest) on (et-type-cases type)
                   ;; If any two factors are disjoint, then the case is empty
-                  when (cl-loop for (a . rest) on (et-case-factors case)
-                                always (cl-loop for b in rest
+                  when (cl-loop for (a . rest-factors) on (et-case-factors case)
+                                always (cl-loop for b in rest-factors
                                                 always (not (et--datatype-disjoint? a b))))
                   collect (make-et-case :factors (et--simplify-factors (et-case-factors case))
                                         :binds (et-case-binds case)))))
-
     (cl-loop for (case . rest) on simple-cases
              ;; Check if this case is redundant
              unless (cl-loop for c in (append new-cases rest)
@@ -588,6 +589,9 @@ FUNCTION with the old bindings for that case."
   (cond ((keywordp expr) (et-parse expr))
         ((and (listp expr) (keywordp (car expr))) (et-parse expr))
         (t expr)))
+
+(defmacro et (&rest args)
+  `(et-parse ',(if (eq (length args) 1) (car args) args)))
 
 (defun et-parse (spec)
   "Parse a type keyword SPEC into an `et-type'.
@@ -979,7 +983,7 @@ generic variable should be uppercase.
                 collect
                 (et--intersect-type-binds case-type (list (cons varspec case-type)))
                 into case-types
-                finally return (apply #'et-or case-types))))
+                finally return (apply #'et-raw-or case-types))))
 
     (expr (et-literal expr))))
 
@@ -1019,8 +1023,8 @@ generic variable should be uppercase.
                         for idx upfrom 1
                         collect (cons (intern (format "var%s" idx))
                                       (et-parse type)))))
-    `(et--root ',(cons func (mapcar #'car vars))
-       (et-with-binds ',vars
+    `(et--root ,(list '\` (cons func (mapcar #'car vars)))
+       (et-with-binds ,(list '\` vars)
          (et-check)))))
 
 (defun et-resolve (type)
