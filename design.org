@@ -6,19 +6,19 @@ $\Omega :=$ The set of possible elisp values.[fn:: Technically, $\Omega = E$, bu
 $\operatorname{Sig} :=$ The set of signals an expression could produce
 $R := \operatorname{return} \Omega \mid \operatorname{signal} \text{Sig}$ The set of results that evaluating an expression can have
 Technically, the expression =(push 4 a)= where =a=5= will return the value =(4 . 5)=, but the user probably did not intend to push onto a non-list. Thus, we should introduce a modified notion of what a function can return.
-$\overline{R} := \operatorname{invalid} \mid \operatorname{valid} R$
+$\overline{R} := \operatorname{undefined} \mid \operatorname{defined} R$
 
 Our end goal is a type checker $\mathcal{C} : E \rightarrow \overline{R}$.
 For $\mathcal{C}$ to be "correct", we must have that all possible return values of $e \in E$ are elements of $\mathcal{C}(e)$.
-Making a correct type checker is easy. For example, both checkers $\mathcal{C}_{\text{valid}} = e \mapsto \operatorname{valid} R$ and $\mathcal{C}_{\text{invalid}} : e \mapsto \operatorname{invalid}$ are correct type checkers.
+Making a correct type checker is easy. For example, both checkers $\mathcal{C}_{\text{defined}} = e \mapsto \operatorname{defined} R$ and $\mathcal{C}_{\text{undefined}} : e \mapsto \operatorname{undefined}$ are correct type checkers.
 Our goal is to find a correct $\mathcal{C}$ while doing two things:
-1. Choosing a "reasonable" subset $E_\text{valid} \subseteq E$ to mark as valid
-2. Minimizing $\mathcal{C}(e)$ for each $e \in E_\text{valid}$
+1. Choosing a "reasonable" subset $E_\text{defined} \subseteq E$ to mark as defined
+2. Minimizing $\mathcal{C}(e)$ for each $e \in E_\text{defined}$
 
 * Types
 $D$ is the set of root datatypes, such as numbers and strings.
-$A := \left\{ (\text{name}, t) : t \in T \right\}$ is the set of alias types.
-$F := \operatorname{data} D \mid \operatorname{alias} A$.
+$A := \left\{ (\text{id}, t) : t \in T \right\}$ is the set of alias types. The identifier is necessary because we want to be able to treat aliases differently from the baseline type. For example, if we were inferring $\text{List}\langle \text{MyAlias} \rangle$ as a $\text{List}\langle T \rangle$, then we would want to get that $T = \text{MyAlias}$, rather than the expansion of $\text{MyAlias}$.
+$F := \operatorname{datatype} D \mid \operatorname{signal} \operatorname{Sig} \mid \operatorname{alias} A \mid \operatorname{bind} (T, \text{var}) \mid \operatorname{typeof} \text{var}$.
 Let $\phi_F : F \rightarrow \mathcal{P}(R)$ returning the set of values each factor represents.
 Each type is a union of intersections of factors.
 \begin{align*}
@@ -26,33 +26,33 @@ T := F^{\ast\ast}
 \end{align*}
 We get the definition
 \begin{align*}
-\phi_T(t) : T \rightarrow \mathcal{P}(R) = \bigcup_{i=1}^{\#t} \bigcap_{j=1}^{\#t_i} \phi_F(t_{i,j})
+\phi_T(t) : T \rightarrow \mathcal{P}(R) = \bigcup_{c \in T} \bigcap_{f \in c} \phi_F(f)
 \end{align*}
 
-A similar notion can be extended to the notion of invalid results: $\overline{T} := \operatorname{invalid} \mid \operatorname{valid} T$
+A similar notion can be extended to the notion of undefined results: $\overline{T} := \operatorname{undefined} \mid \operatorname{defined} T$
 \begin{align*}
 \phi_{\overline{T}} : \overline{T} \rightarrow \mathcal{P}(\overline{R}) =
 \begin{cases} 
-\operatorname{valid} \phi_T(t) & \operatorname{valid} t \\
-\operatorname{invalid} & \operatorname{invalid}
+\operatorname{defined} \phi_T(t) & \operatorname{defined} t \\
+\operatorname{undefined} & \operatorname{undefined}
 \end{cases}
 \end{align*}
 
-For $s,t \in T$, define $x \trianglelefteq t := \phi_T(s) \subseteq \phi_T(t)$.
-For $\overline{s},\overline{t} \in \overline{T}$, define $\overline{s} \trianglelefteq \overline{t} := \phi_{\overline{T}}(\overline{s}) \subseteq \phi_{\overline{T}}(\overline{t})$.
+For $s,t \in T$, define $s \le t := \phi_T(s) \subseteq \phi_T(t)$.
+For $\overline{s},\overline{t} \in \overline{T}$, define $\overline{s} \le \overline{t} := \phi_{\overline{T}}(\overline{s}) \subseteq \phi_{\overline{T}}(\overline{t})$.
 
 * Functions
 Let $f : \Omega \rightarrow R$ be an elisp function. An input to this function is the list of values passed to an elisp function, which is why we only need one input value.
 We want to define $\widetilde{f} : T \rightarrow \overline{T}$.
 *Correctness property:* $x \in \Omega, t \in T, x : t \Longrightarrow f(x) : \widetilde{f}(t)$.
 This asserts that the result type of a function will be a superset of the actual results of the function.
-Note that all values are elements of the $\text{invalid}$ type.
+Note that all values are elements of the $\text{undefined}$ type.
 
 We can then define the more useful function
 \begin{align*}
 \widetilde{\overline{f}}(\overline{t_1},...,\overline{t_n}) : \overline{T}^\ast \rightarrow \overline{R} := \begin{cases} 
-\widetilde{f}(\operatorname{ListType}\langle t_1,...,t_n \rangle) & (\operatorname{valid} t_1,...,\operatorname{valid} t_n) = (\overline{t_1},...,\overline{t_n}) \\
-\operatorname{invalid} & \operatorname{invalid} \in \left\{ t_1,...,t_n \right\} \\
+\widetilde{f}(\operatorname{ListType}\langle t_1,...,t_n \rangle) & (\operatorname{defined} t_1,...,\operatorname{defined} t_n) = (\overline{t_1},...,\overline{t_n}) \\
+\operatorname{undefined} & \operatorname{undefined} \in \left\{ t_1,...,t_n \right\} \\
 \end{cases}
 \end{align*}
 
@@ -60,77 +60,102 @@ We can then define the more useful function
 A match type is something we compare a real type against to figure out generics.
 Here, $a_1,...,a_n$ represent our generic types.
 \begin{align*}
-F_M^{a_1,...,a_n} := \operatorname{datatype} D \mid \operatorname{eq} a_i \mid \operatorname{le} a_i \mid \operatorname{ge} a_i \mid \operatorname{set} a_i,t
+F_M^{a_1,...,a_n} := \operatorname{datatype} D \mid \operatorname{eq} a_i \mid \operatorname{leq} a_i \mid \operatorname{geq} a_i \mid \operatorname{set} (a_i,t)
 \end{align*}
 \begin{align*}
 M := {F_M}^{\ast\ast}
 \end{align*}
 
+There are no aliases allowed, which means that we cannot have root-recursive aliases (ie $\text{Rec}\langle T \rangle = T \mid \text{Rec}\langle T \rangle$) in a matcher type. We can still have indirectly recursive types (ie $\text{List}\langle T \rangle = \text{nil} \mid \text{cons}\langle T, \text{List}\langle T \rangle \rangle$).
+
+
+** match-constraints
+*** Specification
 Matching a types against a match factor results in a list of constraints for our generics, where each constraint looks like:
 $\Gamma_{a_1,...,a_n} := \operatorname{\Gamma_\emptyset} \mid \operatorname{\Gamma_\text{always}} \mid \operatorname{\Gamma_{=}} a_i \, T \mid \operatorname{\Gamma_{\le}} a_i \, T \mid \operatorname{\Gamma_{\ge}} a_i \, T$
 
 We want a function
 \begin{align*}
-\text{subtype} : M_{a_1,...,a_n} \times T \rightarrow \Gamma_{a_1,...,a_n}^\ast \mid \operatorname{false}
+\text{match-constraints} : M_{a_1,...,a_n} \times T \rightarrow \Gamma_{a_1,...,a_n}^\ast
 \end{align*}
-which determines whether $T$ is a subtype of the matcher type, and if so what constraints the generics must hold for the type to be a subtype.
+which determines a list of constraints on the types $a_1,...,a_n$ in order for $T$ to be a subtype of $M$ after replacing all $a_i$.
 
-Suppose $m \in M_{a_1,...,a_n}$, and $t \in T$, and $\text{subtype}(m, t) = c \ne \text{false}$.
-Then, let $t_1,...,t_n$ be a list of types satisfying the constraints in $c$.
-Then perform the following replacement of elements in $m$:
-1. Replace all $\operatorname{eq} a_i$ with $t_i$
-2. Replace all $\operatorname{le} a_i$ with some type $t \le t_i$
-3. Replace all $\operatorname{ge} a_i$ with some type $t \ge t_i$
-Then, flatten the type, resulting in $m' \in T$. Then, for $\text{subtype}$ to be correct means that $t \le m'$.
-This means $\text{subtype}$ can be correct if it always returns false, but this wouldn't be very useful.
+Suppose $m \in M_{a_1,...,a_n}$, and $t \in T$, and $\text{match-constraints}(m, t) = \gamma^{\ast\ast} \ne \text{false}$.
+If $t_1,...,t_n$ is a list of types satisfying the constraints in $\gamma^{\ast\ast}$ (if one exists), then replacing $\operatorname{eq} a_i, \operatorname{leq} a_i, \text{geq} a_i, \operatorname{set} a_i, t \mapsto t_i$ to get a type $m' \in T$, implies that $t \le m'$.
 
-* Defining Subtype
-Notice that $M_{...}$ has no alias types. If we want to assign an arbitrary type to match type we first need to expand out all of the aliases. This means that we cannot have root-recursive aliases (ie $\text{Rec}\langle T \rangle = T \mid \text{Rec}\langle T \rangle$,) but we can have indirectly recursive types (ie $\text{List}\langle T \rangle = \text{nil} \mid \text{cons}\langle T, \text{List}\langle T \rangle \rangle$).
-
-** Method 1. Iterating on matcher first
+*** Method 1. Iterating on matcher first
 Observe that
 \begin{align*}
-\exists_{C \in L} \forall_{F \in C} F \trianglerighteq R
+\exists_{C \in M} \forall_{F \in C} F \trianglerighteq T
 \Longrightarrow
-L \trianglerighteq R
+M \trianglerighteq T
 \end{align*}
 but not necessarily in the other direction.
 
-If $R$ contains aliases, then this can miss out on correct subtypes if $L$ contains a union.
-For example, $\not\Leftarrow$ if $L = \text{nil} \mid \text{Cons}\langle \text{X}, \text{List}\langle \text{X} \rangle \rangle$ and $R = \text{List}\langle \text{X} \rangle$.
+This can mis out on correct subtypes if $M$ contains a union.
+For example, $\not\Leftarrow$ if $M = \text{nil} \mid \text{Cons}\langle \text{X}, \text{List}\langle \text{X} \rangle \rangle$ and $T = \text{List}\langle \text{X} \rangle$.
 
-** Method 2. Iterating on type first
+*** Method 2. Iterating on type first
 Similarly, observe that
 \begin{align*}
-\forall_{C \in R} \exists_{F \in C} L \trianglerighteq F
+\forall_{C \in T} \exists_{F \in C} M \trianglerighteq F
 \Longrightarrow
-L \trianglerighteq R
+M \trianglerighteq T
 \end{align*}
 but not necessarily in the other direction.
 
-If $L$ contains aliases, then this can miss out on correct subtypes if $R$ contains an intersection.
-For example, $\not\Leftarrow$ if $L = \text{NonNilList}\langle X \rangle$ and $R = \text{List}\langle X \rangle \& \text{Cons}\langle X, \text{any} \rangle$. Both $\text{List}$ and $\text{Cons}$ contain elements outside of $\text{NonNilList}$, but their intersection is exactly $\text{NonNilList}$.
+This can miss out on correct subtypes if $T$ contains an intersection.
+For example, $\not\Leftarrow$ if $M = \text{NonNilList}\langle X \rangle$ and $T = \text{List}\langle X \rangle \& \text{Cons}\langle X, \text{any} \rangle$. Both $\text{List}$ and $\text{Cons}$ contain elements outside of $\text{NonNilList}$, but their intersection is exactly $\text{NonNilList}$.
 
-** Solution
-If we are matching with $\operatorname{subtype} m_{a^\ast},t$, we do not want to avoid expanding aliases in $t$, as this will cause the calculated values for the generic types $a^\ast$ to be less readable. So, we will expand all aliases in $m$ and then apply method 2, which does not lose any specificity from $t$ containing aliases.
-
-We construct the double list
+*** Method 3. Iterating on cases first
+Observe that
 \begin{align*}
-\gamma^{\ast\ast} = \left[ \left[ \text{constraints}(F, t) \right]_{f \in c} \right]_{c \in m_{a^\ast}}
+\forall_{C_T \in T} \exists_{C_M \in M} C_M \trianglerighteq C_T \Longrightarrow M \trianglerighteq T
 \end{align*}
-using the function
+Then, define $C_M \trianglerighteq C_R$ as $\forall_{F_M \in C_M} \exists_{F_T \in C_T} F_M \trianglerighteq F_T$.
+
+This can miss out on correct subtypes if $T$ contains aliases, as you could have a case in $T$ which is not a subtype of any individual case of $M$, but is a subset of the union.
+For example, $\not\Leftarrow$ if $M = \text{nil} \mid \text{Cons}\langle \text{X}, \text{List}\langle \text{X} \rangle \rangle$ and $T = \text{List}\langle \text{X} \rangle$.
+
+*** Solution
+Use method 1 for now, although it is imperfect, and possibly switch to a hybrid approach later using method 3 and expanding out aliases in $T$.
+
+We define
 \begin{align*}
-&\text{constraints}(f_M, t) : F_M^{a_1,...,a_n} \times T \rightarrow \Gamma  \\
+\text{match-to-constraints}(m_{a^\ast}, t) = \left\{ \left\{ \text{match-to-constraint}(f, t) : f \in c \right\} : c \in m_{a^\ast} \right\}
+\end{align*}
+where
+\begin{align*}
+&\text{match-to-constraint}(f_M, t) : F_M^{a_1,...,a_n} \times T \rightarrow \Gamma  \\
 &= \begin{cases} 
 \operatorname{\Gamma_\text{always}} & \operatorname{datatype} d \text{ and } \forall_{c \in t} \exists_{f \in c} d \trianglerighteq f \\
 \operatorname{\Gamma_\emptyset} & \operatorname{datatype} d \text{ otherwise} \\
 \operatorname{\Gamma_{=}} a_i, t & \operatorname{eq} a_i \\
 \operatorname{\Gamma_{\le}} a_i, t & \operatorname{le} a_i \\
 \operatorname{\Gamma_{\ge}} a_i, t & \operatorname{ge} a_i \\
-\operatorname{\Gamma_{\ge}} a_i, t_c & \operatorname{set} a_i,t_c \\
+\operatorname{\Gamma_{=}} a_i, t_c & \operatorname{set} (a_i,t_c) \\
 \end{cases}
 \end{align*}
 
+** Converting constraints to a type
+Once we have a collection of constraints ${\gamma_{a_1,...,a_n}}^{\ast\ast} \in {\Gamma_{a_1,...,a_n}}^{\ast\ast}$, we need to determine whether a solution is possible.
+First, separate by each variable, getting ${\gamma_{a_i}}^{\ast\ast}$.
+The solution for $a_i$ is trivially $\bigcup_{\gamma_{a_i}^\ast \in \gamma_{a_i}^{\ast\ast}} \operatorname{solution} \gamma_{a_i}^\ast$.
+To determine the solution for $\gamma^\ast_{a_i}$ is a bit more complicated, as the result needs to satisfy all of the provided constraints.
+Firstly, if $\Gamma_{\text{never} \in }\gamma^{\ast}_{a_i}$, then $\text{solution} \gamma_{a_i}^\ast = \emptyset$.
+Firstly, we will construct a $\text{gle}$, the greatest type which satisfies all $\Gamma_\leq$ and $\Gamma_=$ constraints
+\begin{align*}
+\operatorname{gle} = \bigcap_{\Gamma_{\le} a_i, t \mid \Gamma_{\le} a_i, t \in \gamma_{a_i}^\ast} t
+\end{align*}
+Then, we check whether this satisfies the remaining constraints
+\begin{align*}
+\forall_{\Gamma_{\ge} a_i, t \mid \Gamma_{=} a_i, t \in \gamma_{a_i}^\ast} t \le \text{gle}
+\end{align*}
+If it does, then $\operatorname{solution}\gamma_{a_i}^\ast = \text{gle}$, and otherwise there is no solution.
+
+
+
+* Defining Subtype
 Then we need an assignment function. We want to find types $t_1,...,t_n$ so that
 \begin{align*}
 \exists_{\gamma^\ast \in \gamma^{\ast\ast}} \forall_{\gamma \in \gamma^\ast} \gamma \text{ is satisfied by } (t_1,...,t_n)
@@ -140,3 +165,5 @@ Within each case, group constraints by variable, and determine the largest type 
 Now, collect the variable mappings for each valid case, discarding all invalid cases. If all cases are invalid, then return false. Otherwise, set each variable to the type-union of its value in each case.
 
 
+
+* Subtraction
