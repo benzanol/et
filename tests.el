@@ -302,12 +302,6 @@
 (et-assert-success (et-root-resolve :List<integer> '(list 1)))
 (et-assert-error (et-root-resolve :List<integer> '(list 1 "2" 3)))
 
-(et-assert-success (et-root-check-call car :never))
-(et-assert-success (et-root-check-call car :nil))
-(et-assert-success (et-root-check-call car :nil|cons<integer~string>))
-(et-assert-error (et-root-check-call car :nil|cons<integer~string>|string))
-(et-assert-error (et-root-check-call car :any))
-
 
 ;;;; car
 
@@ -324,6 +318,21 @@
 (et-assert-success (et-root-check-call cdr :nil|cons<integer~string>))
 (et-assert-error (et-root-check-call cdr :nil|cons<integer~string>|string))
 (et-assert-error (et-root-check-call cdr :any))
+
+(et-assert-success (et-root-check-call car :never))
+(et-assert-success (et-root-check-call car :nil))
+(et-assert-success (et-root-check-call car :nil|cons<integer~string>))
+(et-assert-error (et-root-check-call car :nil|cons<integer~string>|string))
+(et-assert-error (et-root-check-call car :any))
+
+(et-assert-equal (et :nil|integer)
+  (et-root-check-call car :List<integer>))
+
+(et-assert-equal (et :nil|integer|string)
+  (et-root-check-call car :List<integer>|cons<string~nil>))
+
+(et-assert-error
+ (et-root-check-call car :List<integer>|cons<string~nil>|string))
 
 
 ;;;; cdr
@@ -343,6 +352,36 @@
 
 (et-assert-success (et-root-resolve :Boolean '(cdr (cdr (cdr (list 1 2 3))))))
 (et-assert-error (et-root-resolve :Boolean '(cdr (cdr (list 1 2 3)))))
+
+(et-assert-equal (et :nil|cons<integer~List<integer>>)
+  (et-root-check-call cdr :List<integer>))
+
+(et-assert-equal (et :nil|cons<integer~List<integer>>|string)
+  (et-root-check-call cdr :List<integer>|cons<nil~string>))
+
+(et-assert-error
+ (et-root-check-call car :List<integer>|cons<string~nil>|string))
+
+
+;;;; List ops
+
+(et-assert-equal (et :number|string|nil)
+  (et-root-check-call nth :integer :cons<number~List<string>>))
+
+(et-assert-equal (et :List<number|string>)
+  (et-root-check-call nthcdr :integer :cons<number~List<string>>))
+
+(et-assert-equal (et :List<never>)
+  (et-root-check-call nthcdr :integer :nil))
+
+(et-assert-equal (et :integer)
+  (et-root-check-call length :vector<number>|List<string>))
+
+(et-assert-error
+ (et-root-check-call length :vector<number>|List<string>|number))
+
+(et-assert-equal (et :integer)
+  (et-root-check-call aref :string :integer))
 
 
 ;;; ============================================================

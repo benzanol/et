@@ -229,6 +229,11 @@ same name."
   "Alist of symbol -> type.")
 
 (defun et--infer (vars subtype supertype is-subtype?)
+  (dolist (var vars)
+    (cl-assert (and (keywordp var)
+                    (let ((case-fold-search nil))
+                      (string-match-p "^:[A-Z]" (symbol-name var))))))
+
   (let* ((et--inferring-types
           (cl-loop for var in vars
                    collect (cons var (if is-subtype? (et-any) (et-never)))))
@@ -255,9 +260,10 @@ same name."
 
 (et-define-datatype :infer-supertype
   ;; :read-only t
-  :check-args (lambda (arg &optional req)
+  :check-args (lambda (arg &optional req bind)
                 (or (symbolp arg) (error "Argument must be a symbol"))
-                (when req (or (et-type-p req) (error "Requirement must be a type"))))
+                (when req (or (et-type-p req) (error "Requirement must be a type")))
+                (when bind (or (et-type-p bind) (error "Bind must be a type"))))
   :subtype? (lambda (_args _other)
               (error "Cannot check if an infer type is a supertype"))
   :supertype? (lambda (args other)
@@ -265,7 +271,8 @@ same name."
                   (unless entry (error "Not inferring a type %s" (car args)))
                   (if (and (cadr args) (not (et-subtype? (et-datatype other) (cadr args))))
                       nil ; Does not fit the constraint
-                    (setcdr entry (et-or (cdr entry) (et-datatype other)))
+                    (setcdr entry (et-or (cdr entry)
+                                         (or (caddr args) (et-datatype other))))
                     t))))
 
 (defmacro et-infer-subtype (vars subtype supertype)
@@ -649,7 +656,9 @@ Type names must match [A-Z][a-zA-Z0-9]*."
       (`(,(and name (or :infer :infer-supertype :infer-subtype)) ,var . ,rest)
        (cl-assert (keywordp var))
        (when (eq name :infer) (setq name :infer-supertype))
-       (et-dt name var (when (car rest) (et-parse (car rest)))))
+       (et-dt name var
+              (when (car rest) (et-parse (car rest)))
+              (when (cadr rest) (et-parse (cadr rest)))))
 
       (`(,(and name (pred keywordp)) . ,args)
        (if (string-match-p "^:[A-Z]" (symbol-name name))
@@ -691,9 +700,10 @@ Splits on | at depth 0, then & at depth 0, then parses atoms."
       (`(,name nil) (et-parse (list name)))
       (`(,(and name (or :sym :str :num)) ,str) (et-parse (list name str)))
       (`(,(and name (or :infer :infer-subtype)) ,inner)
-       (or (string-match "^\\([A-Z][a-zA-Z0-9]*\\)\\(?:=\\(.*\\)\\)?$" inner)
+       (or (string-match "^\\([A-Z][a-zA-Z0-9]*\\)\\(?:=\\(.*\\)@\\(.*\\)\\)?$" inner)
            (error "Invalid infer format: %s" inner))
-       (et-parse (list name (intern (concat ":" (match-string 1 inner))) (match-string 2 inner))))
+       (et-parse (list name (intern (concat ":" (match-string 1 inner)))
+                       (match-string 3 inner) (match-string 2 inner))))
       (`(,name ,inner)
        (et-parse (cons name (et--split-at-depth inner ?~)))))))
 
@@ -934,6 +944,40 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
      (setf (get ',expr-type 'et-checker)
            (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type))))))
 
+(defun et--type-check-call (generic-vars arg-types ret-type)
+  "Determine the return type of a function call.
+
+GENERIC-VARS is a list of keywords, which are the generics present in
+the function type.
+
+ARG-TYPES is a list of types. These types should use (:infer-* VAR),
+where VAR is one of GENERIC-VARS, to infer the value of each generic
+from the arguments.
+
+RET-TYPE is either a type or a function. If it is a function, then its
+arguments will be the inferred type of each generic variable."
+
+  (or (eq (length arg-types) (length exprs))
+      (error "Wrong number of arguments. Expected %s, got %s" (length arg-types) (length exprs)))
+
+  (let (type infer generics-alist)
+    (dotimes (i (length arg-types))
+      (setq type (et-check-path (1+ i)))
+      (setq infer (or (et-infer-supertype ,generics (nth i arg-types) type)
+                      (error "Invalid argument %s, expected %s" (nth i exprs)
+                             (et-pp (nth i arg-types)))))
+      (cl-loop for tail on generic-types
+               for result in infer
+               unless (et-never? result)
+               do (cl-callf et-or (car tail) result)))
+    (setq generics-alist
+          (cl-loop for g across ,generics
+                   for type in generic-types
+                   collect (cons (list :alias g) type)))
+    (et--map-datatype-to-type
+     return-type
+     (lambda (dt) (alist-get dt generics-alist nil nil #'equal)))))
+
 (defmacro et-define-type-checker (func &rest arguments)
   "Define a checker using argument and return types.
 
@@ -1034,8 +1078,8 @@ generic variable should be uppercase.
 
 (defmacro et-root-block (&rest body)
   (et--root (cons #'progn body)
-    (et-check-tail 1)
-    et--current-expr))
+            (et-check-tail 1)
+            et--current-expr))
 
 (defun et-root-check (expr)
   (et--root expr (et-check)))
@@ -1046,8 +1090,8 @@ generic variable should be uppercase.
                         collect (cons (intern (format "var%s" idx))
                                       (et-parse type)))))
     `(et--root ,(list '\` (cons func (mapcar #'car vars)))
-       (et-with-binds ,(list '\` vars)
-         (et-check)))))
+               (et-with-binds ,(list '\` vars)
+                 (et-check)))))
 
 (defun et-resolve (type)
   (setq type (et-parse type))
