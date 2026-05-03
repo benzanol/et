@@ -59,9 +59,10 @@ FUNC is called with two arguments, ARG and ROLE, where role is one of
   "Like `et--datatype-map-args', but the identify for CONST args.
 
 FUNC is called with one argument, the current argument"
-  (et--datatype-map-args
-   dt-name dt-args
-   (lambda (arg role) (if (eq role 'CONST) arg (funcall func arg)))))
+  (cl-loop for arg in dt-args
+           for role in (et--datatype-arg-roles dt-name dt-args)
+           if (eq role 'CONST) collect arg
+           else collect (funcall func arg)))
 
 (defun et--datatype-arg-roles (dt-name dt-args)
   "Returns a list of `CONST' | `CO' | `CONTRA' | `ISO'."
@@ -222,7 +223,261 @@ VALUE is an instance of either `et-datatype', `et-alias', or
 (advice-add #'make-et-type-case :filter-return #'et--verify-type)
 
 
-;;; Utils
+;;; Match
+;;;; Matcher struct
+
+(cl-defstruct et-matcher
+  "A type pattern which is matched against by a concrete type.
+
+DNF is the possible match factors in disjunctive-nominal form. It is a
+list of cases, each of which is a list of match factors.
+
+Each match factor is one of:
+  (m:datatype DT-NAME ARG-MATCHER-DNFS...)
+  (m:match VAR)
+  (m:set VAR `et-type')"
+  generics dnf)
+
+(cl-defmethod cl-print-object ((matcher et-matcher) stream)
+  (princ (et-pp-matcher matcher) stream))
+
+(defun et--verify-matcher (matcher)
+  "Check that a matcher is valid."
+  (let ((generics (et-matcher-generics matcher)))
+    (dolist (generic generics)
+      (or (symbolp generic) (error "Generics must be a list of symbols")))
+
+    (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
+                                  (error "Not a generic: %s" var))))
+      (dolist (case (et-matcher-dnf matcher))
+        (dolist (factor case)
+          (pcase factor
+            (`(m:datatype ,(and name (pred keywordp)) . ,args)
+             (let ((roles (et--datatype-arg-roles name args)))
+               ;; Make sure that there are the correct number of arguments
+               (or (eq (length roles) (length args))
+                   (error "Wrong number of arguments for datatype %s" name))
+               ;; Make sure that all arguments have the correct role
+               (cl-loop for role in roles for arg in args
+                        do (pcase role
+                             ('CONST nil)
+                             ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
+                             (_ (error "Unknown role type: %s" role))))))
+
+            (`(m:match ,(pred genericp)))
+            (`(m:set ,(pred genericp) ,(pred et-type-p)))
+            (_ (error "Invalid match factor: %s" factor)))))
+      matcher)))
+
+(advice-add #'make-et-matcher :filter-return #'et--verify-matcher)
+
+
+;;;; Type to matcher
+
+(defun et-type-to-matcher (type &optional generics)
+  (make-et-matcher :dnf (et--type-to-matcher-dnf type generics) :generics generics))
+
+(defun et--type-to-matcher-dnf (type &optional generics)
+  (et--verify-type type)
+
+  (cl-loop
+   for case in (et-type-cases type)
+   for value = (et-type-case-value case)
+   nconc
+   (cl-typecase value
+     (et-datatype
+      `(((m:datatype
+          ,(et-datatype-name value)
+          ,@(et--datatype-map-type-args
+             (et-datatype-name value) (et-datatype-args value)
+             (lambda (arg) (et--type-to-matcher-dnf arg generics)))))))
+
+     (et-alias (et--type-to-matcher-dnf (et-alias-expand value) generics))
+     (t (error "Unsupported type case to convert to matcher: %s" value)))))
+
+(defun et--matcher-to-type (matcher)
+  (cl-loop for case in (et-matcher-dnf matcher)
+           collect
+           (cl-loop for factor in case
+                    collect
+                    (pcase factor
+                      (`(m:datatype ,name ,args)
+                       (et-type (et--datatype-map-type-args name args #'et--matcher-to-type)))
+                      (_ (error "Invalid matcher to convert to type")))
+                    into new-factors
+                    finally return (apply #'et--and new-factors))
+           into new-cases
+           finally return (apply #'et--or new-cases)))
+
+
+;;;; Iso match
+
+(defun et-iso-match (matcher type)
+  (delete-dups (nconc (et--sub-constraints matcher type)
+                      (et--super-constraints matcher type))))
+
+
+;;;; Sub match
+
+(defun et--sub-constraints (matcher type)
+  (et--verify-matcher matcher)
+  (et--verify-type type)
+
+  (cl-loop for case in (et-type-cases type)
+           nconc (et--sub-constraints-2 matcher case) into result
+           finally return (if (member `(q:never) result) `((q:never))
+                            (delete-dups result))))
+
+(defun et--sub-constraints-2 (matcher case)
+  (et--verify-matcher matcher)
+  (cl-assert (et-type-case-p case))
+
+  (cl-loop for match-case in (et-matcher-dnf matcher)
+           for result =
+           (cl-loop for match-factor in match-case
+                    for gens = (et-matcher-generics matcher)
+                    nconc (et--sub-or-super-constraints-3 match-factor case gens))
+           unless (member '(q:never) result)
+           return result
+           ;; If all cases failed, fallback to 2.2 or 2.3
+           finally return
+           (let ((val (et-type-case-value case)))
+             (if (et-alias-p val)
+                 (et--sub-constraints matcher (et-alias-expand val))
+               (list '(q:never))))))
+
+(defun et--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
+  (et--verify-matcher (make-et-matcher :generics generics :dnf (list (list match-factor))))
+  (et--verify-type (make-et-type :cases (list case)))
+
+  (pcase match-factor
+    (`(m:match ,var) `((,(if is-super 'q:leq 'q:geq) ,var ,(et-type case))))
+    (`(m:set ,var ,type) `((,(if is-super 'q:leq 'q:geq) ,var ,type)))
+    (`(m:datatype ,mdt-name . ,mdt-args)
+     (pcase (et-type-case-value case)
+       ((pred et-alias-p) `((q:never)))
+       ((and dt (pred et-datatype-p))
+        (et--sub-or-super-constraints-4 mdt-name mdt-args dt generics is-super))
+       (_ (error "Unsupported matching datatype"))))
+    (_ (error "Invalid match factor"))))
+
+(defun et--sub-or-super-constraints-4 (mdt-name mdt-args dt generics &optional is-super)
+  (cl-assert (keywordp mdt-name))
+  (cl-assert (listp mdt-args))
+  (cl-assert (et-datatype-p dt))
+  (cl-assert (listp generics))
+
+  (if (not (eq mdt-name (et-datatype-name dt)))
+      ;; Different datatypes cannot match
+      `((q:never))
+
+    ;; Datatypes of the same type should have the same number of arguments
+    (cl-assert (eq (length mdt-args) (length (et-datatype-args dt))))
+    (cl-loop for m-arg in mdt-args
+             for t-arg in (et-datatype-args dt)
+             for role in (et--datatype-arg-roles mdt-name mdt-args)
+             for matcher = (make-et-matcher :generics generics :dnf m-arg)
+             nconc (pcase role
+                     ;; Const args must be equal to match
+                     ('CONST (if (equal m-arg t-arg) nil `((q:never))))
+                     ((or 'CO 'CONTRA)
+                      (if (xor (eq role 'CO) is-super)
+                          (et--sub-constraints matcher t-arg)
+                        (et--super-constraints matcher t-arg)))
+                     ('ISO (et-iso-match matcher t-arg))
+                     (_ (error "Unknown argument role: %s" role))))))
+
+
+;;;; Super match
+
+(defun et--super-constraints (matcher type)
+  (et--verify-matcher matcher)
+  (et--verify-type type)
+
+  (cl-loop for m-case in (et-matcher-dnf matcher)
+           nconc (et--super-constraints-2 m-case type (et-matcher-generics matcher))
+           into result
+           finally return (if (member `(q:never) result) `((q:never))
+                            (delete-dups result))))
+
+(defun et--super-constraints-2 (match-case type generics)
+  (make-et-matcher :dnf (list match-case) :generics generics)
+  (et--verify-type type)
+
+  (cl-loop for case in (et-type-cases type)
+           for result =
+           (cl-loop for match-factor in match-case
+                    nconc (et--sub-or-super-constraints-3 match-factor case generics 'SUPER))
+           unless (member '(q:never) result)
+           return result
+           ;; If all cases failed, return never
+           finally return (list '(q:never))))
+
+
+;;;; Satisfy constraints
+
+(defun et--match-satisfy-constraints-biggest (generics constraints)
+  "Return a list of types for GENERICS satisfying CONSTRAINTS.
+
+Returns the symbol NEVER if invalid."
+  (cl-loop
+   for gen in generics
+   for gen-result =
+   (let ((guess
+          (cl-loop for (fact g type) in constraints
+                   when (and (eq g gen) (memq fact '(q:eq q:leq)))
+                   collect type into types
+                   finally return (apply #'et--and types))))
+     (if (cl-loop for (fact g type) in constraints
+                  always
+                  (or (not (eq g gen))
+                      (not (memq fact '(q:eq q:geq)))
+                      (et-subtype? guess type)))
+         guess (et-type)))
+   when (equal gen-result (et-type))
+   do (cl-return 'NEVER)
+   collect gen-result))
+
+(defun et--match-satisfy-constraints-smallest (generics constraints)
+  "Return a list of types for GENERICS satisfying CONSTRAINTS.
+
+Returns the symbol NEVER if invalid.
+
+However, unlike `et--match-satisfy-constraints-biggest', this allows
+values to be the never type."
+  (cl-loop
+   for gen in generics
+   for gen-result =
+   (let ((guess
+          (cl-loop for (fact g type) in constraints
+                   when (and (eq g gen) (memq fact '(q:eq q:geq)))
+                   collect type into types
+                   finally return (apply #'et-or types))))
+     (if (cl-loop for (fact g type) in constraints
+                  always
+                  (or (not (eq g gen))
+                      (not (memq fact '(q:eq q:leq)))
+                      (et-subtype? type guess)))
+         guess 'NEVER))
+   when (equal gen-result 'NEVER)
+   do (cl-return 'NEVER)
+   collect gen-result))
+
+
+;;;; Putting it together
+
+(defun et-sub-match (matcher type)
+  (let ((constraints (et--sub-constraints matcher type)))
+    (et--match-satisfy-constraints-smallest
+     (et-matcher-generics matcher) constraints)))
+
+(defun et-super-match (matcher type)
+  (let ((constraints (et--super-constraints matcher type)))
+    (et--match-satisfy-constraints-biggest
+     (et-matcher-generics matcher) constraints)))
+
+
+;;; Helpers
 ;;;; Check subtype
 
 (defun et-subtype? (super sub)
@@ -344,244 +599,6 @@ VALUE is an instance of either `et-datatype', `et-alias', or
                 finally return (make-et-datatype :name a-name :args new-args))))))
 
 
-;;; Match
-;;;; Matcher struct
-
-(cl-defstruct et-matcher
-  "A type pattern which is matched against by a concrete type.
-
-DNF is the possible match factors in disjunctive-nominal form. It is a
-list of cases, each of which is a list of match factors.
-
-Each match factor is one of:
-  (m:datatype DT-NAME ARG-MATCHER-DNFS...)
-  (m:match VAR)
-  (m:set VAR `et-type')"
-  generics dnf)
-
-(cl-defmethod cl-print-object ((matcher et-matcher) stream)
-  (princ (et-pp-matcher matcher) stream))
-
-(defun et--verify-matcher (matcher)
-  "Check that a matcher is valid."
-  (let ((generics (et-matcher-generics matcher)))
-    (dolist (generic generics)
-      (or (symbolp generic) (error "Generics must be a list of symbols")))
-
-    (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
-                                  (error "Not a generic: %s" var))))
-      (dolist (case (et-matcher-dnf matcher))
-        (dolist (factor case)
-          (pcase factor
-            (`(m:datatype ,(and name (pred keywordp)) . ,args)
-             (let ((roles (et--datatype-arg-roles name args)))
-               ;; Make sure that there are the correct number of arguments
-               (or (eq (length roles) (length args))
-                   (error "Wrong number of arguments for datatype %s" name))
-               ;; Make sure that all arguments have the correct role
-               (cl-loop for role in roles for arg in args
-                        do (pcase role
-                             ('CONST nil)
-                             ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
-                             (_ (error "Unknown role type: %s" role))))))
-
-            (`(m:match ,(pred genericp)))
-            (`(m:set ,(pred genericp) ,(pred et-type-p)))
-            (_ (error "Invalid match factor: %s" factor)))))
-      matcher)))
-
-(advice-add #'make-et-matcher :filter-return #'et--verify-matcher)
-
-
-;;;; Type to matcher
-
-(defun et-type-to-matcher (type &optional generics)
-  (et--verify-type type)
-
-  (cl-loop
-   for case in (et-type-cases type)
-   for value = (et-type-case-value case)
-   nconc
-   (cl-typecase value
-     (et-datatype
-      `(((m:datatype
-          ,(et-datatype-name value)
-          ,(et--datatype-map-type-args (et-datatype-name value) (et-datatype-args value)
-                                       (lambda (arg) (et-type-to-matcher arg generics)))))))
-
-     (et-alias (et-matcher-dnf (et-type-to-matcher (et-alias-expand value) generics)))
-     (t (error "Unsupported type case to convert to matcher: %s" value)))
-   into dnf
-   finally return (make-et-matcher :dnf dnf :generics generics)))
-
-(defun et--matcher-to-type (matcher)
-  (cl-loop for case in (et-matcher-dnf matcher)
-           collect
-           (cl-loop for factor in case
-                    collect
-                    (pcase factor
-                      (`(m:datatype ,name ,args)
-                       (et-type (et--datatype-map-type-args name args #'et--matcher-to-type)))
-                      (_ (error "Invalid matcher to convert to type")))
-                    into new-factors
-                    finally return (apply #'et--and new-factors))
-           into new-cases
-           finally return (apply #'et--or new-cases)))
-
-
-;;;; Iso match
-
-(defun et-iso-match (matcher type)
-  (delete-dups (nconc (et--sub-constraints matcher type)
-                      (et--super-constraints matcher type))))
-
-
-;;;; Sub match
-
-(defun et--sub-constraints (matcher type)
-  (et--verify-matcher matcher)
-  (et--verify-type type)
-
-  (cl-loop for case in (et-type-cases type)
-           nconc (et--sub-constraints-2 matcher case) into result
-           finally return (if (member `(q:never) result) `((q:never)) result)))
-
-(defun et--sub-constraints-2 (matcher case)
-  (et--verify-matcher matcher)
-  (cl-assert (et-type-case-p case))
-
-  (cl-loop for match-case in (et-matcher-dnf matcher)
-           for result =
-           (cl-loop for match-factor in match-case
-                    for gens = (et-matcher-generics matcher)
-                    nconc (et--sub-or-super-constraints-3 match-factor case gens))
-           unless (member '(q:never) result)
-           return result
-           ;; If all cases failed, fallback to 2.2 or 2.3
-           finally return
-           (let ((val (et-type-case-value case)))
-             (if (et-alias-p val)
-                 (et--sub-constraints matcher (et-alias-expand val))
-               (list '(q:never))))))
-
-(defun et--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
-  (et--verify-matcher (make-et-matcher :generics generics :dnf (list (list match-factor))))
-  (et--verify-type (make-et-type :cases (list case)))
-
-  (pcase match-factor
-    (`(m:match ,var) `((,(if is-super 'q:leq 'q:geq) ,var ,(et-type case))))
-    (`(m:set ,var ,type) `((,(if is-super 'q:leq 'q:geq) ,var ,type)))
-    (`(m:datatype ,mdt-name . ,mdt-args)
-     (pcase (et-type-case-value case)
-       ((pred et-alias-p) `((q:never)))
-       ((and dt (pred et-datatype-p))
-        (et--sub-or-super-constraints-4 mdt-name mdt-args dt generics is-super))
-       (_ (error "Unsupported matching datatype"))))
-    (_ (error "Invalid match factor"))))
-
-(defun et--sub-or-super-constraints-4 (mdt-name mdt-args dt generics &optional is-super)
-  (cl-assert (keywordp mdt-name))
-  (cl-assert (listp mdt-args))
-  (cl-assert (et-datatype-p dt))
-  (cl-assert (listp generics))
-
-  (if (not (eq mdt-name (et-datatype-name dt)))
-      ;; Different datatypes cannot match
-      `((q:never))
-
-    ;; Datatypes of the same type should have the same number of arguments
-    (cl-assert (eq (length mdt-args) (length (et-datatype-args dt))))
-    (cl-loop for m-arg in mdt-args
-             for t-arg in (et-datatype-args dt)
-             for role in (et--datatype-arg-roles mdt-name mdt-args)
-             for matcher = (make-et-matcher :generics generics :dnf m-arg)
-             nconc (pcase role
-                     ;; Const args must be equal to match
-                     ('CONST (if (equal m-arg t-arg) nil `((q:never))))
-                     ((or 'CO 'CONTRA)
-                      (if (xor (eq role 'CO) is-super)
-                          (et--sub-constraints matcher t-arg)
-                        (et--super-constraints matcher t-arg)))
-                     ('ISO (et-iso-match matcher t-arg))
-                     (_ (error "Unknown argument role: %s" role))))))
-
-
-;;;; Super match
-
-(defun et--super-constraints (matcher type)
-  (et--verify-matcher matcher)
-  (et--verify-type type)
-
-  (cl-loop for m-case in (et-matcher-dnf matcher)
-           nconc (et--super-constraints-2 m-case type (et-matcher-generics matcher))
-           into result
-           finally return (if (member `(q:never) result) `((q:never)) result)))
-
-(defun et--super-constraints-2 (match-case type generics)
-  (make-et-matcher :dnf (list match-case) :generics generics)
-  (et--verify-type type)
-
-  (cl-loop for case in (et-type-cases type)
-           for result =
-           (cl-loop for match-factor in match-case
-                    nconc (et--sub-or-super-constraints-3 match-factor case generics 'SUPER))
-           unless (member '(q:never) result)
-           return result
-           ;; If all cases failed, return never
-           finally return (list '(q:never))))
-
-
-;;;; Satisfy constraints
-
-(defun et--match-satisfy-constraints-biggest (generics constraints)
-  "Return a list of types for GENERICS satisfying CONSTRAINTS.
-
-Returns the symbol NEVER if invalid."
-  (cl-loop
-   for gen in generics
-   for gen-result =
-   (let ((guess
-          (cl-loop for (fact g type) in constraints
-                   when (and (eq g gen) (memq fact '(q:eq q:leq)))
-                   collect type into types
-                   finally return (apply #'et--and types))))
-     (if (cl-loop for (fact g type) in constraints
-                  always
-                  (or (not (eq g gen))
-                      (not (memq fact '(q:eq q:geq)))
-                      (et-subtype? guess type)))
-         guess (et-type)))
-   when (equal gen-result (et-type))
-   do (cl-return 'NEVER)
-   collect gen-result))
-
-(defun et--match-satisfy-constraints-smallest (generics constraints)
-  "Return a list of types for GENERICS satisfying CONSTRAINTS.
-
-Returns the symbol NEVER if invalid.
-
-However, unlike `et--match-satisfy-constraints-biggest', this allows
-values to be the never type."
-  (cl-loop
-   for gen in generics
-   for gen-result =
-   (let ((guess
-          (cl-loop for (fact g type) in constraints
-                   when (and (eq g gen) (memq fact '(q:eq q:geq)))
-                   collect type into types
-                   finally return (apply #'et-or types))))
-     (if (cl-loop for (fact g type) in constraints
-                  always
-                  (or (not (eq g gen))
-                      (not (memq fact '(q:eq q:leq)))
-                      (et-subtype? type guess)))
-         guess 'NEVER))
-   when (equal gen-result 'NEVER)
-   do (cl-return 'NEVER)
-   collect gen-result))
-
-
-;;; Helpers
 ;;;; Constructors
 
 (defun et-type (&rest cases)
@@ -613,7 +630,8 @@ a valid `et-type-case-value'."
   (et-type (make-et-alias :name name :args args)))
 
 
-;;;; Parsing structure
+;;;; Parsing
+;;;;; Parsing structure
 
 (defun et--dnf-and (a b)
   (cl-loop for a-case in a
@@ -707,7 +725,7 @@ The list of lists is in dnf form."
       (et--parse-structure (list :set var expr) generics)))
 
    ;; Name or Name<...>
-   ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\)\\(?:<\\(.*\\)>\\)?$" s)
+   ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\(?::[rw]o\\)?\\)\\(?:<\\(.*\\)>\\)?$" s)
     (let* ((kwd (intern (concat ":" (match-string 1 s))))
            (inner (match-string 2 s))
            (arg-strs (when inner (et--split-at-depth inner ?~))))
@@ -731,7 +749,10 @@ Depth tracks < > and { } nesting."
     (nreverse result)))
 
 
-;;;; Parsing types
+;;;;; Parsing types
+
+(defmacro et (&rest args)
+  `(et-parse-type ,(if (eq (length args) 1) (car args) (cons #'list args))))
 
 (defun et--type-dnf-to-type (dnf)
   "Convert structured DNF (output of `et--parse-structure') to an `et-type'."
@@ -753,11 +774,14 @@ Depth tracks < > and { } nesting."
   "Parse SPEC as an `et-type'."
   (et--type-dnf-to-type (et--parse-structure spec nil)))
 
-(defmacro et (&rest args)
-  `(et-parse-type ,(if (eq (length args) 1) (car args) (cons #'list args))))
 
+;;;;; Parsing matchers
 
-;;;; Parsing matchers
+(defmacro et-matcher (generics &rest args)
+  (declare (indent 1))
+  (or (vectorp generics) (error "Write the generics as a vector"))
+  `(et-parse-matcher (backquote ,(if (eq (length args) 1) (car args) args))
+                     (backquote ,(append generics nil))))
 
 (defun et-parse-matcher (spec generics)
   "Parse SPEC as an `et-matcher' with GENERICS."
@@ -769,9 +793,9 @@ Depth tracks < > and { } nesting."
                       (`(DT ,name . ,args)
                        `(m:datatype
                          ,name
-                         ,(et--datatype-map-type-args
-                           name args
-                           (lambda (arg) (et-matcher-dnf (et-parse-matcher arg generics))))))
+                         ,@(et--datatype-map-type-args
+                            name args
+                            (lambda (arg) (et-matcher-dnf (et-parse-matcher arg generics))))))
                       (`(GENERIC ,var) `(m:match ,var))
                       (`(SET ,var ,inner-dnf)
                        `(m:set ,var ,(et--type-dnf-to-type inner-dnf)))
@@ -838,32 +862,33 @@ Depth tracks < > and { } nesting."
 
     (_
      (let* ((name-str (substring (symbol-name name) 1))
-            (roles (et--datatype-arg-roles name args))
-            (strs (cl-loop for arg in args
-                           for role in roles
-                           collect (if (eq role 'CONST)
-                                       (format "%s" arg)
-                                     (et--format-matcher-dnf arg)))))
-       (if strs
-           (format "%s<%s>" name-str (string-join strs ", "))
-         name-str)))))
+            (strs (et--datatype-map-args
+                   name args
+                   (lambda (arg role)
+                     (if (eq role 'CONST) (format "%s" arg)
+                       (et--format-matcher-dnf arg))))))
+
+       (if (null args) name-str (format "%s<%s>" name-str (string-join strs ", ")))))))
 
 
 ;;; Test
 
-(et--sub-constraints
- (make-et-matcher
-  :generics '(a b)
-  :dnf `(( (m:datatype :cons:ro (( (m:datatype :string) )) (( (m:datatype :number) )))
-           (m:match a) )
-         ( (m:datatype :literal nil)
-           (m:set a ,(et-literal nil)) )
-         ))
- (et-or (et-dt :cons:ro (et-dt :string) (et-dt :number)) (et-dt :literal nil))
- )
-
-(et-parse-matcher :sym<abc> nil)
+(et-matcher [:a]
+  :or (:and :a :cons:ro<string~number>)
+  (:and :nil :a=t))
 
 
-(defun et-subtype? (a b) t)
-(et--match-satisfy-constraints-smallest '(a b) $29)
+;; (et--sub-constraints
+(et-sub-match
+ (et-matcher [:a]
+   :and :a
+   (:or :cons:ro<string~number> :nil))
+ (et :or :nil :cons:ro<string~number>))
+
+
+;;; Provide
+
+(provide 'et-redo)
+
+
+;;; et-redo.el ends here
