@@ -26,6 +26,16 @@
 
 
 ;;; Structure
+;;;; Doc
+
+;; A "type structure" is a list of lists of the following form:
+;; \(`DT' NAME ARGS...)
+;; \(`ALIAS' NAME ARGS...)
+;; \(`GENERIC' VAR)
+;; \(`SET' VAR DNF)
+;; \(`MATCHER-DNF' MATCHER-DNF) - literally just a nested matcher dnf
+
+
 ;;;; Parsing
 
 (defun et-parse-structure (spec generics)
@@ -568,51 +578,6 @@ Each match factor is one of:
   (princ (et-pp-matcher matcher) stream))
 
 
-;;;; Type to matcher
-
-;; A "type structure" is a list of lists of the following form:
-;; \(`DT' NAME ARGS...)
-;; \(`ALIAS' NAME ARGS...)
-;; \(`GENERIC' VAR)
-;; \(`SET' VAR DNF)
-;; \(`MATCHER-DNF' MATCHER-DNF) - literally just a nested matcher dnf
-
-(defun et-type-to-matcher (type &optional generics)
-  (make-et-matcher :dnf (et--type-to-matcher-dnf type generics) :generics generics))
-
-(defun et--type-to-matcher-dnf (type &optional generics)
-  (et--verify-type type)
-
-  (cl-loop for case in (et-type-cases type)
-           for value = (et-type-case-value case)
-           nconc
-           (cl-typecase value
-             (et-datatype
-              `(((m:datatype
-                  ,(et-datatype-name value)
-                  ,@(et--datatype-map-type-args
-                     (et-datatype-name value) (et-datatype-args value)
-                     (lambda (arg) (et--type-to-matcher-dnf arg generics)))))))
-
-             (et-alias (et--type-to-matcher-dnf (et-alias-expand value) generics))
-             (t (error "Unsupported type case to convert to matcher: %s" value)))))
-
-(defun et--matcher-dnf-to-type (matcher-dnf)
-  (cl-loop for case in matcher-dnf
-           collect
-           (cl-loop for factor in case
-                    collect
-                    (pcase factor
-                      (`(m:datatype ,name . ,args)
-                       (let ((args (et--datatype-map-type-args name args #'et--matcher-dnf-to-type)))
-                         (et-type (make-et-datatype :name name :args args))))
-                      (_ (error "Invalid matcher to convert to type: %s" factor)))
-                    into new-factors
-                    finally return (apply #'et--and new-factors))
-           into new-cases
-           finally return (apply #'et--or new-cases)))
-
-
 ;;;; Expand matcher aliaes
 
 (defun et--dnf-and (&rest args)
@@ -697,6 +662,22 @@ Each match factor is one of:
         (et--sub-or-super-constraints-4 mdt-name mdt-args dt generics is-super))
        (_ (error "Unsupported matching datatype"))))
     (_ (error "Invalid match factor"))))
+
+;; This should eventually be replaced
+(defun et--matcher-dnf-to-type (matcher-dnf)
+  (cl-loop for case in matcher-dnf
+           collect
+           (cl-loop for factor in case
+                    collect
+                    (pcase factor
+                      (`(m:datatype ,name . ,args)
+                       (let ((args (et--datatype-map-type-args name args #'et--matcher-dnf-to-type)))
+                         (et-type (make-et-datatype :name name :args args))))
+                      (_ (error "Invalid matcher to convert to type: %s" factor)))
+                    into new-factors
+                    finally return (apply #'et--and new-factors))
+           into new-cases
+           finally return (apply #'et--or new-cases)))
 
 (defun et--sub-or-super-constraints-4 (mdt-name mdt-args dt generics &optional is-super)
   (cl-assert (keywordp mdt-name))
@@ -873,10 +854,6 @@ values to be the never type."
            append (et-type-cases type) into cases
            finally return (make-et-type :cases cases)))
 
-(defun et-never-p (type)
-  (et--verify-type type)
-  (null (et-type-cases type)))
-
 (defun et--and (&rest types)
   "Return the type intersection of TYPES."
   (mapc #'et--verify-type types)
@@ -943,6 +920,10 @@ values to be the never type."
 
 ;;;; Constructors
 
+(defun et-never-p (type)
+  (et--verify-type type)
+  (null (et-type-cases type)))
+
 (defun et-type (&rest cases)
   "Construct a new `et-type' out of CASES.
 
@@ -960,16 +941,13 @@ a valid `et-type-case-value'."
   (cl-assert (string-match-p "^:[a-z]" (symbol-name name)))
   (et-type (make-et-datatype :name name :args args)))
 
-(defun et-literal (value) (et-dt :literal value))
-(defun et-nil () (et-literal nil))
-(defun et-t () (et-literal t))
-(defun et-any () (et-dt :any))
-(defun et-never () (make-et-type :cases nil))
-
 (defun et-alias (name &rest args)
   (cl-assert (keywordp name))
   (cl-assert (string-match-p "^:[A-Z]" (symbol-name name)))
   (et-type (make-et-alias :name name :args args)))
+
+(defun et-any () (et-dt :any))
+(defun et-never () (make-et-type :cases nil))
 
 
 ;;; Provide
