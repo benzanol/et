@@ -25,6 +25,176 @@
 (require 'seq)
 
 
+;;; Structure
+;;;; Parsing
+
+(defun et-parse-structure (spec generics)
+  (let ((case-fold-search nil)
+        (parse (lambda (arg) (et-parse-structure arg generics))))
+
+    (copy-tree
+     (pcase spec
+       ((pred stringp) (et--parse-string spec generics))
+       ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) generics))
+
+       (`(:structure ,structure) structure)
+
+       (`(:or . ,args) (mapcan parse args))
+       (`(:and . ,args)
+        (or args (error "`and' cannot be empty"))
+        (cl-reduce #'et--dnf-and (mapcar parse args)))
+
+       (`(:never) nil)
+       (`(:any) `(((DT :any))))
+       (`(:nil) `(((DT :literal nil))))
+       (`(:t) `(((DT :literal t))))
+
+       (`(:sym ,val)
+        (when (stringp val) (setq val (intern val)))
+        (or (symbolp val) (error "Not a symbol: %s" val))
+        `(((DT :literal ,val))))
+
+       (`(:num ,val)
+        (and (stringp val) (string-match-p "^[0-9][0-9_]*\\.?[0-9_]*$" val)
+             (setq val (string-to-number val)))
+        (or (numberp val) (error "Not a number: %s" val))
+        `(((DT :literal ,val))))
+
+       (`(:str ,str)
+        (or (stringp str) (error "Not a string: %s" str))
+        `(((DT :literal ,str))))
+
+       (`(:set ,var ,type)
+        (or (memq var generics) (error "Not a generic: %s" var))
+        `(((SET ,var ,(funcall parse type)))))
+
+       (`(,(and name (pred keywordp)) . ,args)
+        (cond
+         ((memq name generics)
+          (or (null args) (error "Generic type cannot have arguments"))
+          `(((GENERIC ,name))))
+
+         ((string-match-p "^:[A-Z]" (symbol-name name))
+          `(((ALIAS ,name ,@(mapcar parse args)))))
+
+         (t `(((DT ,name ,@(et--datatype-map-type-args name args parse)))))))
+
+       (_ (error "Invalid type spec: %s" spec))))))
+
+(defun et--parse-string (s generics)
+  (when (string-empty-p s) (error "Empty type expression"))
+
+  (cl-loop for or-seg in (et--split-at-depth s ?|)
+           when (string-empty-p or-seg)
+           do (error "Empty segment in union type: %s" s)
+           collect
+           (cl-loop for and-seg in (et--split-at-depth or-seg ?&)
+                    when (string-empty-p and-seg)
+                    do (error "Empty segment in intersection type: %s" s)
+                    collect (et--parse-atom and-seg generics) into and-parts
+                    finally return (cl-reduce #'et--dnf-and and-parts))
+           into or-parts
+           finally return (apply #'nconc or-parts)))
+
+(defun et--parse-atom (s generics)
+  "Parse a single type atom into an `et-type'."
+  (cond
+   ((string-match "{\\(.*\\)}" s) (et--parse-string (substring s 1 -1) generics))
+
+   ;; Var=Type
+   ((string-match "^\\([a-zA-Z0-9]*\\)=\\(.*\\)$" s)
+    (let ((var (intern (concat ":" (match-string 1 s))))
+          (expr (match-string 2 s)))
+      (et-parse-structure (list :set var expr) generics)))
+
+   ;; Name or Name<...>
+   ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\(?::[rw]o\\)?\\)\\(?:<\\(.*\\)>\\)?$" s)
+    (let* ((kwd (intern (concat ":" (match-string 1 s))))
+           (inner (match-string 2 s))
+           (arg-strs (when inner (et--split-at-depth inner ?~))))
+      (et-parse-structure (cons kwd arg-strs) generics)))
+
+   (t (error "Invalid parse syntax: %s" s))))
+
+
+(defun et--split-at-depth (s delim)
+  "Split string S on character DELIM at depth 0 only.
+Depth tracks < > and { } nesting."
+  (let ((depth 0) (start 0) (result '()))
+    (dotimes (i (length s))
+      (let ((c (aref s i)))
+        (cond ((memq c '(?< ?{)) (cl-incf depth))
+              ((memq c '(?> ?})) (cl-decf depth))
+              ((and (eq c delim) (= depth 0))
+               (push (substring s start i) result)
+               (setq start (1+ i))))))
+    (push (substring s start) result)
+    (nreverse result)))
+
+
+;;;; Printing
+
+(defun et--format-structure (structure)
+  "Format a structure DNF to a human-readable string."
+  (if (null structure) "never"
+    (mapconcat #'et--format-structure-case structure " | ")))
+
+(defun et--format-structure-case (case)
+  (if (null case) "any"
+    (mapconcat #'et--format-structure-factor case " & ")))
+
+(defun et--format-structure-factor (factor)
+  (pcase factor
+    (`(GENERIC ,var) (format "@%s" (substring (symbol-name var) 1)))
+    (`(SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
+    (`(DT ,name . ,args) (et--format-structure-dt name args))
+    (`(ALIAS ,name . ,args) (et--format-structure-alias name args))
+    (_ (error "Invalid structure factor: %s" factor))))
+
+(defun et--format-structure-dt (name args)
+  (pcase (cons name args)
+    (`(:literal ,val)
+     (if (and (symbolp val) val (not (eq val t)))
+         (format "`%s'" val)
+       (prin1-to-string val)))
+
+    (`(:cons ,left-sub ,right-sub)
+     (let ((elems (list (et--format-structure left-sub))))
+       (while (pcase right-sub
+                ((and (pred listp) d)
+                 (when (and (= (length d) 1) (= (length (car d)) 1))
+                   (pcase (car (car d))
+                     (`(DT :cons ,car-sub ,cdr-sub)
+                      (nconc elems (list (et--format-structure car-sub)))
+                      (setq right-sub cdr-sub)
+                      t))))))
+       (let ((tail-nil-p
+              (and (= (length right-sub) 1)
+                   (= (length (car right-sub)) 1)
+                   (equal (car (car right-sub)) '(DT :literal nil)))))
+         (if tail-nil-p
+             (format "(%s)" (mapconcat #'identity elems " "))
+           (format "(%s . %s)"
+                   (mapconcat #'identity elems " ")
+                   (et--format-structure right-sub))))))
+
+    (_
+     (let* ((name-str (substring (symbol-name name) 1))
+            (strs (et--datatype-map-args
+                   name args
+                   (lambda (arg role)
+                     (if (eq role 'CONST) (format "%s" arg)
+                       (et--format-structure arg))))))
+       (if (null args) name-str
+         (format "%s<%s>" name-str (string-join strs ", ")))))))
+
+(defun et--format-structure-alias (name args)
+  (let* ((name-str (substring (symbol-name name) 1))
+         (strs (mapcar #'et--format-structure args)))
+    (if (null args) name-str
+      (format "%s<%s>" name-str (string-join strs ", ")))))
+
+
 ;;; Types
 ;;;; Datatypes
 
@@ -200,10 +370,6 @@ VALUE is an instance of either `et-datatype', `et-alias', or
   CASES is a list of `et-type-case' instances being unioned."
   cases)
 
-(cl-defmethod cl-print-object ((type et-type) stream)
-  ;; (princ (et-pp type) stream)
-  (princ type stream))
-
 (defun et--verify-type (type)
   "Check that a matcher is valid."
   (dolist (case (et-type-cases type))
@@ -231,7 +397,62 @@ VALUE is an instance of either `et-datatype', `et-alias', or
 (advice-add #'make-et-type-case :filter-return #'et--verify-type)
 
 
-;;; Match
+;;;; To/from structure
+
+(defun et-structure-to-type (structure)
+  "Convert a structure to an `et-type'."
+  (cl-loop for case in structure
+           when (cdr case) do (error "Type cannot represent AND: %s" case)
+           for value =
+           (pcase (car case)
+             (`(DT ,name . ,args)
+              (make-et-datatype
+               :name name
+               :args (et--datatype-map-type-args name args #'et-parse-type)))
+             (`(ALIAS ,name . ,args)
+              (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))
+             (f (error "Invalid type factor: %s" f)))
+           collect (make-et-type-case :value value) into cases
+           finally return (make-et-type :cases cases)))
+
+(defun et-type-to-structure (type)
+  "Convert an `et-type' to a structure DNF."
+  (et--verify-type type)
+  (cl-loop for case in (et-type-cases type)
+           for value = (et-type-case-value case)
+           collect
+           (list
+            (cl-typecase value
+              (et-datatype
+               `(DT ,(et-datatype-name value)
+                    ,@(et--datatype-map-type-args
+                       (et-datatype-name value)
+                       (et-datatype-args value)
+                       #'et-type-to-structure)))
+              (et-alias
+               `(ALIAS ,(et-alias-name value)
+                       ,@(mapcar #'et-type-to-structure (et-alias-args value))))
+              (t (error "Unsupported type case value: %s" value))))))
+
+
+;;;; Parse/print
+
+(defun et-parse-type (spec)
+  "Parse SPEC as an `et-type'."
+  (et-structure-to-type (et-parse-structure spec nil)))
+
+(defmacro et (&rest args)
+  `(et-parse-type ,(if (eq (length args) 1) (car args) (cons #'list args))))
+
+
+(defun et-pp (type)
+  (et--format-structure (et-type-to-structure type)))
+
+(cl-defmethod cl-print-object ((type et-type) stream)
+  (princ (et-pp type) stream))
+
+
+;;; Matcher
 ;;;; Matcher struct
 
 (cl-defstruct et-matcher
@@ -245,10 +466,6 @@ Each match factor is one of:
   (m:match VAR)
   (m:set VAR `et-type')"
   generics dnf)
-
-(cl-defmethod cl-print-object ((matcher et-matcher) stream)
-  ;; (princ (et-pp-matcher matcher) stream)
-  (princ matcher stream))
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
@@ -277,6 +494,78 @@ Each match factor is one of:
       matcher)))
 
 (advice-add #'make-et-matcher :filter-return #'et--verify-matcher)
+
+
+;;;; To/from structure
+
+(defun et-structure-to-matcher-dnf (structure generics)
+  (let* ((convert-sub (lambda (sub) (et-structure-to-matcher-dnf sub generics))))
+    (cl-loop for case in structure
+             nconc
+             (cl-loop for factor in case
+                      collect
+                      (pcase factor
+                        (`(DT ,name . ,args)
+                         `(((m:datatype ,name ,@(et--datatype-map-type-args name args convert-sub)))))
+                        (`(ALIAS ,name . ,args)
+                         `(((m:alias ,name ,@(mapcar convert-sub args)))))
+                        (`(GENERIC ,var) `(((m:match ,var))))
+                        (`(SET ,var ,inner-dnf)
+                         `(((m:set ,var ,(et-structure-to-type inner-dnf)))))
+                        (`(MATCHER-DNF ,matcher-dnf) (copy-tree matcher-dnf))
+                        (_ (error "Invalid match factor: %s" factor)))
+                      into and-items
+                      finally return (apply #'et--dnf-and and-items)))))
+
+
+(defun et-matcher-to-structure (matcher)
+  "Convert an `et-matcher' to a structure DNF."
+  (et--verify-matcher matcher)
+
+  (let* ((generics (et-matcher-generics matcher))
+         (convert-sub
+          (lambda (sub-dnf)
+            (et-matcher-to-structure
+             (make-et-matcher :generics generics :dnf sub-dnf)))))
+    (cl-loop for case in (et-matcher-dnf matcher)
+             collect
+             (cl-loop for factor in case
+                      collect
+                      (pcase factor
+                        (`(m:datatype ,name . ,args)
+                         `(DT ,name ,@(et--datatype-map-type-args name args convert-sub)))
+                        (`(m:alias ,name . ,args)
+                         `(ALIAS ,name ,@(mapcar convert-sub args)))
+                        (`(m:match ,var) `(GENERIC ,var))
+                        (`(m:set ,var ,type)
+                         `(SET ,var ,(et-type-to-structure type))))))))
+
+
+;;;; Parse/print
+
+(defmacro et-matcher (generics &rest args)
+  (declare (indent 1))
+  (or (vectorp generics) (error "Write the generics as a vector"))
+  `(et-parse-matcher (backquote ,(if (eq (length args) 1) (car args) args))
+                     (backquote ,(append generics nil))))
+
+(defun et-parse-matcher (spec generics)
+  "Parse SPEC as an `et-matcher' with GENERICS."
+  (make-et-matcher
+   :generics generics
+   :dnf (et-structure-to-matcher-dnf (et-parse-structure spec generics) generics)))
+
+
+(defun et-pp-matcher (matcher)
+  "Format an `et-matcher' into a human-readable string."
+  (let* ((generics (et-matcher-generics matcher))
+         (body (et--format-structure (et-matcher-to-structure matcher))))
+    (if generics
+        (format "<%s> => %s" (mapconcat #'symbol-name generics ", ") body)
+      body)))
+
+(cl-defmethod cl-print-object ((matcher et-matcher) stream)
+  (princ (et-pp-matcher matcher) stream))
 
 
 ;;;; Type to matcher
@@ -340,7 +629,7 @@ Each match factor is one of:
 (defun et-alias-expand-as-matcher-dnf (name args generics)
   "Expand an alias within a matcher."
   (let* ((s-args (cl-loop for arg in args collect `(:structure (((MATCHER-DNF ,arg))))))
-         (structure (et--parse-structure (et--alias-call name s-args) generics)))
+         (structure (et-parse-structure (et--alias-call name s-args) generics)))
     (et-structure-to-matcher-dnf structure generics)))
 
 (defun et--matcher-expand-aliases (dnf generics)
@@ -681,239 +970,6 @@ a valid `et-type-case-value'."
   (cl-assert (keywordp name))
   (cl-assert (string-match-p "^:[A-Z]" (symbol-name name)))
   (et-type (make-et-alias :name name :args args)))
-
-
-;;;; Parsing
-;;;;; Parsing structure
-
-(defun et--parse-structure (spec generics)
-  (let ((case-fold-search nil)
-        (parse (lambda (arg) (et--parse-structure arg generics))))
-
-    (copy-tree
-     (pcase spec
-       ((pred stringp) (et--parse-string spec generics))
-       ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) generics))
-
-       (`(:structure ,structure) structure)
-
-       (`(:or . ,args) (mapcan parse args))
-       (`(:and . ,args)
-        (or args (error "`and' cannot be empty"))
-        (cl-reduce #'et--dnf-and (mapcar parse args)))
-
-       (`(:never) nil)
-       (`(:any) `(((DT :any))))
-       (`(:nil) `(((DT :literal nil))))
-       (`(:t) `(((DT :literal t))))
-
-       (`(:sym ,val)
-        (when (stringp val) (setq val (intern val)))
-        (or (symbolp val) (error "Not a symbol: %s" val))
-        `(((DT :literal ,val))))
-
-       (`(:num ,val)
-        (and (stringp val) (string-match-p "^[0-9][0-9_]*\\.?[0-9_]*$" val)
-             (setq val (string-to-number val)))
-        (or (numberp val) (error "Not a number: %s" val))
-        `(((DT :literal ,val))))
-
-       (`(:str ,str)
-        (or (stringp str) (error "Not a string: %s" str))
-        `(((DT :literal ,str))))
-
-       (`(:set ,var ,type)
-        (or (memq var generics) (error "Not a generic: %s" var))
-        `(((SET ,var ,(funcall parse type)))))
-
-       (`(,(and name (pred keywordp)) . ,args)
-        (cond
-         ((memq name generics)
-          (or (null args) (error "Generic type cannot have arguments"))
-          `(((GENERIC ,name))))
-
-         ((string-match-p "^:[A-Z]" (symbol-name name))
-          `(((ALIAS ,name ,@(mapcar parse args)))))
-
-         (t `(((DT ,name ,@(et--datatype-map-type-args name args parse)))))))
-
-       (_ (error "Invalid type spec: %s" spec))))))
-
-(defun et--parse-string (s generics)
-  (when (string-empty-p s) (error "Empty type expression"))
-
-  (cl-loop for or-seg in (et--split-at-depth s ?|)
-           when (string-empty-p or-seg)
-           do (error "Empty segment in union type: %s" s)
-           collect
-           (cl-loop for and-seg in (et--split-at-depth or-seg ?&)
-                    when (string-empty-p and-seg)
-                    do (error "Empty segment in intersection type: %s" s)
-                    collect (et--parse-atom and-seg generics) into and-parts
-                    finally return (cl-reduce #'et--dnf-and and-parts))
-           into or-parts
-           finally return (apply #'nconc or-parts)))
-
-(defun et--parse-atom (s generics)
-  "Parse a single type atom into an `et-type'."
-  (cond
-   ((string-match "{\\(.*\\)}" s) (et--parse-string (substring s 1 -1) generics))
-
-   ;; Var=Type
-   ((string-match "^\\([a-zA-Z0-9]*\\)=\\(.*\\)$" s)
-    (let ((var (intern (concat ":" (match-string 1 s))))
-          (expr (match-string 2 s)))
-      (et--parse-structure (list :set var expr) generics)))
-
-   ;; Name or Name<...>
-   ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\(?::[rw]o\\)?\\)\\(?:<\\(.*\\)>\\)?$" s)
-    (let* ((kwd (intern (concat ":" (match-string 1 s))))
-           (inner (match-string 2 s))
-           (arg-strs (when inner (et--split-at-depth inner ?~))))
-      (et--parse-structure (cons kwd arg-strs) generics)))
-
-   (t (error "Invalid parse syntax: %s" s))))
-
-
-(defun et--split-at-depth (s delim)
-  "Split string S on character DELIM at depth 0 only.
-Depth tracks < > and { } nesting."
-  (let ((depth 0) (start 0) (result '()))
-    (dotimes (i (length s))
-      (let ((c (aref s i)))
-        (cond ((memq c '(?< ?{)) (cl-incf depth))
-              ((memq c '(?> ?})) (cl-decf depth))
-              ((and (eq c delim) (= depth 0))
-               (push (substring s start i) result)
-               (setq start (1+ i))))))
-    (push (substring s start) result)
-    (nreverse result)))
-
-
-;;;;; Parsing types
-
-(defmacro et (&rest args)
-  `(et-parse-type ,(if (eq (length args) 1) (car args) (cons #'list args))))
-
-(defun et--type-dnf-to-type (dnf)
-  "Convert structured DNF (output of `et--parse-structure') to an `et-type'."
-  (cl-loop for case in dnf
-           when (cdr case) do (error "Type cannot represent AND: %s" case)
-           for value =
-           (pcase (car case)
-             (`(DT ,name . ,args)
-              (make-et-datatype
-               :name name
-               :args (et--datatype-map-type-args name args #'et-parse-type)))
-             (`(ALIAS ,name . ,args)
-              (make-et-alias :name name :args (mapcar #'et-parse-type args)))
-             (f (error "Invalid type factor: %s" f)))
-           collect (make-et-type-case :value value) into cases
-           finally return (make-et-type :cases cases)))
-
-(defun et-parse-type (spec)
-  "Parse SPEC as an `et-type'."
-  (et--type-dnf-to-type (et--parse-structure spec nil)))
-
-
-;;;;; Parsing matchers
-
-(defmacro et-matcher (generics &rest args)
-  (declare (indent 1))
-  (or (vectorp generics) (error "Write the generics as a vector"))
-  `(et-parse-matcher (backquote ,(if (eq (length args) 1) (car args) args))
-                     (backquote ,(append generics nil))))
-
-(defun et-parse-matcher (spec generics)
-  "Parse SPEC as an `et-matcher' with GENERICS."
-  (make-et-matcher
-   :generics generics
-   :dnf (et-structure-to-matcher-dnf (et--parse-structure spec generics) generics)))
-
-(defun et-structure-to-matcher-dnf (structure generics)
-  (let* ((convert-sub (lambda (sub) (et-structure-to-matcher-dnf sub generics))))
-    (cl-loop for case in structure
-             nconc
-             (cl-loop for factor in case
-                      collect
-                      (pcase factor
-                        (`(DT ,name . ,args)
-                         `(((m:datatype ,name ,@(et--datatype-map-type-args name args convert-sub)))))
-                        (`(ALIAS ,name . ,args)
-                         `(((m:alias ,name ,@(mapcar convert-sub args)))))
-                        (`(GENERIC ,var) `(((m:match ,var))))
-                        (`(SET ,var ,inner-dnf)
-                         `(((m:set ,var ,(et--type-dnf-to-type inner-dnf)))))
-                        (`(MATCHER-DNF ,matcher-dnf) (copy-tree matcher-dnf))
-                        (_ (error "Invalid match factor: %s" factor)))
-                      into and-items
-                      finally return (apply #'et--dnf-and and-items)))))
-
-
-;;;; Printing
-
-(defun et-pp (type)
-  (et-pp-matcher (et-type-to-matcher type)))
-
-(defun et-pp-matcher (matcher)
-  "Format an `et-matcher' into a human-readable string."
-  (let* ((generics (et-matcher-generics matcher))
-         (body (et--format-matcher-dnf (et-matcher-dnf matcher))))
-    (if generics
-        (format "<%s> => %s" (mapconcat #'symbol-name generics ", ") body)
-      body)))
-
-(defun et--format-matcher-dnf (dnf)
-  (if (null dnf) "never"
-    (mapconcat #'et--format-matcher-case dnf " | ")))
-
-(defun et--format-matcher-case (case)
-  (if (null case) "any"
-    (mapconcat #'et--format-matcher-factor case " & ")))
-
-(defun et--format-matcher-factor (factor)
-  (pcase factor
-    (`(m:match ,var) (format "?%s" var))
-    (`(m:set ,var ,type) (format "%s=%s" var (et-pp type)))
-    (`(m:datatype ,name . ,args) (et--format-matcher-dt name args))
-    (_ (error "Invalid match factor: %s" factor))))
-
-(defun et--format-matcher-dt (name args)
-  (pcase (cons name args)
-    (`(:literal ,val)
-     (if (and (symbolp val) val (not (eq val t)))
-         (format "`%s'" val)
-       (prin1-to-string val)))
-
-    (`(:cons ,left-dnf ,right-dnf)
-     (let ((elems (list (et--format-matcher-dnf left-dnf))))
-       (while (pcase right-dnf
-                ((and (pred listp) d)
-                 (when (and (= (length d) 1) (= (length (car d)) 1))
-                   (pcase (car (car d))
-                     (`(m:datatype :cons ,car-dnf ,cdr-dnf)
-                      (nconc elems (list (et--format-matcher-dnf car-dnf)))
-                      (setq right-dnf cdr-dnf)
-                      t))))))
-       (let ((tail-nil-p
-              (and (= (length right-dnf) 1)
-                   (= (length (car right-dnf)) 1)
-                   (equal (car (car right-dnf)) '(m:datatype :literal nil)))))
-         (if tail-nil-p
-             (format "(%s)" (mapconcat #'identity elems " "))
-           (format "(%s . %s)"
-                   (mapconcat #'identity elems " ")
-                   (et--format-matcher-dnf right-dnf))))))
-
-    (_
-     (let* ((name-str (substring (symbol-name name) 1))
-            (strs (et--datatype-map-args
-                   name args
-                   (lambda (arg role)
-                     (if (eq role 'CONST) (format "%s" arg)
-                       (et--format-matcher-dnf arg))))))
-
-       (if (null args) name-str (format "%s<%s>" name-str (string-join strs ", ")))))))
 
 
 ;;; Provide

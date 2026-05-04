@@ -13,6 +13,7 @@
        nil)))
 (et-matcher [] :List<number>)
 
+(et-parse-structure :or :number :List<string>)
 
 (et-alias-expand-as-matcher :Tree '((((m:datatype :number)))) nil)
 
