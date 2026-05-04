@@ -295,15 +295,16 @@ Each match factor is one of:
      (et-alias (et--type-to-matcher-dnf (et-alias-expand value) generics))
      (t (error "Unsupported type case to convert to matcher: %s" value)))))
 
-(defun et--matcher-to-type (matcher)
-  (cl-loop for case in (et-matcher-dnf matcher)
+(defun et--matcher-dnf-to-type (matcher-dnf)
+  (cl-loop for case in matcher-dnf
            collect
            (cl-loop for factor in case
                     collect
                     (pcase factor
-                      (`(m:datatype ,name ,args)
-                       (et-type (et--datatype-map-type-args name args #'et--matcher-to-type)))
-                      (_ (error "Invalid matcher to convert to type")))
+                      (`(m:datatype ,name . ,args)
+                       (let ((args (et--datatype-map-type-args name args #'et--matcher-dnf-to-type)))
+                         (et-type (make-et-datatype :name name :args args))))
+                      (_ (error "Invalid matcher to convert to type: %s" factor)))
                     into new-factors
                     finally return (apply #'et--and new-factors))
            into new-cases
@@ -368,8 +369,13 @@ Each match factor is one of:
   (cl-assert (listp generics))
 
   (if (not (eq mdt-name (et-datatype-name dt)))
-      ;; Different datatypes cannot match
-      `((q:never))
+      ;; Check if the matcher is a pure type, and a subtype
+      (let ((is-subtype
+             (condition-case result (et--matcher-dnf-to-type `(((m:datatype ,mdt-name ,@mdt-args))))
+               (:success (if is-super (et-subtype? (et-type dt) result)
+                           (et-subtype? result (et-type dt))))
+               (error nil))))
+        (if is-subtype `((q:always)) `((q:never))))
 
     ;; Datatypes of the same type should have the same number of arguments
     (cl-assert (eq (length mdt-args) (length (et-datatype-args dt))))
@@ -639,6 +645,7 @@ a valid `et-type-case-value'."
            (cl-loop for b-case in b
                     collect (append a-case b-case))))
 
+
 (defun et--parse-structure (spec generics)
   "Returns a list of lists of FACTOR.
 
@@ -878,12 +885,10 @@ Depth tracks < > and { } nesting."
   (:and :nil :a=t))
 
 
-;; (et--sub-constraints
 (et-sub-match
- (et-matcher [:a]
-   :and :a
-   (:or :cons:ro<string~number> :nil))
- (et :or :nil :cons:ro<string~number>))
+ (et-matcher [:T]
+   (:or :nil&T :cons:ro<T~any>))
+ (et :or :nil :cons:ro<string~number> :cons:ro<number~integer>))
 
 
 ;;; Provide
