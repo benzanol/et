@@ -18,7 +18,7 @@ Our goal is to find a correct $\mathcal{C}$ while doing two things:
 * Types
 $D_T$ is the set of root datatypes, such as numbers, strings, and cons cells. Some datatype, such as cons cells, have arguments. For $D_T$, these arguments have the type $T$. Each argument can be either covariant, contravariant, or isovariant.
 $A_T := \left\{ (\text{id}, t) : t \in T \right\}$ is the set of alias types. The identifier is necessary because we want to be able to treat aliases differently from the baseline type. For example, if we were inferring $\text{List}\langle \text{MyAlias} \rangle$ as a $\text{List}\langle T \rangle$, then we would want to get that $T = \text{MyAlias}$, rather than the expansion of $\text{MyAlias}$.
-$C_{T,\Delta} := \left( \operatorname{datatype} D_T \mid \operatorname{signal} \operatorname{Sig} \mid \operatorname{alias} A_T, \operatorname{bind} (T, \text{var})^\ast, \operatorname{typeof} \text{var}^\ast \right)$.
+$C_{T,\Delta} := \left( \operatorname{datatype} D_T \mid \operatorname{alias} A_T, \operatorname{bind} (T, \text{var})^\ast, \operatorname{typeof} \text{var}^\ast \right)$.
 Let $\phi_{C_{\Delta}} : C_{T,\Delta} \rightarrow \mathcal{P}(R)$ returning the set of values each case represents.
 Each type is a union of cases
 \begin{align*}
@@ -67,13 +67,13 @@ M^{a_1,...,a_n} := (C_M^{a_1,...,a_n})^{\ast}
 \end{align*}
 Each clause is a sequence of match factors, where all factors have to match for the clause to match.
 \begin{align*}
-C_M^{a^\ast} := {F_M^{a^\ast}}^\ast
+C_M^{a^\ast} := (F_M^{a^\ast})^\ast
 \end{align*}
 \begin{align*}
-F_M^{a^\ast} = \operatorname{datatype} D_{M^{a_1,...,a_n}} \mid \operatorname{var} a_i \mid \operatorname{set} (a_i,t)
+F_M^{a_1,...,a_n} = \operatorname{datatype} D_{M^{a_1,...,a_n}} \mid \operatorname{alias} A_{M^{a_1,...,a_n}} \mid \operatorname{var} a_i \mid \operatorname{set} (a_i,t)
 \end{align*}
-
-There are no aliases allowed, which means that we cannot have root-recursive aliases (ie $\text{Rec}\langle T \rangle = T \mid \text{Rec}\langle T \rangle$) in a matcher type. We can still have indirectly recursive types (ie $\text{List}\langle T \rangle = \text{nil} \mid \text{cons}\langle T, \text{List}\langle T \rangle \rangle$).
+The function $\operatorname{M-expand-aliases} : M^{a^\ast} \rightarrow M'^{a^\ast}$ will recursively expand all /root-level/ aliases, where $M'^{a^\ast} = C_M'^{a^\ast}$, $C_M'^{a^\ast} = (F_M'^{a^\ast})^\ast$, and $F_M'^{a^\ast} = \operatorname{datatype} D_{M^{a^\ast}} \mid \operatorname{var} a_i \mid \operatorname{set} (a_i,t)$. Note that the subscript of $D$ is still the standard (not prime) $M^{a^\ast}$, signifying that expanding does not expand the nested aliases. This allows for expanding indirectly recursive types such as $\operatorname{List}$.
+Additionally, in both $\operatorname{sub1}$ and $\operatorname{sup1}$, we will store a scoped mapping of all nested subtypes/supertypes currently being evaluated. If we recursively encounter the same subtype/supertype check, it must be because of an indirectly recursive alias. Thus, whatever constraints are required to satisfy the check will be returned by the parent call, so the child (duplicate) call can safely return an empty list of constraints.
 
 There are three types of matching: In subtype matching, we try to find generics which make the type a subtype of the matcher. In supertype matching, we try to make the type a supertype of the matcher. In equality matching, we try to make the type equal to the matcher.
 
@@ -109,11 +109,11 @@ which is slightly better.
 
 We define
 \begin{align*}
-\text{sub1}(m_{a^\ast}, t) : M^{a^\ast} \times T \rightarrow Q_{a^\ast}^\ast = \bigcup_{c_T \in t} \text{sub2}(m_{a^\ast}, c_T)
+\text{sub1}(m_{a^\ast}, t) : M^{a^\ast} \times T \rightarrow Q_{a^\ast}^\ast = \bigcup_{c_T \in t} \text{sub2}(\operatorname{expand-aliases} m_{a^\ast}, c_T)
 \end{align*}
 The resulting type must satisfy /all/ of the case match constraints, because of the root-level forall statement, hence the union.
 \begin{align*}
-&\operatorname{sub2}(m, c_T) : M^{a^\ast} \times C_T \rightarrow Q_{a^\ast}^\ast \\
+&\operatorname{sub2}(m, c_T) : M'^{a^\ast} \times C_T \rightarrow Q_{a^\ast}^\ast \\
 &= \begin{cases}
 \bigcup_{f \in c_M} \operatorname{sub3}(f, c_T) \text{ for the first matching $c_M$} &(2.1)\; \exists_{c_M} c_M \trianglerighteq c_T \\
 \operatorname{sub1}(m, \operatorname{expand-alias} c_T) &(2.2)\; m \trianglerighteq \operatorname{expand-alias} c_T \\
@@ -122,7 +122,7 @@ The resulting type must satisfy /all/ of the case match constraints, because of 
 \end{align*}
 using
 \begin{align*}
-&\text{sub3}(f, c_T) : F_M^{a_1,...,a_n} \times C_T \rightarrow Q_{a_1,...,a_n}^\ast  \\
+&\text{sub3}(f, c_T) : F_M'^{a_1,...,a_n} \times C_T \rightarrow Q_{a_1,...,a_n}^\ast  \\
 &= \begin{cases} 
 \left\{ \operatorname{Q_{\ge}} a_i, c_T \text{ as type} \right\} & f= \operatorname{match} a_i \\
 \left\{ \operatorname{Q_\ge} a_i, t \right\} & f= \operatorname{set} (a_i,t) \\
@@ -154,11 +154,11 @@ Since matchers do not have aliases, we do not have to do the extra step we had t
 
 We define
 \begin{align*}
-\text{sup1}(m_{a^\ast}, t) : M^{a^\ast} \times T \rightarrow Q_{a^\ast}^\ast = \bigcup_{c_M \in m_{a^\ast}} \text{sup2}(c_M, t)
+\text{sup1}(m_{a^\ast}, t) : M^{a^\ast} \times T \rightarrow Q_{a^\ast}^\ast = \bigcup_{c_M \in \operatorname{expand-aliases} m_{a^\ast}} \text{sup2}(c_M, t)
 \end{align*}
 The resulting type must satisfy /all/ of the case match constraints, because of the root-level forall statement, hence the union.
 \begin{align*}
-&\operatorname{sup2}(c_M, t) : C_M^{a^\ast} \times T \rightarrow Q_{a^\ast}^\ast \\
+&\operatorname{sup2}(c_M, t) : C_M'^{a^\ast} \times T \rightarrow Q_{a^\ast}^\ast \\
 &= \begin{cases}
 \bigcup_{f \in c_M} \operatorname{sup3}(f, c_T) \text{ for the first matching $c_T$} &\exists_{c_T} c_M \trianglelefteq c_T \\
 \left\{ \operatorname{Q_\emptyset} \right\} &\text{otherwise}
@@ -166,7 +166,7 @@ The resulting type must satisfy /all/ of the case match constraints, because of 
 \end{align*}
 using
 \begin{align*}
-&\text{sup3}(f, c_T) : F_M^{a_1,...,a_n} \times C_T \rightarrow Q_{a_1,...,a_n}^\ast  \\
+&\text{sup3}(f, c_T) : F_M'^{a_1,...,a_n} \times C_T \rightarrow Q_{a_1,...,a_n}^\ast  \\
 &= \begin{cases} 
 \left\{ \operatorname{Q_{\le}} a_i, c_T \text{ as type} \right\} & f = \operatorname{match} a_i \\
 \left\{ \operatorname{Q_\le} a_i, t \right\} & f = \operatorname{set} (a_i,t) \\
