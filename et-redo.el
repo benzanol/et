@@ -418,7 +418,7 @@ VALUE is an instance of either `et-datatype', `et-alias', or
              (`(DT ,name . ,args)
               (make-et-datatype
                :name name
-               :args (et--datatype-map-type-args name args #'et-parse-type)))
+               :args (et--datatype-map-type-args name args #'et-structure-to-type)))
              (`(ALIAS ,name . ,args)
               (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))
              (f (error "Invalid type factor: %s" f)))
@@ -781,8 +781,9 @@ values to be the never type."
                   (or (not (eq g gen))
                       (not (memq fact '(q:eq q:leq)))
                       (et-subtype? type guess)))
-         guess (et-never)))
-   when (equal gen-result (et-never))
+         guess 'NEVER))
+   ;; Unlike biggest, the never type actually represents a valid possible answer
+   when (equal gen-result 'NEVER)
    do (cl-return 'NEVER)
    collect gen-result))
 
