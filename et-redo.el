@@ -106,8 +106,8 @@ FUNC is called with one argument, the current argument"
 (defvar et-aliases nil
   "An alist where each entry is (NAME-KEYWORD TYPE-FN PROPS...).
 
-TYPE-FN is a function which takes the alias arguments and returns the
-type to use in place of that alias.")
+TYPE-FN is a function which takes the alias arguments and returns a
+structure which can be parsed by `et-parse-type'.")
 
 (defmacro et-defalias (keyword arglist &rest body)
   "Alias KEYWORD types to return a specific type."
@@ -132,11 +132,14 @@ type to use in place of that alias.")
     (error "Alias %s is already defined, and is read-only" keyword))
   (setf (alist-get keyword et-aliases) (cons function props)))
 
+(defun et--alias-call (name args)
+  "Call the alias expansion function for alias NAME with args ARGS."
+  (let ((type-fn (or (car (alist-get name et-aliases)) (error "Alias %s is not defined" name))))
+    (apply type-fn args)))
+
 (defun et-alias-expand (alias)
-  "Return the type associated with an alias."
-  (let ((type-fn (or (alist-get (et-alias-name alias) et-aliases)
-                     (error "Alias %s is not defined" (et-alias-name alias)))))
-    (et--verify-type (apply type-fn (et-alias-args alias)))))
+  "Expand an alias to a type."
+  (et-parse-type (et--alias-call (et-alias-name alias) (et-alias-args alias))))
 
 (defun et-expand-all-aliases (type)
   (et--verify-type type)
@@ -160,15 +163,19 @@ type to use in place of that alias.")
 ;;;; Built-in aliases
 
 (et-defalias :Boolean ()
-  (et-or (et-literal t) (et-nil)))
+  `(:or :t :nil))
 
 (et-defalias :List (elem)
-  (et-or (et-nil)
-         (et-dt :cons elem (et-alias :List elem))))
+  `(:or :nil (:cons ,elem (:List ,elem))))
+
+(et-defalias :List:ro (elem)
+  `(:or :nil (:cons:ro ,elem (:List:ro ,elem))))
 
 (et-defalias :Tree (elem)
-  (et-or elem
-         (et-dt :List (et-alias :Tree elem))))
+  `(:or ,elem (:List (:Tree ,elem))))
+
+(et-defalias :Tree:ro (elem)
+  `(:or ,elem (:List:ro (:Tree:ro ,elem))))
 
 
 ;;;; Binds
@@ -194,7 +201,8 @@ VALUE is an instance of either `et-datatype', `et-alias', or
   cases)
 
 (cl-defmethod cl-print-object ((type et-type) stream)
-  (princ (et-pp type) stream))
+  ;; (princ (et-pp type) stream)
+  (princ type stream))
 
 (defun et--verify-type (type)
   "Check that a matcher is valid."
@@ -239,7 +247,8 @@ Each match factor is one of:
   generics dnf)
 
 (cl-defmethod cl-print-object ((matcher et-matcher) stream)
-  (princ (et-pp-matcher matcher) stream))
+  ;; (princ (et-pp-matcher matcher) stream)
+  (princ matcher stream))
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
@@ -253,17 +262,15 @@ Each match factor is one of:
         (dolist (factor case)
           (pcase factor
             (`(m:datatype ,(and name (pred keywordp)) . ,args)
-             (let ((roles (et--datatype-arg-roles name args)))
-               ;; Make sure that there are the correct number of arguments
-               (or (eq (length roles) (length args))
-                   (error "Wrong number of arguments for datatype %s" name))
-               ;; Make sure that all arguments have the correct role
-               (cl-loop for role in roles for arg in args
-                        do (pcase role
-                             ('CONST nil)
-                             ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
-                             (_ (error "Unknown role type: %s" role))))))
-
+             (et--datatype-map-args
+              name args
+              (lambda (arg role)
+                (pcase role
+                  ('CONST nil)
+                  ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
+                  (_ (error "Unknown role type: %s" role))))))
+            (`(m:alias ,(pred keywordp) . ,args)
+             (dolist (arg args) (make-et-matcher :generics generics :dnf arg)))
             (`(m:match ,(pred genericp)))
             (`(m:set ,(pred genericp) ,(pred et-type-p)))
             (_ (error "Invalid match factor: %s" factor)))))
@@ -274,26 +281,32 @@ Each match factor is one of:
 
 ;;;; Type to matcher
 
+;; A "type structure" is a list of lists of the following form:
+;; \(`DT' NAME ARGS...)
+;; \(`ALIAS' NAME ARGS...)
+;; \(`GENERIC' VAR)
+;; \(`SET' VAR DNF)
+;; \(`MATCHER-DNF' MATCHER-DNF) - literally just a nested matcher dnf
+
 (defun et-type-to-matcher (type &optional generics)
   (make-et-matcher :dnf (et--type-to-matcher-dnf type generics) :generics generics))
 
 (defun et--type-to-matcher-dnf (type &optional generics)
   (et--verify-type type)
 
-  (cl-loop
-   for case in (et-type-cases type)
-   for value = (et-type-case-value case)
-   nconc
-   (cl-typecase value
-     (et-datatype
-      `(((m:datatype
-          ,(et-datatype-name value)
-          ,@(et--datatype-map-type-args
-             (et-datatype-name value) (et-datatype-args value)
-             (lambda (arg) (et--type-to-matcher-dnf arg generics)))))))
+  (cl-loop for case in (et-type-cases type)
+           for value = (et-type-case-value case)
+           nconc
+           (cl-typecase value
+             (et-datatype
+              `(((m:datatype
+                  ,(et-datatype-name value)
+                  ,@(et--datatype-map-type-args
+                     (et-datatype-name value) (et-datatype-args value)
+                     (lambda (arg) (et--type-to-matcher-dnf arg generics)))))))
 
-     (et-alias (et--type-to-matcher-dnf (et-alias-expand value) generics))
-     (t (error "Unsupported type case to convert to matcher: %s" value)))))
+             (et-alias (et--type-to-matcher-dnf (et-alias-expand value) generics))
+             (t (error "Unsupported type case to convert to matcher: %s" value)))))
 
 (defun et--matcher-dnf-to-type (matcher-dnf)
   (cl-loop for case in matcher-dnf
@@ -309,6 +322,40 @@ Each match factor is one of:
                     finally return (apply #'et--and new-factors))
            into new-cases
            finally return (apply #'et--or new-cases)))
+
+
+;;;; Expand matcher aliaes
+
+(defun et--dnf-and (&rest args)
+  (pcase args
+    ('() (list (list)))
+    (`(,a) a)
+    (`(,a ,b ,c . ,rest) (et--dnf-and a (apply #'et--dnf-and b c rest)))
+    (`(,a ,b)
+     (cl-loop for a-case in a
+              nconc
+              (cl-loop for b-case in b
+                       collect (append a-case b-case))))))
+
+(defun et-alias-expand-as-matcher-dnf (name args generics)
+  "Expand an alias within a matcher."
+  (let* ((s-args (cl-loop for arg in args collect `(:structure (((MATCHER-DNF ,arg))))))
+         (structure (et--parse-structure (et--alias-call name s-args) generics)))
+    (et-structure-to-matcher-dnf structure generics)))
+
+(defun et--matcher-expand-aliases (dnf generics)
+  (cl-loop for case in dnf
+           nconc
+           (cl-loop for factor in case
+                    collect
+                    (pcase factor
+                      (`(m:alias ,name . ,args)
+                       (et--matcher-expand-aliases
+                        (et-alias-expand-as-matcher-dnf name args generics)
+                        generics))
+                      (other (list (list other))))
+                    into and-terms
+                    finally return (apply #'et--dnf-and and-terms))))
 
 
 ;;;; Iso match
@@ -375,7 +422,7 @@ Each match factor is one of:
                (:success (if is-super (et-subtype? (et-type dt) result)
                            (et-subtype? result (et-type dt))))
                (error nil))))
-        (if is-subtype `((q:always)) `((q:never))))
+        (copy-tree (if is-subtype `((q:always)) `((q:never)))))
 
     ;; Datatypes of the same type should have the same number of arguments
     (cl-assert (eq (length mdt-args) (length (et-datatype-args dt))))
@@ -439,8 +486,8 @@ Returns the symbol NEVER if invalid."
                   (or (not (eq g gen))
                       (not (memq fact '(q:eq q:geq)))
                       (et-subtype? guess type)))
-         guess (et-type)))
-   when (equal gen-result (et-type))
+         guess (et-never)))
+   when (equal gen-result (et-never))
    do (cl-return 'NEVER)
    collect gen-result))
 
@@ -464,8 +511,8 @@ values to be the never type."
                   (or (not (eq g gen))
                       (not (memq fact '(q:eq q:leq)))
                       (et-subtype? type guess)))
-         guess 'NEVER))
-   when (equal gen-result 'NEVER)
+         guess (et-never)))
+   when (equal gen-result (et-never))
    do (cl-return 'NEVER)
    collect gen-result))
 
@@ -483,7 +530,7 @@ values to be the never type."
      (et-matcher-generics matcher) constraints)))
 
 
-;;; Helpers
+;;; Utils
 ;;;; Check subtype
 
 (defun et-subtype? (super sub)
@@ -639,71 +686,58 @@ a valid `et-type-case-value'."
 ;;;; Parsing
 ;;;;; Parsing structure
 
-(defun et--dnf-and (a b)
-  (cl-loop for a-case in a
-           nconc
-           (cl-loop for b-case in b
-                    collect (append a-case b-case))))
-
-
 (defun et--parse-structure (spec generics)
-  "Returns a list of lists of FACTOR.
-
-Each FACTOR is one of:
-  \(DT NAME ARGS...)
-  \(ALIAS NAME ARGS...)
-  \(GENERIC VAR)
-  \(SET VAR DNF)
-
-The list of lists is in dnf form."
   (let ((case-fold-search nil)
         (parse (lambda (arg) (et--parse-structure arg generics))))
 
-    (pcase spec
-      ((pred stringp) (et--parse-string spec generics))
-      ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) generics))
+    (copy-tree
+     (pcase spec
+       ((pred stringp) (et--parse-string spec generics))
+       ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) generics))
 
-      (`(:or . ,args) (mapcan parse args))
-      (`(:and . ,args)
-       (or args (error "`and' cannot be empty"))
-       (cl-reduce #'et--dnf-and (mapcar parse args)))
+       (`(:structure ,structure) structure)
 
-      (`(:never) nil)
-      (`(:any) `(((DT :any))))
-      (`(:nil) `(((DT :literal nil))))
-      (`(:t) `(((DT :literal t))))
+       (`(:or . ,args) (mapcan parse args))
+       (`(:and . ,args)
+        (or args (error "`and' cannot be empty"))
+        (cl-reduce #'et--dnf-and (mapcar parse args)))
 
-      (`(:sym ,val)
-       (when (stringp val) (setq val (intern val)))
-       (or (symbolp val) (error "Not a symbol: %s" val))
-       `(((DT :literal ,val))))
+       (`(:never) nil)
+       (`(:any) `(((DT :any))))
+       (`(:nil) `(((DT :literal nil))))
+       (`(:t) `(((DT :literal t))))
 
-      (`(:num ,val)
-       (and (stringp val) (string-match-p "^[0-9][0-9_]*\\.?[0-9_]*$" val)
-            (setq val (string-to-number val)))
-       (or (numberp val) (error "Not a number: %s" val))
-       `(((DT :literal ,val))))
+       (`(:sym ,val)
+        (when (stringp val) (setq val (intern val)))
+        (or (symbolp val) (error "Not a symbol: %s" val))
+        `(((DT :literal ,val))))
 
-      (`(:str ,str)
-       (or (stringp str) (error "Not a string: %s" str))
-       `(((DT :literal ,str))))
+       (`(:num ,val)
+        (and (stringp val) (string-match-p "^[0-9][0-9_]*\\.?[0-9_]*$" val)
+             (setq val (string-to-number val)))
+        (or (numberp val) (error "Not a number: %s" val))
+        `(((DT :literal ,val))))
 
-      (`(:set ,var ,type)
-       (or (memq var generics) (error "Not a generic: %s" var))
-       `(((SET ,var ,(funcall parse type)))))
+       (`(:str ,str)
+        (or (stringp str) (error "Not a string: %s" str))
+        `(((DT :literal ,str))))
 
-      (`(,(and name (pred keywordp)) . ,args)
-       (cond
-        ((memq name generics)
-         (or (null args) (error "Generic type cannot have arguments"))
-         `(((GENERIC ,name))))
+       (`(:set ,var ,type)
+        (or (memq var generics) (error "Not a generic: %s" var))
+        `(((SET ,var ,(funcall parse type)))))
 
-        ((string-match-p "^:[A-Z]" (symbol-name name))
-         `(((ALIAS ,name ,@args))))
+       (`(,(and name (pred keywordp)) . ,args)
+        (cond
+         ((memq name generics)
+          (or (null args) (error "Generic type cannot have arguments"))
+          `(((GENERIC ,name))))
 
-        (t `(((DT ,name ,@args))))))
+         ((string-match-p "^:[A-Z]" (symbol-name name))
+          `(((ALIAS ,name ,@(mapcar parse args)))))
 
-      (_ (error "Invalid type spec: %s" spec)))))
+         (t `(((DT ,name ,@(et--datatype-map-type-args name args parse)))))))
+
+       (_ (error "Invalid type spec: %s" spec))))))
 
 (defun et--parse-string (s generics)
   (when (string-empty-p s) (error "Empty type expression"))
@@ -792,24 +826,28 @@ Depth tracks < > and { } nesting."
 
 (defun et-parse-matcher (spec generics)
   "Parse SPEC as an `et-matcher' with GENERICS."
-  (cl-loop for case in (et--parse-structure spec generics)
-           collect
-           (cl-loop for factor in case
-                    collect
-                    (pcase factor
-                      (`(DT ,name . ,args)
-                       `(m:datatype
-                         ,name
-                         ,@(et--datatype-map-type-args
-                            name args
-                            (lambda (arg) (et-matcher-dnf (et-parse-matcher arg generics))))))
-                      (`(GENERIC ,var) `(m:match ,var))
-                      (`(SET ,var ,inner-dnf)
-                       `(m:set ,var ,(et--type-dnf-to-type inner-dnf)))
-                      (`(ALIAS . ,_) (error "Matchers cannot contain aliases: %s" factor))
-                      (_ (error "Invalid match factor: %s" factor))))
-           into dnf
-           finally return (make-et-matcher :dnf dnf :generics generics)))
+  (make-et-matcher
+   :generics generics
+   :dnf (et-structure-to-matcher-dnf (et--parse-structure spec generics) generics)))
+
+(defun et-structure-to-matcher-dnf (structure generics)
+  (let* ((convert-sub (lambda (sub) (et-structure-to-matcher-dnf sub generics))))
+    (cl-loop for case in structure
+             nconc
+             (cl-loop for factor in case
+                      collect
+                      (pcase factor
+                        (`(DT ,name . ,args)
+                         `(((m:datatype ,name ,@(et--datatype-map-type-args name args convert-sub)))))
+                        (`(ALIAS ,name . ,args)
+                         `(((m:alias ,name ,@(mapcar convert-sub args)))))
+                        (`(GENERIC ,var) `(((m:match ,var))))
+                        (`(SET ,var ,inner-dnf)
+                         `(((m:set ,var ,(et--type-dnf-to-type inner-dnf)))))
+                        (`(MATCHER-DNF ,matcher-dnf) (copy-tree matcher-dnf))
+                        (_ (error "Invalid match factor: %s" factor)))
+                      into and-items
+                      finally return (apply #'et--dnf-and and-items)))))
 
 
 ;;;; Printing
@@ -876,19 +914,6 @@ Depth tracks < > and { } nesting."
                        (et--format-matcher-dnf arg))))))
 
        (if (null args) name-str (format "%s<%s>" name-str (string-join strs ", ")))))))
-
-
-;;; Test
-
-(et-matcher [:a]
-  :or (:and :a :cons:ro<string~number>)
-  (:and :nil :a=t))
-
-
-(et-sub-match
- (et-matcher [:T]
-   (:or :nil&T :cons:ro<T~any>))
- (et :or :nil :cons:ro<string~number> :cons:ro<number~integer>))
 
 
 ;;; Provide
