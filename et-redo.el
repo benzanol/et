@@ -33,7 +33,8 @@
 ;; \(`ALIAS' NAME ARGS...)
 ;; \(`GENERIC' VAR)
 ;; \(`SET' VAR DNF)
-;; \(`MATCHER-DNF' MATCHER-DNF) - literally just a nested matcher dnf
+;; \(`MATCHER-DNF' MATCHER-DNF) - used for matcher alias expansion
+;; \(`TYPE' TYPE) - used for type alias expansion
 
 
 ;;;; Parsing
@@ -319,7 +320,9 @@ structure which can be parsed by `et-parse-type'.")
 
 (defun et-alias-expand (alias)
   "Expand an alias to a type."
-  (et-parse-type (et--alias-call (et-alias-name alias) (et-alias-args alias))))
+  (let ((s-args (cl-loop for type in (et-alias-args alias)
+                         collect `(:structure (((TYPE ,type)))))))
+    (et-parse-type (et--alias-call (et-alias-name alias) s-args))))
 
 (defun et-expand-all-aliases (type)
   (et--verify-type type)
@@ -382,6 +385,9 @@ VALUE is an instance of either `et-datatype', `et-alias', or
 
 (defun et--verify-type (type)
   "Check that a matcher is valid."
+  (unless (et-type-p type)
+    (error "Not a type: %s" type))
+
   (dolist (case (et-type-cases type))
     (let ((val (et-type-case-value case)))
       (if (et-datatype-p val)
@@ -404,7 +410,7 @@ VALUE is an instance of either `et-datatype', `et-alias', or
       (or (et-bind-p b) (error "Expected bind, found %s" b))))
   type)
 
-(advice-add #'make-et-type-case :filter-return #'et--verify-type)
+(advice-add #'make-et-type :filter-return #'et--verify-type)
 
 
 ;;;; To/from structure
@@ -413,16 +419,21 @@ VALUE is an instance of either `et-datatype', `et-alias', or
   "Convert a structure to an `et-type'."
   (cl-loop for case in structure
            when (cdr case) do (error "Type cannot represent AND: %s" case)
-           for value =
-           (pcase (car case)
-             (`(DT ,name . ,args)
-              (make-et-datatype
-               :name name
-               :args (et--datatype-map-type-args name args #'et-structure-to-type)))
-             (`(ALIAS ,name . ,args)
-              (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))
-             (f (error "Invalid type factor: %s" f)))
-           collect (make-et-type-case :value value) into cases
+           for factor = (car case)
+           nconc
+           (if (eq (car factor) 'TYPE)
+               (apply #'list (et-type-cases (cadr factor)))
+             (list (make-et-type-case
+                    :value
+                    (pcase factor
+                      (`(DT ,name . ,args)
+                       (make-et-datatype
+                        :name name
+                        :args (et--datatype-map-type-args name args #'et-structure-to-type)))
+                      (`(ALIAS ,name . ,args)
+                       (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))
+                      (f (error "Invalid type factor: %s" f))))))
+           into cases
            finally return (make-et-type :cases cases)))
 
 (defun et-type-to-structure (type)
@@ -591,21 +602,27 @@ Each match factor is one of:
               (cl-loop for b-case in b
                        collect (append a-case b-case))))))
 
-(defun et-alias-expand-as-matcher-dnf (name args generics)
+(defun et--expand-alias-as-matcher-dnf (name args generics)
   "Expand an alias within a matcher."
   (let* ((s-args (cl-loop for arg in args collect `(:structure (((MATCHER-DNF ,arg))))))
          (structure (et-parse-structure (et--alias-call name s-args) generics)))
     (et-structure-to-matcher-dnf structure generics)))
 
-(defun et--matcher-expand-aliases (dnf generics)
+(defun et--matcher-expand-aliases (matcher)
+  (let ((generics (et-matcher-generics matcher))
+        (dnf (et-matcher-dnf matcher)))
+    (make-et-matcher :dnf (et--matcher-dnf-expand-aliases dnf generics)
+                     :generics generics)))
+
+(defun et--matcher-dnf-expand-aliases (dnf generics)
   (cl-loop for case in dnf
            nconc
            (cl-loop for factor in case
                     collect
                     (pcase factor
                       (`(m:alias ,name . ,args)
-                       (et--matcher-expand-aliases
-                        (et-alias-expand-as-matcher-dnf name args generics)
+                       (et--matcher-dnf-expand-aliases
+                        (et--expand-alias-as-matcher-dnf name args generics)
                         generics))
                       (other (list (list other))))
                     into and-terms
@@ -621,14 +638,28 @@ Each match factor is one of:
 
 ;;;; Sub match
 
-(defun et--sub-constraints (matcher type)
-  (et--verify-matcher matcher)
-  (et--verify-type type)
+(defvar et--sub-constraints-stack nil
+  "Stack of calls to `et--sub-constraints' with the form (MATCHER . TYPE).")
 
-  (cl-loop for case in (et-type-cases type)
-           nconc (et--sub-constraints-2 matcher case) into result
-           finally return (if (member `(q:never) result) `((q:never))
-                            (delete-dups result))))
+(defmacro et--stop-recursion (var elem default &rest body)
+  (declare (indent 3))
+  `(let ((elem ,elem))
+     (if (member elem et--sub-constraints-stack)
+         ,default
+       (let ((,var (cons elem ,var)))
+         ,@body))))
+
+(defun et--sub-constraints (matcher type)
+  (et--stop-recursion et--sub-constraints-stack (cons matcher type) nil
+    (et--verify-matcher matcher)
+    (et--verify-type type)
+
+    (setq matcher (et--matcher-expand-aliases matcher))
+
+    (cl-loop for case in (et-type-cases type)
+             nconc (et--sub-constraints-2 matcher case) into result
+             finally return (if (member `(q:never) result) `((q:never))
+                              (delete-dups result)))))
 
 (defun et--sub-constraints-2 (matcher case)
   (et--verify-matcher matcher)
@@ -713,15 +744,21 @@ Each match factor is one of:
 
 ;;;; Super match
 
-(defun et--super-constraints (matcher type)
-  (et--verify-matcher matcher)
-  (et--verify-type type)
+(defvar et--super-constraints-stack nil
+  "Stack of calls to `et--super-constraints' with form (MATCHER . TYPE).")
 
-  (cl-loop for m-case in (et-matcher-dnf matcher)
-           nconc (et--super-constraints-2 m-case type (et-matcher-generics matcher))
-           into result
-           finally return (if (member `(q:never) result) `((q:never))
-                            (delete-dups result))))
+(defun et--super-constraints (matcher type)
+  (et--stop-recursion et--super-constraints-stack (cons matcher type) nil
+    (et--verify-matcher matcher)
+    (et--verify-type type)
+
+    (setq matcher (et--matcher-expand-aliases matcher))
+
+    (cl-loop for m-case in (et-matcher-dnf matcher)
+             nconc (et--super-constraints-2 m-case type (et-matcher-generics matcher))
+             into result
+             finally return (if (member `(q:never) result) `((q:never))
+                              (delete-dups result)))))
 
 (defun et--super-constraints-2 (match-case type generics)
   (make-et-matcher :dnf (list match-case) :generics generics)
@@ -743,23 +780,24 @@ Each match factor is one of:
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
 Returns the symbol NEVER if invalid."
-  (cl-loop
-   for gen in generics
-   for gen-result =
-   (let ((guess
-          (cl-loop for (fact g type) in constraints
-                   when (and (eq g gen) (memq fact '(q:eq q:leq)))
-                   collect type into types
-                   finally return (apply #'et--and types))))
-     (if (cl-loop for (fact g type) in constraints
-                  always
-                  (or (not (eq g gen))
-                      (not (memq fact '(q:eq q:geq)))
-                      (et-subtype? guess type)))
-         guess (et-never)))
-   when (equal gen-result (et-never))
-   do (cl-return 'NEVER)
-   collect gen-result))
+  (if (member '(q:never) constraints) 'INVALID
+    (cl-loop
+     for gen in generics
+     for gen-result =
+     (let ((guess
+            (cl-loop for (fact g type) in constraints
+                     when (and (eq g gen) (memq fact '(q:eq q:leq)))
+                     collect type into types
+                     finally return (apply #'et--and types))))
+       (if (cl-loop for (fact g type) in constraints
+                    always
+                    (or (not (eq g gen))
+                        (not (memq fact '(q:eq q:geq)))
+                        (et-subtype? guess type)))
+           guess (et-never)))
+     when (equal gen-result (et-never))
+     do (cl-return 'INVALID)
+     collect gen-result)))
 
 (defun et--match-satisfy-constraints-smallest (generics constraints)
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
@@ -768,24 +806,25 @@ Returns the symbol NEVER if invalid.
 
 However, unlike `et--match-satisfy-constraints-biggest', this allows
 values to be the never type."
-  (cl-loop
-   for gen in generics
-   for gen-result =
-   (let ((guess
-          (cl-loop for (fact g type) in constraints
-                   when (and (eq g gen) (memq fact '(q:eq q:geq)))
-                   collect type into types
-                   finally return (apply #'et-or types))))
-     (if (cl-loop for (fact g type) in constraints
-                  always
-                  (or (not (eq g gen))
-                      (not (memq fact '(q:eq q:leq)))
-                      (et-subtype? type guess)))
-         guess 'NEVER))
-   ;; Unlike biggest, the never type actually represents a valid possible answer
-   when (equal gen-result 'NEVER)
-   do (cl-return 'NEVER)
-   collect gen-result))
+  (if (member '(q:never) constraints) 'INVALID
+    (cl-loop
+     for gen in generics
+     for gen-result =
+     (let ((guess
+            (cl-loop for (fact g type) in constraints
+                     when (and (eq g gen) (memq fact '(q:eq q:geq)))
+                     collect type into types
+                     finally return (apply #'et-or types))))
+       (if (cl-loop for (fact g type) in constraints
+                    always
+                    (or (not (eq g gen))
+                        (not (memq fact '(q:eq q:leq)))
+                        (et-subtype? type guess)))
+           guess 'INVALID))
+     ;; Unlike biggest, the never type actually represents a valid possible answer
+     when (equal gen-result 'INVALID)
+     do (cl-return 'INVALID)
+     collect gen-result)))
 
 
 ;;;; Putting it together
