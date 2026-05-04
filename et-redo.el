@@ -108,7 +108,7 @@ priority."
 
         (t (et-q (((DT ,name ,@(et--datatype-map-type-args name args parse))))))))
 
-      (_ (error "Invalid type spec: %s" spec)))))
+      (_ (error "Invalid structure spec: %s" spec)))))
 
 (defun et--parse-string (s generics)
   (when (string-empty-p s) (error "Empty type expression"))
@@ -137,7 +137,7 @@ priority."
       (et-parse-structure (list :set var expr) generics)))
 
    ;; Name or Name<...>
-   ((string-match "^\\([A-Za-z][a-zA-Z0-9]*\\(?::[rw]o\\)?\\)\\(?:<\\(.*\\)>\\)?$" s)
+   ((string-match "^\\([A-Za-z][a-zA-Z0-9:]*\\)\\(?:<\\(.*\\)>\\)?$" s)
     (let* ((kwd (intern (concat ":" (match-string 1 s))))
            (inner (match-string 2 s))
            (arg-strs (when inner (et--split-at-depth inner ?~))))
@@ -366,17 +366,25 @@ structure which can be parsed by `et-parse-type'.")
 (et-defalias :Boolean ()
   (et-q (:or :t :nil)))
 
-(et-defalias :List (elem)
-  (et-q (:or :nil (:cons ,elem (:List ,elem)))))
+(et-defalias :List (elem) (et-q (:or :nil (:cons ,elem (:List ,elem)))))
+(et-defalias :List:ro (elem) (et-q (:or :nil (:cons:ro ,elem (:List:ro ,elem)))))
+(et-defalias :List:wo (elem) (et-q (:or :nil (:cons:wo ,elem (:List:wo ,elem)))))
 
-(et-defalias :List:ro (elem)
-  (et-q (:or :nil (:cons:ro ,elem (:List:ro ,elem)))))
+(et-defalias :Tree (elem) (et-q (:or ,elem (:List (:Tree ,elem)))))
+(et-defalias :Tree:ro (elem) (et-q (:or ,elem (:List:ro (:Tree:ro ,elem)))))
+(et-defalias :Tree:wo (elem) (et-q (:or ,elem (:List:wo (:Tree:wo ,elem)))))
 
-(et-defalias :Tree (elem)
-  (et-q (:or ,elem (:List (:Tree ,elem)))))
+(et-defalias :Alist (key val) (et-q (:List (:cons ,key ,val))))
+(et-defalias :Alist:ro (key val) (et-q (:List:ro (:cons:ro ,key ,val))))
+(et-defalias :Alist:ao (key val) (et-q (:List:ro (:cons:wo ,key ,val))))
 
-(et-defalias :Tree:ro (elem)
-  (et-q (:or ,elem (:List:ro (:Tree:ro ,elem)))))
+(defun et--expand-tuple (cons args)
+  (if (null args) :nil
+    (et-q (,cons ,(car args) ,(et--expand-tuple cons (cdr args))))))
+
+(et-defalias :Tuple (&rest args) (et--expand-tuple :cons args))
+(et-defalias :Tuple:ro (&rest args) (et--expand-tuple :cons:ro args))
+(et-defalias :Tuple:wo (&rest args) (et--expand-tuple :cons:wo args))
 
 
 ;;;; Binds
@@ -481,14 +489,14 @@ VALUE is an instance of either `et-datatype', `et-alias', or
   (et-structure-to-type (et-parse-structure spec nil)))
 
 (defmacro et (&rest args)
-  `(et-parse-type ,(if (eq (length args) 1) (car args) (cons #'list args))))
+  `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
 
 
 (defun et-pp (type)
   (et--format-structure (et-type-to-structure type)))
 
 (cl-defmethod cl-print-object ((type et-type) stream)
-  (princ (et-pp type) stream))
+  (princ (format "#<%s>" (et-pp type)) stream))
 
 
 ;;; Matcher
@@ -585,8 +593,8 @@ Each match factor is one of:
 (defmacro et-matcher (generics &rest args)
   (declare (indent 1))
   (or (vectorp generics) (error "Write the generics as a vector"))
-  `(et-parse-matcher (backquote ,(if (eq (length args) 1) (car args) args))
-                     (backquote ,(append generics nil))))
+  `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
+                     (et-q ,(append generics nil))))
 
 (defun et-parse-matcher (spec generics)
   "Parse SPEC as an `et-matcher' with GENERICS."
@@ -599,12 +607,10 @@ Each match factor is one of:
   "Format an `et-matcher' into a human-readable string."
   (let* ((generics (et-matcher-generics matcher))
          (body (et--format-structure (et-matcher-to-structure matcher))))
-    (if generics
-        (format "<%s> => %s" (mapconcat #'symbol-name generics ", ") body)
-      body)))
+    (format "[%s] %s" (mapconcat #'symbol-name generics " ") body)))
 
 (cl-defmethod cl-print-object ((matcher et-matcher) stream)
-  (princ (et-pp-matcher matcher) stream))
+  (princ (format "#<%s>" (et-pp-matcher matcher)) stream))
 
 
 ;;;; Expand matcher aliaes
