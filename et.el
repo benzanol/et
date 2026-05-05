@@ -176,6 +176,8 @@ the two args respectively."
   (cl-flet ((valid-if (valid) (if valid nil (et-ql (q:never)))))
 
     (pcase (list sub-name super-name)
+      (`(,_ :any) nil)
+
       ('(:plist :plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
                 for sub-val = (plist-get sub-args prop)
@@ -190,7 +192,7 @@ the two args respectively."
            (:number (valid-if (numberp val)))
            (:string (valid-if (stringp val)))
            (:symbol (valid-if (symbolp val)))
-           (:cons
+           ((or :cons :cons:rr :cons:ww :cons:rw :cons:wr)
             (if (not (consp val)) (valid-if nil)
               (nconc (funcall co-literal (car val) (car super-args))
                      (funcall co-literal (cdr val) (cadr super-args)))))
@@ -729,11 +731,9 @@ Depth tracks < > and { } nesting."
 (defun et--format-structure-dt (name args)
   (pcase (cons name args)
     (`(:literal ,val)
-     (if (and (symbolp val) val (not (eq val t)))
-         (format "`%s'" val)
-       (prin1-to-string val)))
+     (format "`%s'" (prin1-to-string val)))
 
-    (`(:cons ,left-sub ,right-sub)
+    ((and `(:cons ,left-sub ,right-sub) (guard nil))
      (let ((elems (list (et--format-structure left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
@@ -920,19 +920,17 @@ Depth tracks < > and { } nesting."
   (cl-assert (et-datatype-p sub))
   (cl-assert (et-datatype-p super))
 
-  (if (eq (et-datatype-name super) :any) t
+  (cl-flet ((valid-if (valid) (if valid nil (et-ql (q:never)))))
+    (let ((constraints
+           (et--datatype-constraints
+            (et-datatype-name sub) (et-datatype-args sub)
+            (et-datatype-name super) (et-datatype-args super)
+            (lambda (a b) (valid-if (et-subtype? a b)))
+            (lambda (a b) (valid-if (et-subtype? b a)))
+            (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
+            (lambda (literal b) (valid-if (and (et-subtype? (et-dt :literal literal) b)))))))
 
-    (cl-flet ((valid-if (valid) (if valid nil (et-ql (q:never)))))
-      (let ((constraints
-             (et--datatype-constraints
-              (et-datatype-name sub) (et-datatype-args sub)
-              (et-datatype-name super) (et-datatype-args super)
-              (lambda (a b) (valid-if (et-subtype? a b)))
-              (lambda (a b) (valid-if (et-subtype? b a)))
-              (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
-              (lambda (literal b) (valid-if (and (et-subtype? (et-dt :literal literal) b)))))))
-
-        (not (member '(q:never) constraints))))))
+      (not (member '(q:never) constraints)))))
 
 (defun et-subtype? (sub super)
   (et--verify-type sub)
