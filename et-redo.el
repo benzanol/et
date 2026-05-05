@@ -299,7 +299,9 @@ structure which can be parsed by `et-parse-type'.")
 
 ;;;; Binds
 
-(cl-defstruct et-bind "A variable bind factor of an `et-type'." name args)
+(cl-defstruct et-bind
+  "A variable bind factor of an `et-type'."
+  var type)
 
 
 ;;;; Type struct
@@ -720,6 +722,7 @@ Depth tracks < > and { } nesting."
     (`(SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
     (`(DT ,name . ,args) (et--format-structure-dt name args))
     (`(ALIAS ,name . ,args) (et--format-structure-alias name args))
+    (`(BIND ,var ,type-struct) (format "{%s : %s}" var (et--format-structure type-struct)))
     (_ (error "Invalid structure factor: %s" factor))))
 
 (defun et--format-structure-dt (name args)
@@ -770,13 +773,21 @@ Depth tracks < > and { } nesting."
 
 (defun et-structure-to-type (structure)
   "Convert a structure to an `et-type'."
-  (cl-loop for case in structure
-           when (cdr case) do (error "Type cannot represent AND: %s" case)
-           for factor = (car case)
+  (cl-loop for case-struct in structure
+           for (values . binds) =
+           (cl-loop for f in case-struct
+                    if (eq (car f) 'BIND)
+                    collect (make-et-bind :var (cadr f) :type (et-structure-to-type (caddr f))) into binds
+                    else collect f into values
+                    finally return (cons values binds))
+           when (null values) do (error "Case value missing: %s" case-struct)
+           when (cdr values) do (error "Case cannot intersect multiple values: %s" case-struct)
+           for factor = (car case-struct)
            nconc
            (if (eq (car factor) 'TYPE)
                (apply #'list (et-type-cases (cadr factor)))
              (list (make-et-type-case
+                    :binds binds
                     :value
                     (pcase factor
                       (`(DT ,name . ,args)
@@ -795,18 +806,22 @@ Depth tracks < > and { } nesting."
   (cl-loop for case in (et-type-cases type)
            for value = (et-type-case-value case)
            collect
-           (list
+           (cons
             (cl-typecase value
               (et-datatype
-               (et-q (DT ,(et-datatype-name value)
-                         ,@(et--datatype-map-type-args
-                            (et-datatype-name value)
-                            (et-datatype-args value)
-                            #'et-type-to-structure))))
+               (et-ql DT ,(et-datatype-name value)
+                      ,@(et--datatype-map-type-args
+                         (et-datatype-name value)
+                         (et-datatype-args value)
+                         #'et-type-to-structure)))
               (et-alias
-               (et-q (ALIAS ,(et-alias-name value)
-                            ,@(mapcar #'et-type-to-structure (et-alias-args value)))))
-              (t (error "Unsupported type case value: %s" value))))))
+               (et-ql ALIAS ,(et-alias-name value)
+                      ,@(mapcar #'et-type-to-structure (et-alias-args value))))
+              (t (error "Unsupported type case value: %s" value)))
+
+            (cl-loop for bind in (et-type-case-binds case)
+                     collect (et-ql BIND ,(et-bind-var bind)
+                                    ,(et-type-to-structure (et-bind-type bind)))))))
 
 
 ;;;; Parse/print type
