@@ -1,0 +1,7 @@
+* et
+
+The goal of this project is to bring a complete type system to Emacs lisp in order to allow for static type checking.
+
+This project is very much a work in progress, and many core features of the design have yet to be implemented.
+
+Please consult [[design.org]] for a mathematical spec of the language.
