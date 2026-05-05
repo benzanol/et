@@ -22,6 +22,7 @@
 ;;; Commentary:
 ;;; Code:
 
+(require 'flycheck)
 (require 'seq)
 
 
@@ -30,7 +31,7 @@
 
 
 ;;; ============================================================
-;;; Utils
+;;; Helpers
 ;;;; Quote macro
 
 (eval-and-compile
@@ -1163,6 +1164,228 @@ values to be the never type."
 
 
 ;;; ============================================================
+;;; Checking
+;;;; Path
+
+(defvar et--current-expr nil)
+(defvar et--current-path nil)
+
+(defmacro et-with-path (path &rest body)
+  (declare (indent 1))
+  (let ((path-var (make-symbol "path"))
+        (parent-var (make-symbol "parent")))
+    `(let* ((,path-var ,path)
+            (et--current-path (append et--current-path ,path-var))
+            (,parent-var (when ,path-var (et--traverse-tree (butlast ,path-var) et--current-expr)))
+            (et--current-expr (if ,path-var (nth (car (last ,path-var)) ,parent-var)
+                                et--current-expr)))
+       (unwind-protect (progn ,@body)
+         (when ,path-var
+           (setf (nth (car (last ,path-var)) ,parent-var)
+                 et--current-expr))))))
+
+(defun et--traverse-tree (path tree)
+  (if (null path) tree
+    (when (>= (car path) (length tree))
+      (error "Index out of bounds: %s %s" (car path) tree))
+    (et--traverse-tree (cdr path) (nth (car path) tree))))
+
+
+;;;; Binds
+
+(defvar et--binds nil)
+(defvar et--narrow-binds nil)
+
+(defun et--get-var-bind (var)
+  (when-let ((base-bind (assoc var et--binds)))
+    (or (alist-get base-bind et--narrow-binds)
+        (cdr base-bind))))
+
+(defmacro et-with-binds (binds &rest body)
+  (declare (indent 1))
+  `(let ((et--binds (append ,binds et--binds)))
+     ,@body))
+
+(defmacro et-with-narrow-binds (binds &rest body)
+  (declare (indent 1))
+  `(let ((et--narrow-binds (append ,binds et--narrow-binds)))
+     ,@body))
+
+(defun et-pp-binds (binds &optional sep)
+  (cl-loop for (var . type) in binds
+           collect (format "%s: %s" (if (symbolp var) var (car var)) (et-pp type)) into strs
+           finally return (string-join strs (or sep "\\n"))))
+
+
+;;;; Error/warn
+
+(defun et--error-advice (error string &rest args)
+  (if et--current-path
+      (apply error (format "%s\0;;flycheck-path:%s" string et--current-path)
+             args)
+    (apply error string args)))
+
+(advice-add #'error :around #'et--error-advice)
+
+(defun et-warn (path msg &rest args)
+  (setq msg (format "%s\0;;flycheck-path:%s" msg (append et--current-path path)))
+  (apply #'byte-compile-warn msg args))
+
+(defvar et-display-narrows nil
+  "Whether to display narrowed types on if/when/etc blocks.")
+
+(defun et-warn-narrows (&rest types)
+  "Display a list of binds to the user at path=(0).
+
+TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
+
+  (when et-display-narrows
+    (cl-loop for (fmt type) on types by #'cddr
+             for binds = (et-pp type) ; TODO: display just binds instead of whole type
+             when binds
+             collect (format fmt (et-pp-binds binds)) into strs
+             finally do
+             (when strs
+               (et-warn '(0) (string-join strs "\\n"))))))
+
+
+;;;; Define checker
+
+(defmacro et-define-checker (expr-type arglist &rest body)
+  (declare (indent 2))
+  (cl-assert (symbolp expr-type))
+  (cl-assert (listp arglist))
+
+  `(prog1 ',expr-type
+     (setf (get ',expr-type 'et-checker)
+           (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type))))))
+
+(defun et--type-checker-body (arglist-matcher return-type-fn exprs)
+  (let* ((arg-types (cl-loop for _expr in exprs
+                             for idx upfrom 1
+                             collect (et-check-path idx)))
+         (args-type (apply #'et-alias :Tuple:r arg-types))
+         (result (et--sub-match arglist-matcher args-type)))
+    (when (eq result 'INVALID)
+      (error "Invalid arguments! Expected %s, got %s"
+             (et-pp-matcher arglist-matcher) (et-pp args-type)))
+
+    (et-parse-type (apply return-type-fn
+                          (cl-loop for type in result
+                                   collect (et-ql :structure (((TYPE ,type)))))))))
+
+(defmacro et-define-type-checker (func &rest arguments)
+  "Define a checker using argument and return types.
+
+FUNC is the function to define the checker for.
+
+GENERICS is a vector of symbols, representing generic variables. Each
+generic variable should be uppercase.
+
+\(fn FUNC [GENERICS] ARGS... RETURN)"
+  (declare (indent 2))
+  (cl-assert (symbolp func))
+
+  (let ((generics
+         (when (vectorp (car arguments))
+           ;; Make sure the generics have the correct format
+           (cl-loop for var across (car arguments)
+                    do (or (keywordp var) (error "Generics vector should contain symbols"))
+                    do (or (let ((case-fold-search nil))
+                             (string-match-p "^:[A-Z]" (format "%s" var)))
+                           (error "Var should start with an uppercase letter")))
+           (append (pop arguments) nil))))
+    (unless (eq (length arguments) 2)
+      (error "Incorrect number of arguments"))
+
+    `(et-define-checker ,func (&rest exprs)
+       (et--type-checker-body ,(et-parse-matcher (car arguments) generics)
+                              ,(cadr arguments)
+                              exprs))))
+
+
+;;;; Check
+
+(defun et-check ()
+  "Returns the type of the current expr, if typechecking did not error."
+  (et--verify-type
+   (pcase et--current-expr
+     (`(,func . ,args)
+      (or (apply (or (get func 'et-checker) (error "No checker for function: %s" func))
+                 args)
+          (error "Checker for %s returned nil" func)))
+
+     ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
+
+      ;; Todo: fix
+      ;; Allow for type narrowing on variable names.
+      ;; For example, if a: Number | nil,
+      ;; then return the type Number&{a: Number} | nil
+      ;; (let* ((var-type (or (et--get-var-bind sym) (error "Free variable: %s" sym)))
+      ;;        (varspec (assoc sym et--binds)))
+      ;;   (cl-loop for case in (et-type-cases var-type)
+      ;;            for case-type = (make-et-type :cases (list case))
+      ;;            collect
+      ;;            (et--intersect-binds case-type (list (cons varspec case-type)))
+      ;;            into case-types
+      ;;            finally return (apply #'et-raw-or case-types)))
+      (or (et--get-var-bind sym) (error "Free variable: %s" sym)))
+
+     (expr (et-dt :literal expr)))))
+
+
+;;;; Check position helpers
+
+(defsubst et-check-path (&rest path)
+  (et-with-path path (et-check)))
+
+(defun et-check-tail (start)
+  (cl-loop for idx upfrom start below (length et--current-expr)
+           for type = (et-with-path (list idx) (et-check))
+           finally return (or type (et-dt :literal nil))))
+
+
+;;;; Root level functions
+
+(defmacro et--root (expr &rest body)
+  (declare (indent 1))
+  `(progn
+     (cl-assert (null et--current-expr))
+     (cl-assert (null et--current-path))
+     (cl-assert (null et--binds))
+     (let ((et--current-expr ,expr))
+       ,@body)))
+
+(defmacro et-root-block (&rest body)
+  (et--root (cons #'progn body)
+    (et-check-tail 1)
+    et--current-expr))
+
+(defun et-root-check (expr)
+  (et--root expr (et-check)))
+
+(defmacro et-root-check-call (func &rest arg-types)
+  (let* ((vars (cl-loop for type in arg-types
+                        for idx upfrom 1
+                        collect (cons (intern (format "var%s" idx))
+                                      (et-parse-type type)))))
+    `(et--root ,(list '\` (cons func (mapcar #'car vars)))
+       (et-with-binds ,(list '\` vars)
+         (et-check)))))
+
+(defun et-resolve (type)
+  (setq type (et-parse-type type))
+
+  (let ((expr-type (et-check)))
+    (unless (et-subtype? expr-type type)
+      (error "Type %s is not assignable to type %s"
+             (et-pp expr-type) (et-pp type)))))
+
+(defun et-root-resolve (type expr)
+  (et--root expr (et-resolve type)))
+
+
+;;; ============================================================
 ;;; Application
 ;;;; Built-in aliases
 
@@ -1184,6 +1407,98 @@ values to be the never type."
 
 (et-defalias :Tuple (&rest args) (et--expand-tuple :cons args))
 (et-defalias :Tuple:r (&rest args) (et--expand-tuple :cons:rr args))
+
+
+;;; ============================================================
+;;; Utils
+;;;; Flycheck move error
+
+(defun et--flycheck-reposition-error (err)
+  "If ERR has a ;;flycheck-path: sentinel, reposition it."
+  (with-demoted-errors "Error in reposition: %s"
+    (when-let* ((msg (flycheck-error-message err))
+                (match (string-match "\0;;flycheck-path:\\((.*)\\)" msg))
+                (path (car (read-from-string (match-string 1 msg))))
+                (prev-start t))
+
+      ;; Strip the sentinel from the displayed message
+      (setf (flycheck-error-message err)
+            (replace-regexp-in-string "\\\\n" "\n" (substring msg 0 match)))
+      (if (eq (flycheck-error-level err) 'warning)
+          (setf (flycheck-error-level err) 'info))
+
+      ;; Find the macro call in the buffer and walk the path
+      (with-current-buffer (flycheck-error-buffer err)
+        (save-excursion
+          (goto-char (flycheck-error-pos err)) ; start near the error
+          (beginning-of-defun)
+
+          (dolist (idx path)
+            (cl-assert (looking-at-p "[[(]"))
+            (forward-char 1)
+            (dotimes (_ idx) (forward-sexp))
+            (forward-sexp) (backward-sexp))
+
+          (setf (flycheck-error-line err) (line-number-at-pos))
+          (setf (flycheck-error-column err) (1+ (current-column)))
+          (forward-sexp)
+          (setf (flycheck-error-end-line err) (line-number-at-pos))
+          (setf (flycheck-error-end-column err) (1+ (current-column))))))
+    ;; return nil so other handlers still run
+    nil))
+
+(add-hook 'flycheck-process-error-functions #'et--flycheck-reposition-error)
+
+
+;;;; Assert at compile type
+
+(defmacro et-assert-error (expr)
+  (condition-case _err (eval expr)
+    (error nil)
+    (:success (error "Expected error"))))
+
+(defmacro et-assert-success (expr)
+  (ignore (eval expr)))
+
+(defmacro et-assert-equal (expr1 expr2)
+  (declare (indent 1))
+  (let ((v1 (eval expr1))
+        (v2 (eval expr2)))
+    (or (equal v1 v2) (error "Expressions not equal: \"%s\" \"%s\"" v1 v2))))
+
+(defmacro et-assert-true (expr)
+  (or (eval expr) (error "Returned nil")))
+
+(defmacro et-assert-nil (expr)
+  (when (eval expr) (error "Returned non-nil")))
+
+
+;;;; Testing checkers
+
+(et-define-checker :assert-subtype (_expr type)
+  (let ((expr-type (et-check-path 1)))
+    (or (et-subtype? expr-type (eval type))
+        (error "Not subtype: %s" (et-pp expr-type)))
+    (setq et--current-expr "dummy")
+    (et-dt :literal nil)))
+
+(et-define-checker :assert-error (_expr)
+  (condition-case _err (et-check-path 1)
+    (error (setq et--current-expr nil) (et-dt :literal nil))
+    (:success (error "Didn't error"))))
+
+(et-define-checker :typeof (_expr)
+  (et-warn '(0) "%s" (et-pp (et-check-path 1)))
+  (setq et--current-expr nil)
+  (et-dt :literal nil))
+
+(et-define-checker :narrows ()
+  (cl-loop for ((var . _) . type) in (reverse et--narrow-binds)
+           collect (format "%s: %s" var (et-pp type)) into strs
+           finally do
+           (et-warn '(0) "%s" (string-join strs "\\n")))
+  (setq et--current-expr nil)
+  (et-dt :literal nil))
 
 
 ;;; ============================================================
