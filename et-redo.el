@@ -180,6 +180,7 @@ cases where neither is a subset of the other."
       (`(:literal ,_)
        (let ((val (car sub-args)))
          (pcase super-name
+           (:literal (valid-if (eq val (car super-args))))
            (:integer (valid-if (integerp val)))
            (:number (valid-if (numberp val)))
            (:string (valid-if (stringp val)))
@@ -621,8 +622,9 @@ values to be the never type."
 ;; A "type structure" is a list of lists of the following form:
 ;; \(`DT' NAME ARGS...)
 ;; \(`ALIAS' NAME ARGS...)
-;; \(`GENERIC' VAR)
-;; \(`SET' VAR DNF)
+;; \(`BIND' VAR TYPE) - only valid in types
+;; \(`GENERIC' VAR) - only valid in matchers
+;; \(`SET' VAR DNF) - only valid in matchers
 ;; \(`MATCHER-DNF' MATCHER-DNF) - used for matcher alias expansion
 ;; \(`TYPE' TYPE) - used for type alias expansion
 
@@ -635,6 +637,8 @@ values to be the never type."
       ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) generics))
 
       (`(:structure ,structure) structure)
+
+      (`(:bind ,var ,type) (et-q (((BIND ,var ,(et-parse-structure type generics))))))
 
       (`(:or . ,args) (mapcan parse args))
       (`(:and . ,args)
@@ -1011,20 +1015,18 @@ Depth tracks < > and { } nesting."
                       (error "`et--and' determined incorrect intersection")))
                 result)))))
 
-(defun et--intersect-cases (a b)
-  "Return a list of type cases resulting from intersecting cases A and B."
+(defun et--intersect-cases (a-case b-case)
+  "Return a list of type cases resulting from intersecting cases a and b."
 
   ;; TODO: binds
 
-  (if (equal a b) (list a)
-
-    (setq a (et-type-case-value a))
-    (setq b (et-type-case-value b))
+  (let* ((a (et-type-case-value a-case))
+         (b (et-type-case-value b-case)))
     (cond
-     ((et-alias-p a) (cl-loop for a-case in (et-alias-expand a)
-                              nconc (et--intersect-cases a-case b)))
-     ((et-alias-p b) (cl-loop for b-case in (et-alias-expand b)
-                              nconc (et--intersect-cases a b-case)))
+     ((et-alias-p a) (cl-loop for exp-case in (et-type-cases (et-alias-expand a))
+                              nconc (et--intersect-cases exp-case b-case)))
+     ((et-alias-p b) (cl-loop for exp-case in (et-type-cases (et-alias-expand b))
+                              nconc (et--intersect-cases a-case exp-case)))
      ((and (et-datatype-p a) (et-datatype-p b))
       (let ((dt (et--intersect-datatypes a b)))
         (if (eq dt 'INVALID) nil
