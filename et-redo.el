@@ -912,7 +912,7 @@ Depth tracks < > and { } nesting."
 
 
 ;;; ============================================================
-;;; Helpers
+;;; Features
 ;;;; Subtype
 
 (defun et-datatype-subtype? (sub super)
@@ -937,18 +937,20 @@ Depth tracks < > and { } nesting."
   (et--verify-type sub)
   (et--verify-type super)
 
-  (setq sub (et-expand-all-aliases sub))
-  (setq super (et-expand-all-aliases super))
+  (if (equal sub super) t ; Not strictly necessary, but improves efficiency
 
-  (cl-loop for sub-case in (et-type-cases sub)
-           for sub-val = (et-type-case-value sub-case)
-           unless (et-datatype-p sub-val) do (error "Invalid case type")
-           always
-           (cl-loop for super-case in (et-type-cases super)
-                    for super-val = (et-type-case-value super-case)
-                    unless (et-datatype-p super-val) do (error "Invalid case type")
-                    thereis
-                    (et-datatype-subtype? sub-val super-val))))
+    (setq sub (et-expand-all-aliases sub))
+    (setq super (et-expand-all-aliases super))
+
+    (cl-loop for sub-case in (et-type-cases sub)
+             for sub-val = (et-type-case-value sub-case)
+             unless (et-datatype-p sub-val) do (error "Invalid case type")
+             always
+             (cl-loop for super-case in (et-type-cases super)
+                      for super-val = (et-type-case-value super-case)
+                      unless (et-datatype-p super-val) do (error "Invalid case type")
+                      thereis
+                      (et-datatype-subtype? sub-val super-val)))))
 
 
 ;;;; Simplify
@@ -998,22 +1000,55 @@ Depth tracks < > and { } nesting."
                       (error "`et--and' determined incorrect intersection")))
                 result)))))
 
+(defun et--intersect-binds (a-binds b-binds)
+  "Create a list of binds which are true if both A-BINDS and B-BINDS are.
+
+We cannot necessarily just apply `et--and' to the binds of each bound
+variable, because `et--and' garuntees that the result will be SMALLER
+than the intersection, but for the bind to be satisfied it must be
+LARGER than the intersection of the binds.
+
+For now, we are just returning the smallest bind found in the sequence,
+or if they are not ordered, then the first one."
+
+  (cl-loop for (_var . binds) in (seq-group-by #'et-bind-var (append a-binds b-binds))
+           collect
+           (if (null (cdr binds)) (car binds)
+             (cl-loop for bind in binds
+                      when (cl-loop for other in binds
+                                    always (et-subtype? (et-bind-type bind) (et-bind-type other)))
+                      return bind
+                      finally return (car binds)))))
+
 (defun et--intersect-cases (a-case b-case)
   "Return a list of cases resulting from intersecting A-CASE and B-CASE."
   (cl-assert (et-type-case-p a-case))
   (cl-assert (et-type-case-p b-case))
 
   (let* ((a (et-type-case-value a-case))
-         (b (et-type-case-value b-case)))
+         (b (et-type-case-value b-case))
+         (sub (cond ((et-subtype? (et-type a-case) (et-type b-case)) a)
+                    ((et-subtype? (et-type b-case) (et-type a-case)) b))))
+
     (cond
+     (sub
+      (list (make-et-type-case
+             :value sub
+             :binds (et--intersect-binds (et-type-case-binds a-case)
+                                         (et-type-case-binds b-case)))))
+
      ((et-alias-p a) (cl-loop for exp-case in (et-type-cases (et-alias-expand a))
                               nconc (et--intersect-cases exp-case b-case)))
      ((et-alias-p b) (cl-loop for exp-case in (et-type-cases (et-alias-expand b))
                               nconc (et--intersect-cases a-case exp-case)))
+
      ((and (et-datatype-p a) (et-datatype-p b))
       (let ((dt (et--intersect-datatypes a b)))
         (if (eq dt 'INVALID) nil
-          (list (make-et-type-case :value dt)))))
+          (list (make-et-type-case
+                 :binds (et--intersect-binds (et-type-case-binds a-case)
+                                             (et-type-case-binds b-case))
+                 :value dt)))))
 
      (t (error "Signals not yet supported")))))
 
