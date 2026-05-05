@@ -25,6 +25,10 @@
 (require 'seq)
 
 
+(defvar et-debug nil
+  "Perform extra debug checks.")
+
+
 ;;; ============================================================
 ;;; Utils
 ;;;; Quote macro
@@ -314,26 +318,28 @@ VALUE is an instance of either `et-datatype', `et-alias', or
   (unless (et-type-p type)
     (error "Not a type: %s" type))
 
-  (dolist (case (et-type-cases type))
-    (let ((val (et-type-case-value case)))
-      (if (et-datatype-p val)
-          ;; Check that all of the arguments have the correct role
-          (let ((roles (et--datatype-arg-roles (et-datatype-name val) (et-datatype-args val))))
-            (or (eq (length (et-datatype-args val)) (length roles))
-                (error "Wrong number of arguments for datatype %s" (et-datatype-name val)))
-            (cl-loop for role in roles
-                     for arg in (et-datatype-args val)
-                     do (pcase role
-                          ('CONST nil)
-                          ((or 'CO 'CONTRA 'ISO) (et--verify-type arg))
-                          (_ (error "Unknown role type: %s" role)))))
-        ;; Otherwise, it must be an alias or signal
-        (or (et-alias-p val)
-            (et-signal-p val)
-            (error "Expected datatype, alias, or signal. Found %s" val))))
+  (when et-debug
+    (dolist (case (et-type-cases type))
+      (let ((val (et-type-case-value case)))
+        (if (et-datatype-p val)
+            ;; Check that all of the arguments have the correct role
+            (let ((roles (et--datatype-arg-roles (et-datatype-name val) (et-datatype-args val))))
+              (or (eq (length (et-datatype-args val)) (length roles))
+                  (error "Wrong number of arguments for datatype %s" (et-datatype-name val)))
+              (cl-loop for role in roles
+                       for arg in (et-datatype-args val)
+                       do (pcase role
+                            ('CONST nil)
+                            ((or 'CO 'CONTRA 'ISO) (et--verify-type arg))
+                            (_ (error "Unknown role type: %s" role)))))
+          ;; Otherwise, it must be an alias or signal
+          (or (et-alias-p val)
+              (et-signal-p val)
+              (error "Expected datatype, alias, or signal. Found %s" val))))
 
-    (dolist (b (et-type-case-binds case))
-      (or (et-bind-p b) (error "Expected bind, found %s" b))))
+      (dolist (b (et-type-case-binds case))
+        (or (et-bind-p b) (error "Expected bind, found %s" b)))))
+
   type)
 
 (advice-add #'make-et-type :filter-return #'et--verify-type)
@@ -360,29 +366,34 @@ ARGS is a mix of constant args (where the corresponding arg role is
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
-  (let ((generics (et-matcher-generics matcher)))
-    (dolist (generic generics)
-      (or (symbolp generic) (error "Generics must be a list of symbols")))
+  (or (et-matcher-p matcher)
+      (error "Not a matcher: %s" matcher))
 
-    (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
-                                  (error "Not a generic: %s" var))))
-      (dolist (case (et-matcher-dnf matcher))
-        (dolist (factor case)
-          (pcase factor
-            (`(m:datatype ,(and name (pred keywordp)) . ,args)
-             (et--datatype-map-args
-              name args
-              (lambda (arg role)
-                (pcase role
-                  ('CONST nil)
-                  ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
-                  (_ (error "Unknown role type: %s" role))))))
-            (`(m:alias ,(pred keywordp) . ,args)
-             (dolist (arg args) (make-et-matcher :generics generics :dnf arg)))
-            (`(m:match ,(pred genericp)))
-            (`(m:set ,(pred genericp) ,(pred et-type-p)))
-            (_ (error "Invalid match factor: %s" factor)))))
-      matcher)))
+  (when et-debug
+    (let ((generics (et-matcher-generics matcher)))
+      (dolist (generic generics)
+        (or (symbolp generic) (error "Generics must be a list of symbols")))
+
+      (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
+                                    (error "Not a generic: %s" var))))
+        (dolist (case (et-matcher-dnf matcher))
+          (dolist (factor case)
+            (pcase factor
+              (`(m:datatype ,(and name (pred keywordp)) . ,args)
+               (et--datatype-map-args
+                name args
+                (lambda (arg role)
+                  (pcase role
+                    ('CONST nil)
+                    ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
+                    (_ (error "Unknown role type: %s" role))))))
+              (`(m:alias ,(pred keywordp) . ,args)
+               (dolist (arg args) (make-et-matcher :generics generics :dnf arg)))
+              (`(m:match ,(pred genericp)))
+              (`(m:set ,(pred genericp) ,(pred et-type-p)))
+              (_ (error "Invalid match factor: %s" factor))))))))
+
+  matcher)
 
 (advice-add #'make-et-matcher :filter-return #'et--verify-matcher)
 
@@ -911,7 +922,7 @@ Depth tracks < > and { } nesting."
 
 
 ;;; ============================================================
-;;; Helpters
+;;; Helpers
 ;;;; Subtype
 
 (defun et-datatype-subtype? (sub super)
@@ -994,8 +1005,9 @@ Depth tracks < > and { } nesting."
               finally return
               (let ((result (make-et-type :cases all-cases)))
                 ;; This assertion should pass if there are no bugs
-                ;; (or (and (et-subtype? result a) (et-subtype? result b))
-                ;;     (error "`et--and' determined incorrect intersection"))
+                (when et-debug
+                  (or (and (et-subtype? result a) (et-subtype? result b))
+                      (error "`et--and' determined incorrect intersection")))
                 result)))))
 
 (defun et--intersect-cases (a b)
