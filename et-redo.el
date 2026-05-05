@@ -347,6 +347,38 @@ VALUE is an instance of either `et-datatype', `et-alias', or
 (advice-add #'make-et-type :filter-return #'et--verify-type)
 
 
+;;;; Constructors
+
+(defun et-never-p (type)
+  (et--verify-type type)
+  (null (et-type-cases type)))
+
+(defun et-type (&rest cases)
+  "Construct a new `et-type' out of CASES.
+
+Each of CASES should be an instance of `et-type-case', or alternatively
+a valid `et-type-case-value'."
+  (cl-loop for c in cases
+           collect (if (et-type-case-p c) c
+                     ;; Checking is done inside of `make-et-type'
+                     (make-et-type-case :value c))
+           into cases
+           finally return (make-et-type :cases cases)))
+
+(defun et-dt (name &rest args)
+  (cl-assert (keywordp name))
+  (cl-assert (string-match-p "^:[a-z]" (symbol-name name)))
+  (et-type (make-et-datatype :name name :args args)))
+
+(defun et-alias (name &rest args)
+  (cl-assert (keywordp name))
+  (cl-assert (string-match-p "^:[A-Z]" (symbol-name name)))
+  (et-type (make-et-alias :name name :args args)))
+
+(defun et-any () (et-dt :any))
+(defun et-never () (make-et-type :cases nil))
+
+
 ;;; ============================================================
 ;;; Matcher
 ;;;; Matcher struct
@@ -547,72 +579,6 @@ ARGS is a mix of constant args (where the corresponding arg role is
            return result
            ;; If all cases failed, return never
            finally return (et-q ((q:never)))))
-
-
-;;;; Satisfy constraints
-
-(defun et--match-satisfy-constraints-biggest (generics constraints)
-  "Return a list of types for GENERICS satisfying CONSTRAINTS.
-
-Returns the symbol NEVER if invalid."
-  (if (member '(q:never) constraints) 'INVALID
-    (cl-loop
-     for gen in generics
-     for gen-result =
-     (let ((guess
-            (cl-loop for (fact g type) in constraints
-                     when (and (eq g gen) (memq fact '(q:eq q:leq)))
-                     collect type into types
-                     finally return (et-simplify-type (apply #'et--and types)))))
-       (if (cl-loop for (fact g type) in constraints
-                    always
-                    (or (not (eq g gen))
-                        (not (memq fact '(q:eq q:geq)))
-                        (et-subtype? type guess)))
-           guess (et-never)))
-     when (equal gen-result (et-never))
-     do (cl-return 'INVALID)
-     collect gen-result)))
-
-(defun et--match-satisfy-constraints-smallest (generics constraints)
-  "Return a list of types for GENERICS satisfying CONSTRAINTS.
-
-Returns the symbol NEVER if invalid.
-
-However, unlike `et--match-satisfy-constraints-biggest', this allows
-values to be the never type."
-  (if (member '(q:never) constraints) 'INVALID
-    (cl-loop
-     for gen in generics
-     for gen-result =
-     (let ((guess
-            (cl-loop for (fact g type) in constraints
-                     when (and (eq g gen) (memq fact '(q:eq q:geq)))
-                     collect type into types
-                     finally return (et-simplify-type (apply #'et--or types)))))
-       (if (cl-loop for (fact g type) in constraints
-                    always
-                    (or (not (eq g gen))
-                        (not (memq fact '(q:eq q:leq)))
-                        (et-subtype? guess type)))
-           guess 'INVALID))
-     ;; Unlike biggest, the never type actually represents a valid possible answer
-     when (equal gen-result 'INVALID)
-     do (cl-return 'INVALID)
-     collect gen-result)))
-
-
-;;;; Putting it together
-
-(defun et-sub-match (matcher type)
-  (let ((constraints (et--sub-constraints matcher type)))
-    (et--match-satisfy-constraints-smallest
-     (et-matcher-generics matcher) constraints)))
-
-(defun et-super-match (matcher type)
-  (let ((constraints (et--super-constraints matcher type)))
-    (et--match-satisfy-constraints-biggest
-     (et-matcher-generics matcher) constraints)))
 
 
 ;;; ============================================================
@@ -991,8 +957,6 @@ Depth tracks < > and { } nesting."
            nconc (apply #'list (et-type-cases type)) into cases
            finally return (make-et-type :cases cases)))
 
-
-
 (defun et--and (&rest types)
   "Return the type intersection of TYPES."
   (mapc #'et--verify-type types)
@@ -1016,9 +980,9 @@ Depth tracks < > and { } nesting."
                 result)))))
 
 (defun et--intersect-cases (a-case b-case)
-  "Return a list of type cases resulting from intersecting cases a and b."
-
-  ;; TODO: binds
+  "Return a list of cases resulting from intersecting A-CASE and B-CASE."
+  (cl-assert (et-type-case-p a-case))
+  (cl-assert (et-type-case-p b-case))
 
   (let* ((a (et-type-case-value a-case))
          (b (et-type-case-value b-case)))
@@ -1062,38 +1026,71 @@ that is a subtype of both A and B."
      ((null sub-name) 'INVALID))))
 
 
-;;;; Constructors
+;;;; Satisfy constraints
 
-(defun et-never-p (type)
-  (et--verify-type type)
-  (null (et-type-cases type)))
+(defun et--sub-match (matcher type)
+  (let ((constraints (et--sub-constraints matcher type)))
+    (et--match-satisfy-constraints-smallest
+     (et-matcher-generics matcher) constraints)))
 
-(defun et-type (&rest cases)
-  "Construct a new `et-type' out of CASES.
+(defun et--super-match (matcher type)
+  (let ((constraints (et--super-constraints matcher type)))
+    (et--match-satisfy-constraints-biggest
+     (et-matcher-generics matcher) constraints)))
 
-Each of CASES should be an instance of `et-type-case', or alternatively
-a valid `et-type-case-value'."
-  (cl-loop for c in cases
-           collect (if (et-type-case-p c) c
-                     ;; Checking is done inside of `make-et-type'
-                     (make-et-type-case :value c))
-           into cases
-           finally return (make-et-type :cases cases)))
+(defun et--match-satisfy-constraints-biggest (generics constraints)
+  "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
-(defun et-dt (name &rest args)
-  (cl-assert (keywordp name))
-  (cl-assert (string-match-p "^:[a-z]" (symbol-name name)))
-  (et-type (make-et-datatype :name name :args args)))
+Returns the symbol NEVER if invalid."
+  (if (member '(q:never) constraints) 'INVALID
+    (cl-loop
+     for gen in generics
+     for gen-result =
+     (let ((guess
+            (cl-loop for (fact g type) in constraints
+                     when (and (eq g gen) (memq fact '(q:eq q:leq)))
+                     collect type into types
+                     finally return (et-simplify-type (apply #'et--and types)))))
+       (if (cl-loop for (fact g type) in constraints
+                    always
+                    (or (not (eq g gen))
+                        (not (memq fact '(q:eq q:geq)))
+                        (et-subtype? type guess)))
+           guess (et-never)))
+     when (equal gen-result (et-never))
+     do (cl-return 'INVALID)
+     collect gen-result)))
 
-(defun et-alias (name &rest args)
-  (cl-assert (keywordp name))
-  (cl-assert (string-match-p "^:[A-Z]" (symbol-name name)))
-  (et-type (make-et-alias :name name :args args)))
+(defun et--match-satisfy-constraints-smallest (generics constraints)
+  "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
-(defun et-any () (et-dt :any))
-(defun et-never () (make-et-type :cases nil))
+Returns the symbol NEVER if invalid.
+
+However, unlike `et--match-satisfy-constraints-biggest', this allows
+values to be the never type."
+  (if (member '(q:never) constraints) 'INVALID
+    (cl-loop
+     for gen in generics
+     for gen-result =
+     (let ((guess
+            (cl-loop for (fact g type) in constraints
+                     when (and (eq g gen) (memq fact '(q:eq q:geq)))
+                     collect type into types
+                     finally return (et-simplify-type (apply #'et--or types)))))
+       (if (cl-loop for (fact g type) in constraints
+                    always
+                    (or (not (eq g gen))
+                        (not (memq fact '(q:eq q:leq)))
+                        (et-subtype? guess type)))
+           guess 'INVALID))
+     ;; Unlike biggest, the never type actually represents a valid possible answer
+     when (equal gen-result 'INVALID)
+     do (cl-return 'INVALID)
+     collect gen-result)))
 
 
+;;; ============================================================
+;;; Application
 ;;;; Built-in aliases
 
 (et-defalias :Boolean ()
