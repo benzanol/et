@@ -955,6 +955,21 @@ Depth tracks < > and { } nesting."
 
 ;;;; Simplify
 
+(defun et--sub-binds? (sub-binds super-binds)
+  "Whether SUPER-BINDS are implied by SUB-BINDS."
+  (cl-assert (listp sub-binds))
+  (cl-assert (listp super-binds))
+
+  (cl-loop for super-bind in super-binds
+           for matching-sub-binds =
+           (cl-loop for b in sub-binds
+                    when (eq (et-bind-var b) (et-bind-var super-bind))
+                    collect b)
+           do (cl-assert (<= (length matching-sub-binds) 1))
+           always (or (null matching-sub-binds)
+                      (et-subtype? (et-bind-type (car matching-sub-binds))
+                                   (et-bind-type super-bind)))))
+
 (defun et-simplify-type (type)
   (et--verify-type type)
 
@@ -962,8 +977,12 @@ Depth tracks < > and { } nesting."
            ;; Check if this case is redundant
            unless (cl-loop for c in (append new-cases rest)
                            ;; case is a subtype of c, so case is redundant
-                           thereis (et-subtype? (make-et-type :cases (list case))
-                                                (make-et-type :cases (list c))))
+                           thereis
+                           (and (et-subtype? (make-et-type :cases (list case))
+                                             (make-et-type :cases (list c)))
+                                (et--sub-binds? (et-type-case-binds case)
+                                                (et-type-case-binds c))))
+
            collect case into new-cases
            finally return (make-et-type :cases new-cases)))
 
