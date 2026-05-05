@@ -187,7 +187,8 @@ cases where neither is a subset of the other."
            (:cons
             (if (not (consp val)) (valid-if nil)
               (nconc (funcall co-literal (car val) (car super-args))
-                     (funcall co-literal (cdr val) (cadr super-args))))))))
+                     (funcall co-literal (cdr val) (cadr super-args)))))
+           (_ (valid-if nil)))))
 
       ((guard (or (eq sub-name super-name)
                   (memq super-name (et--datatype-parents sub-name))))
