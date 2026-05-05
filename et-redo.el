@@ -267,6 +267,10 @@ An list of (NAME PLIST), where PLIST has the following properties:
     (`(:cons:ro ,_car ,_cdr) (list 'CO 'CO))
     (`(:cons:wo ,_car ,_cdr) (list 'CONTRA 'CONTRA))
     (`(:vector ,_elem) (list 'ISO))
+    (`(:plist . ,args)
+     (cl-loop for (prop _val) on args by #'cddr
+              do (or (keywordp prop) (error "Expected keyword, found %s" prop))
+              nconc (list 'CONST 'CO)))
     (`(,(or :integer :number :string :symbol :any)) nil)
     (_ (error "Invalid datatype: %s %s" dt-name dt-args))))
 
@@ -275,9 +279,9 @@ An list of (NAME PLIST), where PLIST has the following properties:
 
     (pcase (list sub-name super-name)
       ('(:plist :plist)
-       (cl-loop for (prop sub-val) on sub-args by #'cddr
-                for super-val = (plist-get super-args prop)
-                unless super-val return (et-ql (q:never))
+       (cl-loop for (prop super-val) on super-args by #'cddr
+                for sub-val = (plist-get sub-args prop)
+                unless sub-val return (et-ql (q:never))
                 nconc (funcall co sub-val super-val)))
 
       (`(:literal ,_)
