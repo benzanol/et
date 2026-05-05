@@ -25,6 +25,7 @@
 (require 'seq)
 
 
+;;; ============================================================
 ;;; Structure
 ;;;; Quote macro
 
@@ -43,6 +44,9 @@ could be improved in the future by replacing all list literals with
 instances of `list' and `cons', but this is not currently a high
 priority."
   (et--copy-quotes (cdr (backquote-process expr))))
+
+(defmacro et-ql (&rest exprs)
+  (et--copy-quotes (cdr (backquote-process exprs))))
 
 
 ;;;; Doc
@@ -224,6 +228,7 @@ Depth tracks < > and { } nesting."
       (format "%s<%s>" name-str (string-join strs ", ")))))
 
 
+;;; ============================================================
 ;;; Types
 ;;;; Datatypes
 
@@ -231,49 +236,36 @@ Depth tracks < > and { } nesting."
   "A datatype factor of an `et-type'."
   name args)
 
-(defvar et-scoped-datatypes nil
-  "Locally scoped datatypes.
-
-An list of (NAME PLIST), where PLIST has the following properties:
-  :sub TYPE - means that this scoped type is a subtype of TYPE.
-  :super TYPE - means that this scoped type is a supertype of TYPE.")
-
-(defmacro et-with-scoped-datatype (entry &rest body)
-  `(condition-case _err (et--datatype-arg-roles (car entry))
-     (:success (error "Cannot shadow an existing type: %s" (car entry)))
-     (error (let ((et-scoped-datatypes (cons ,entry et-scoped-datatypes)))
-              ,@body))))
-
-
-(defun et--datatype-map-args (dt-name dt-args func)
-  "Apply FUNC to each argument, returning the resulting list.
-
-FUNC is called with two arguments, ARG and ROLE, where role is one of
-`CONST', `CO', `CONTRA', or `ISO'."
-  (cl-loop for arg in dt-args
-           for role in (et--datatype-arg-roles dt-name dt-args)
-           collect (funcall func arg role)))
-
-(defun et--datatype-map-type-args (dt-name dt-args func)
-  "Like `et--datatype-map-args', but the identify for CONST args.
-
-FUNC is called with one argument, the current argument"
-  (cl-loop for arg in dt-args
-           for role in (et--datatype-arg-roles dt-name dt-args)
-           if (eq role 'CONST) collect arg
-           else collect (funcall func arg)))
+(defun et--datatype-arg-role-alist (dt-name dt-args)
+  "Returns a list of `CONST' | `CO' | `CONTRA' | `ISO'."
+  (pcase (cons dt-name dt-args)
+    (`(:literal ,arg) (et-ql (value ,arg CONST)))
+    (`(:cons ,car ,cdr) (et-ql (car ,car ISO) (cdr ,cdr ISO)))
+    (`(:cons:ro ,car ,cdr) (et-ql (car ,car CO) (cdr ,cdr CO)))
+    (`(:cons:wo ,car ,cdr) (et-ql (car ,car CONTRA) (cdr ,cdr CONTRA)))
+    (`(:cons:wr ,car ,cdr) (et-ql (car ,car CONTRA) (cdr ,cdr CO)))
+    (`(:cons:rw ,car ,cdr) (et-ql (car ,car CO) (cdr ,cdr CONTRA)))
+    (`(:vector ,elem) (et-ql (elem ,elem ISO)))
+    (`(,(or :integer :number :string :symbol :any)) nil)
+    (_ (error "Invalid datatype: %s %s" dt-name dt-args))))
 
 (defun et--datatype-arg-roles (dt-name dt-args)
   "Returns a list of `CONST' | `CO' | `CONTRA' | `ISO'."
   (pcase (cons dt-name dt-args)
-    (`(,(guard (alist-get dt-name et-scoped-datatypes))) nil)
-    (`(:literal ,_arg) (list 'CONST))
-    (`(:cons ,_car ,_cdr) (list 'ISO 'ISO))
-    (`(:cons:ro ,_car ,_cdr) (list 'CO 'CO))
-    (`(:cons:wo ,_car ,_cdr) (list 'CONTRA 'CONTRA))
-    (`(:vector ,_elem) (list 'ISO))
+    (`(:literal ,_) (et-ql CONST))
+    (`(:cons ,_ ,_) (et-ql ISO ISO))
+    (`(:cons:ro ,_ ,_) (et-ql CO CO))
+    (`(:cons:wo ,_ ,_) (et-ql CONTRA CONTRA))
+    (`(:cons:wr ,_ ,_) (et-ql CONTRA CO))
+    (`(:cons:rw ,_ ,_) (et-ql CO CONTRA))
+    (`(:vector ,_) (et-ql ISO))
     (`(,(or :integer :number :string :symbol :any)) nil)
     (_ (error "Invalid datatype: %s %s" dt-name dt-args))))
+
+(defun et--datatype-parents (dt-name)
+  (pcase dt-name
+    (':cons (list :cons:ro :cons:wo :cons:wr :cons:rw))
+    (':integer (list :number))))
 
 (defun et-datatype-subtype? (sub super)
   (pcase (list (cons (et-datatype-name sub) (et-datatype-args sub))
@@ -296,6 +288,43 @@ FUNC is called with one argument, the current argument"
      (and (vectorp val)
           (cl-loop for e across val
                    always (et-subtype? (et-dt :literal e) elem))))))
+
+
+;;;; Scoped datatypes
+
+(defvar et-scoped-datatypes nil
+  "Locally scoped datatypes.
+
+An list of (NAME PLIST), where PLIST has the following properties:
+  :sub TYPE - means that this scoped type is a subtype of TYPE.
+  :super TYPE - means that this scoped type is a supertype of TYPE.")
+
+(defmacro et-with-scoped-datatype (entry &rest body)
+  `(condition-case _err (et--datatype-arg-roles (car entry))
+     (:success (error "Cannot shadow an existing type: %s" (car entry)))
+     (error (let ((et-scoped-datatypes (cons ,entry et-scoped-datatypes)))
+              ,@body))))
+
+
+;;;; Datatype helpers
+
+(defun et--datatype-map-args (dt-name dt-args func)
+  "Apply FUNC to each argument, returning the resulting list.
+
+FUNC is called with two arguments, ARG and ROLE, where role is one of
+`CONST', `CO', `CONTRA', or `ISO'."
+  (cl-loop for arg in dt-args
+           for role in (et--datatype-arg-roles dt-name dt-args)
+           collect (funcall func arg role)))
+
+(defun et--datatype-map-type-args (dt-name dt-args func)
+  "Like `et--datatype-map-args', but the identify for CONST args.
+
+FUNC is called with one argument, the current argument"
+  (cl-loop for arg in dt-args
+           for role in (et--datatype-arg-roles dt-name dt-args)
+           if (eq role 'CONST) collect arg
+           else collect (funcall func arg)))
 
 
 ;;;; Aliases
@@ -368,7 +397,7 @@ structure which can be parsed by `et-parse-type'.")
 
 (et-defalias :List (elem) (et-q (:or :nil (:cons ,elem (:List ,elem)))))
 (et-defalias :List:ro (elem) (et-q (:or :nil (:cons:ro ,elem (:List:ro ,elem)))))
-(et-defalias :List:wo (elem) (et-q (:or :nil (:cons:wo ,elem (:List:wo ,elem)))))
+(et-defalias :List:wo (elem) (et-q (:or :nil (:cons:wr ,elem (:List:wo ,elem)))))
 
 (et-defalias :Tree (elem) (et-q (:or ,elem (:List (:Tree ,elem)))))
 (et-defalias :Tree:ro (elem) (et-q (:or ,elem (:List:ro (:Tree:ro ,elem)))))
@@ -499,6 +528,7 @@ VALUE is an instance of either `et-datatype', `et-alias', or
   (princ (format "#<%s>" (et-pp type)) stream))
 
 
+;;; ============================================================
 ;;; Matcher
 ;;;; Matcher struct
 
@@ -718,7 +748,7 @@ Each match factor is one of:
        (_ (error "Unsupported matching datatype"))))
     (_ (error "Invalid match factor"))))
 
-;; This should eventually be replaced
+;; This should eventually be not needed
 (defun et--matcher-dnf-to-type (matcher-dnf)
   (cl-loop for case in matcher-dnf
            collect
@@ -740,30 +770,58 @@ Each match factor is one of:
   (cl-assert (et-datatype-p dt))
   (cl-assert (listp generics))
 
-  (if (not (eq mdt-name (et-datatype-name dt)))
-      ;; Check if the matcher is a pure type, and a subtype
-      (let ((is-subtype
-             (condition-case result (et--matcher-dnf-to-type (et-q (((m:datatype ,mdt-name ,@mdt-args)))))
-               (:success (if is-super (et-subtype? (et-type dt) result)
-                           (et-subtype? result (et-type dt))))
-               (error nil))))
-        (if is-subtype (et-q ((q:always))) (et-q ((q:never)))))
+  (let* ((dt-name (et-datatype-name dt))
+         (dt-args (et-datatype-args dt))
+         (t-args (et--datatype-arg-role-alist dt-name dt-args))
+         (m-args (et--datatype-arg-role-alist mdt-name mdt-args)))
+    (if is-super
+        (et--super-constraints-4 mdt-name m-args dt-name t-args generics)
+      (et--sub-constraints-4 mdt-name m-args dt-name t-args generics))))
 
-    ;; Datatypes of the same type should have the same number of arguments
-    (cl-assert (eq (length mdt-args) (length (et-datatype-args dt))))
-    (cl-loop for m-arg in mdt-args
-             for t-arg in (et-datatype-args dt)
-             for role in (et--datatype-arg-roles mdt-name mdt-args)
-             for matcher = (make-et-matcher :generics generics :dnf m-arg)
-             nconc (pcase role
-                     ;; Const args must be equal to match
-                     ('CONST (if (equal m-arg t-arg) nil (et-q ((q:never)))))
-                     ((or 'CO 'CONTRA)
-                      (if (xor (eq role 'CO) is-super)
-                          (et--sub-constraints matcher t-arg)
-                        (et--super-constraints matcher t-arg)))
-                     ('ISO (et-iso-match matcher t-arg))
-                     (_ (error "Unknown argument role: %s" role))))))
+(defun et--sub-constraints-4 (m-name m-args t-name t-args generics)
+  ;; Only proceed if the datatype is a direct subtype of the other datatype
+  (let ((funcs '((CO . et--sub-constraints) (CONTRA . et--super-constraints) (ISO . et-iso-match))))
+    (if (not (or (eq m-name t-name)
+                 ;; If this is true, then t-name "is" an m-name,
+                 ;; We can upscale t to have m-name without breaking anything.
+                 (memq m-name (et--datatype-parents t-name))))
+        (et-ql (q:never))
+
+      (cl-loop for (arg-name t-val _) in t-args
+               ;; Every arg in the subtype must exist in the supertype
+               for (m-val m-role) = (alist-get arg-name m-args)
+               unless m-role do (cl-return (et-ql (q:never)))
+
+               nconc
+               ;; Const args must be equal to match
+               (if (eq m-role 'CONST) (if (equal m-val t-val) nil (et-ql (q:never)))
+                 ;; Call the corresponding constraints function
+                 (funcall (or (alist-get m-role funcs) (error "Unknown argument role: %s" m-role))
+                          (make-et-matcher :generics generics :dnf m-val)
+                          t-val))))))
+
+(defun et--super-constraints-4 (m-name m-args t-name t-args generics)
+  ;; Only proceed if the datatype is a direct subtype of the other datatype
+  (let ((funcs '((CO . et--super-constraints) (CONTRA . et--sub-constraints) (ISO . et-iso-match))))
+
+    (if (not (or (eq m-name t-name)
+                 ;; If this is true, then m-name "is" a t-name,
+                 ;; We can upscale m to have t-name without breaking anything.
+                 (memq t-name (et--datatype-parents m-name))))
+        (et-ql (q:never))
+
+      (cl-loop for (arg-name m-val _) in m-args
+               ;; Every arg in the subtype must exist in the supertype
+               for (_ t-val t-role) = (alist-get arg-name t-args)
+               unless t-role do (cl-return (et-ql (q:never)))
+
+               nconc
+               ;; Const args must be equal to match
+               (if (eq t-role 'CONST) (if (equal m-val t-val) nil (et-ql (q:never)))
+                 ;; Call the corresponding constraints function
+                 (funcall (or (alist-get t-role funcs) (error "Unknown argument role: %s" t-role))
+                          (make-et-matcher :generics generics :dnf m-val)
+                          t-val))))))
 
 
 ;;;; Super match
@@ -864,6 +922,7 @@ values to be the never type."
      (et-matcher-generics matcher) constraints)))
 
 
+;;; ============================================================
 ;;; Utils
 ;;;; Check subtype
 
@@ -1014,6 +1073,7 @@ a valid `et-type-case-value'."
 (defun et-never () (make-et-type :cases nil))
 
 
+;;; ============================================================
 ;;; Provide
 
 (provide 'et-redo)
