@@ -313,28 +313,6 @@ An list of (NAME PLIST), where PLIST has the following properties:
 
       (_ (valid-if nil)))))
 
-(defun et-datatype-subtype? (sub super)
-  (pcase (list (cons (et-datatype-name sub) (et-datatype-args sub))
-               (cons (et-datatype-name super) (et-datatype-args super)))
-    (`(,a ,a) t)
-    (`(,_ (:any)) t)
-    (`((:integer) (:number)) t)
-    (`((:vector ,sub-e) (:vector ,super-e)) (et-subtype? sub-e super-e))
-    (`((:cons ,l1 ,r1) (:vector ,l2 ,r2))
-     (and (et-subtype? l1 l2) (et-subtype? r1 r2)))
-
-    (`((:literal ,val) (:integer)) (integerp val))
-    (`((:literal ,val) (:number)) (numberp val))
-    (`((:literal ,val) (:string)) (stringp val))
-    (`((:literal ,val) (:cons ,l ,r))
-     (and (consp val)
-          (et-subtype? (et-dt :literal (car val)) l)
-          (et-subtype? (et-dt :literal (cdr val)) r)))
-    (`((:literal ,val) (:vector ,elem))
-     (and (vectorp val)
-          (cl-loop for e across val
-                   always (et-subtype? (et-dt :literal e) elem))))))
-
 
 ;;;; Datatype mappers
 
@@ -418,6 +396,41 @@ structure which can be parsed by `et-parse-type'.")
 (cl-defstruct et-signal
   "A type representing that something threw a signal."
   symbol)
+
+
+;;;; Subtype
+
+(defun et-datatype-subtype? (sub super)
+  (cl-assert (et-datatype-p sub))
+  (cl-assert (et-datatype-p super))
+
+  (cl-flet ((valid-if (valid) (if valid nil (et-ql (q:never)))))
+    (not (member
+          '(q:never)
+          (et--datatype-constraints
+           (et-datatype-name sub) (et-datatype-args sub)
+           (et-datatype-name super) (et-datatype-args super)
+           (lambda (a b) (valid-if (et-subtype? a b)))
+           (lambda (a b) (valid-if (et-subtype? b a)))
+           (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
+           (lambda (literal b) (valid-if (and (et-subtype? (et-dt :literal literal) b)))))))))
+
+(defun et-subtype? (sub super)
+  (et--verify-type sub)
+  (et--verify-type super)
+
+  (setq sub (et-expand-all-aliases sub))
+  (setq super (et-expand-all-aliases super))
+
+  (cl-loop for sub-case in (et-type-cases sub)
+           for sub-val = (et-type-case-value sub-case)
+           unless (et-datatype-p sub-val) do (error "Invalid case type")
+           always
+           (cl-loop for super-case in (et-type-cases super)
+                    for super-val = (et-type-case-value super-case)
+                    unless (et-datatype-p super-val) do (error "Invalid case type")
+                    thereis
+                    (et-datatype-subtype? sub-val super-val))))
 
 
 ;;;; Built-in aliases
@@ -855,7 +868,7 @@ Returns the symbol NEVER if invalid."
                     always
                     (or (not (eq g gen))
                         (not (memq fact '(q:eq q:geq)))
-                        (et-subtype? guess type)))
+                        (et-subtype? type guess)))
            guess (et-never)))
      when (equal gen-result (et-never))
      do (cl-return 'INVALID)
@@ -881,7 +894,7 @@ values to be the never type."
                     always
                     (or (not (eq g gen))
                         (not (memq fact '(q:eq q:leq)))
-                        (et-subtype? type guess)))
+                        (et-subtype? guess type)))
            guess 'INVALID))
      ;; Unlike biggest, the never type actually represents a valid possible answer
      when (equal gen-result 'INVALID)
@@ -904,26 +917,6 @@ values to be the never type."
 
 ;;; ============================================================
 ;;; Utils
-;;;; Check subtype
-
-(defun et-subtype? (super sub)
-  (et--verify-type super)
-  (et--verify-type sub)
-
-  (setq sub (et-expand-all-aliases sub))
-  (setq super (et-expand-all-aliases super))
-
-  (cl-loop for sub-case in (et-type-cases sub)
-           for sub-val = (et-type-case-value sub-case)
-           unless (et-datatype-p sub-val) do (error "Invalid case type")
-           always
-           (cl-loop for super-case in (et-type-cases super)
-                    for super-val = (et-type-case-value super-case)
-                    unless (et-datatype-p super-val) do (error "Invalid case type")
-                    thereis
-                    (et-datatype-subtype? sub-val super-val))))
-
-
 ;;;; Simplify
 
 (defun et--datatype-disjoint? (_a _b)
