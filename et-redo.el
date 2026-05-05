@@ -284,7 +284,7 @@ structure which can be parsed by `et-parse-type'.")
   (cl-loop for case in (et-type-cases type)
            for val = (et-type-case-value case)
            nconc (if (et-alias-p val)
-                     (et-expand-all-aliases (et-alias-expand val))
+                     (apply #'list (et-type-cases (et-expand-all-aliases (et-alias-expand val))))
                    (list case))
            into new-cases
            finally return (make-et-type :cases new-cases)))
