@@ -932,6 +932,12 @@ Depth tracks < > and { } nesting."
 
       (not (member '(q:never) constraints)))))
 
+;; Techincally, this function is duplicated logic. In theory, it
+;; should convert one of the types to a matcher, perform matching, and
+;; then check if the resulting constraints are valid. Since there are
+;; no generics, the resulting constraints would be either nil, or just
+;; contain q:never, which would tell us if it is a subtype.
+
 (defun et-subtype? (sub super)
   (et--verify-type sub)
   (et--verify-type super)
@@ -1258,7 +1264,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
      (setf (get ',expr-type 'et-checker)
            (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type))))))
 
-(defun et--type-checker-body (arglist-matcher return-type-fn exprs)
+(defun et--type-checker-body (arglist-matcher return-struct exprs)
   (let* ((arg-types (cl-loop for _expr in exprs
                              for idx upfrom 1
                              collect (et-check-path idx)))
@@ -1268,9 +1274,17 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
       (error "Invalid arguments! Expected %s, got %s"
              (et-pp-matcher arglist-matcher) (et-pp args-type)))
 
-    (et-parse-type (apply return-type-fn
-                          (cl-loop for type in result
-                                   collect (et-ql :structure (((TYPE ,type)))))))))
+    ;; Replace all places where the generic variable appeared in the return type
+    ;; with the value determined for that generic
+    (cl-loop for gen in (et-matcher-generics arglist-matcher)
+             for type in result
+             do (setq return-struct
+                      (cl-subst (et-q (TYPE ,type))
+                                (et-q (ALIAS ,gen))
+                                return-struct
+                                :test #'equal)))
+
+    (et-structure-to-type return-struct)))
 
 (defmacro et-define-type-checker (func &rest arguments)
   "Define a checker using argument and return types.
@@ -1280,7 +1294,13 @@ FUNC is the function to define the checker for.
 GENERICS is a vector of symbols, representing generic variables. Each
 generic variable should be uppercase.
 
-\(fn FUNC [GENERICS] ARGS... RETURN)"
+ARGLIST is a parsable expression to use to match the arglist against.
+
+RETURN is a parsable expression to use for the return type. This can use
+the generic variable names as aliases, and they will be correctly
+substituted.
+
+\(fn FUNC [GENERICS] ARGLIST RETURN)"
   (declare (indent 2))
   (cl-assert (symbolp func))
 
@@ -1297,9 +1317,10 @@ generic variable should be uppercase.
       (error "Incorrect number of arguments"))
 
     `(et-define-checker ,func (&rest exprs)
-       (et--type-checker-body ,(et-parse-matcher (car arguments) generics)
-                              ,(cadr arguments)
-                              exprs))))
+       (et--type-checker-body
+        ,(et-parse-matcher (car arguments) generics)
+        (copy-tree ',(et-parse-structure (cadr arguments) nil))
+        exprs))))
 
 
 ;;;; Check
