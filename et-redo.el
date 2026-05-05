@@ -127,7 +127,7 @@ covariant, contravariant, or isovariant."
     (`(,(or :integer :number :string :symbol :any)) nil)
     (_ (error "Invalid datatype: %s %s" dt-name dt-args))))
 
-(defun et--datatype-intersect-args (name args1 args2)
+(defun et--datatype-intersect-args (name args1 args2 intersect union)
   "Return a list of arguments intersecting ARGS1 and ARGS2.
 
 The goal of this funciton is to determine a list of arguments
@@ -139,7 +139,11 @@ If no such list is found, then return the symbol `INVALID'.
 This function assumes that neither datatype is already a subset of the
 other, in which case the subset args would be a trivial solution to this
 function. This is so that this function can focus on the non-trivial
-cases where neither is a subset of the other."
+cases where neither is a subset of the other.
+
+INTERSECT and UNION are functions which each take 2 elements from
+ARGS1/ARGS2 and return a new arg, either the intersection or union of
+the two args respectively."
 
   (cond
    ;; Handling for normal datatypes, where arguments have a fixed order
@@ -149,8 +153,8 @@ cases where neither is a subset of the other."
              for arg1 in args1
              for arg2 in args2
              for new-arg = (pcase role
-                             ('CO (et--and arg1 arg2))
-                             ('CONTRA (et--or arg1 arg2))
+                             ('CO (funcall intersect arg1 arg2))
+                             ('CONTRA (funcall union arg1 arg2))
                              ('ISO (if (equal arg1 arg2) arg1 'INVALID))
                              (_ (error "Unexpected arg role: %s" role)))
              when (or (eq new-arg 'INVALID) (et-never-p new-arg)) return 'INVALID
@@ -161,7 +165,7 @@ cases where neither is a subset of the other."
       (cl-loop for prop in (delete-dups all-props)
                for val1 = (plist-get args1 prop)
                for val2 = (plist-get args2 prop)
-               for intersection = (if val1 (if val2 (et--and val1 val2) val1) val2)
+               for intersection = (if val1 (if val2 (funcall intersect val1 val2) val1) val2)
                when (et-never-p intersection) return 'INVALID
                nconc (list prop intersection))))
 
@@ -1019,7 +1023,7 @@ that is a subtype of both A and B."
      ((et-datatype-subtype? b a) b)
 
      (sub-name
-      (let ((arg-intersection (et--datatype-intersect-args sub-name a-args b-args)))
+      (let ((arg-intersection (et--datatype-intersect-args sub-name a-args b-args #'et--and #'et--or)))
         (if (eq arg-intersection 'INVALID) 'INVALID
           (make-et-datatype :name sub-name :args arg-intersection))))
 
