@@ -1336,7 +1336,7 @@ generic variable should be uppercase.
 
 ;;;; Check position helpers
 
-(defsubst et-check-path (&rest path)
+(defun et-check-path (&rest path)
   (et-with-path path (et-check)))
 
 (defun et-check-tail (start)
@@ -1507,4 +1507,4 @@ generic variable should be uppercase.
 (provide 'et-redo)
 
 
-;;; et-redo.el ends here
+;;; et.el ends here
