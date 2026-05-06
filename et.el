@@ -616,20 +616,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
        (or args (error "`and' cannot be empty"))
        (cl-reduce #'et--dnf-and (mapcar parse args)))
 
-      (`(:sym ,val)
-       (when (stringp val) (setq val (intern val)))
-       (or (symbolp val) (error "Not a symbol: %s" val))
-       (et-q (((S:DT Literal ,val)))))
-
-      (`(:num ,val)
-       (and (stringp val) (string-match-p "^[0-9][0-9_]*\\.?[0-9_]*$" val)
-            (setq val (string-to-number val)))
-       (or (numberp val) (error "Not a number: %s" val))
-       (et-q (((S:DT Literal ,val)))))
-
-      (`(:str ,str)
-       (or (stringp str) (error "Not a string: %s" str))
-       (et-q (((S:DT Literal ,str)))))
+      (`(:literal ,val) (et-q (((S:DT Literal ,val)))))
 
       (`(:set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
@@ -669,7 +656,8 @@ ARGS is a mix of constant args (where the corresponding arg role is
    ((string-match "^{\\(.*\\)}$" s) (et--parse-string (substring s 1 -1) generics))
 
    ;; @symbol
-   ((string-match "^@\\(.*\\)" s) (intern (match-string 1 s)))
+   ((string-match "^@\\(.*\\)$" s)
+    (et-parse-structure (list :literal (intern (match-string 1 s))) generics))
 
    ;; Var=Type
    ((string-match "^\\([-a-zA-Z0-9]*\\)=\\(.*\\)$" s)
