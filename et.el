@@ -299,25 +299,18 @@ structure which can be parsed by `et-parse-type'.")
            finally return (make-et-type :cases new-cases)))
 
 
-;;;; Bind/typeof
-
-(cl-defstruct et-bind
-  "A variable bind factor of an `et-type'."
-  var type)
-
-(cl-defstruct et-typeof
-  "a typeof factor of an `et-type'."
-  var)
-
-
 ;;;; Type struct
+
+(cl-defstruct et-var
+  "A variable currently in scope."
+  name type)
 
 (cl-defstruct et-type-case
   "Struct representing a case of an `et-type'.
 
-BINDS is a list of `et-bind'.
+BINDS is a list of (`et-var' . `et-type').
 
-TYPEOFS is a list of `et-typeof'.
+TYPEOFS is a list of `et-var'.
 
 VALUE is an instance of either `et-datatype' or `et-alias'."
   value binds typeofs)
@@ -341,12 +334,13 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
           ;; Check that all of the arguments have the correct role
           (et--datatype-map-type-args (et-datatype-name val) (et-datatype-args val) #'et--verify-type))
          ((et-alias-p val) (mapc #'et--verify-type (et-alias-args val)))
-         (_ (error "Expected datatype or alias, found %s" val))))
+         (t (error "Expected datatype or alias, found %s" val))))
 
       (dolist (x (et-type-case-binds case))
-        (or (et-bind-p x) (error "Expected bind, found %s" b)))
+        (or (and (consp x) (et-var-p (car x)) (et--verify-type (cdr x)))
+            (error "Expected bind, found %s" x)))
       (dolist (x (et-type-case-typeofs case))
-        (or (et-typeof-p x) (error "Expected bind, found %s" b)))))
+        (or (et-var-p x) (error "Expected typeof var, found %s" x)))))
 
   type)
 
@@ -785,9 +779,8 @@ which are invalid for types."
         (_
          (dolist (f factors)
            (pcase f
-             (`(S:BIND ,var ,struct)
-              (push (make-et-bind :var var :type (et-structure-to-type struct)) binds))
-             (`(S:TYPEOF ,var) (push (make-et-typeof :var var) typeofs))
+             (`(S:BIND ,var ,struct) (push (cons var (et-structure-to-type struct)) binds))
+             (`(S:TYPEOF ,var) (push var typeofs))
              (`(S:DT ,name . ,args)
               (let ((new-args (et--datatype-map-type-args name args #'et-structure-to-type)))
                 (push (make-et-datatype :name name :args new-args) values)))
@@ -822,11 +815,10 @@ which are invalid for types."
               (t (error "Unsupported type case value: %s" value)))
 
             (nconc
-             (cl-loop for bind in (et-type-case-binds case)
-                      collect (et-ql S:BIND ,(et-bind-var bind)
-                                     ,(et-type-to-structure (et-bind-type bind))))
-             (cl-loop for typeof in (et-type-case-typeofs case)
-                      collect (et-ql S:TYPEOF ,(et-typeof-var typeof)))))))
+             (cl-loop for (var . type) in (et-type-case-binds case)
+                      collect (et-ql S:BIND ,var ,(et-type-to-structure type)))
+             (cl-loop for var in (et-type-case-typeofs case)
+                      collect (et-ql S:TYPEOF ,var))))))
 
 
 ;;;; Parse/print type
@@ -937,24 +929,17 @@ which are invalid for types."
       (not (member '(Q:NEVER) constraints)))))
 
 (defun et--binds-subtype? (sub-binds super-binds)
-  (cl-assert (seq-every-p #'et-bind-p sub-binds))
-  (cl-assert (seq-every-p #'et-bind-p super-binds))
-
-  (cl-loop for super-bind in super-binds
-           for var = (et-bind-var super-bind)
-           for sub-bind = (cl-loop for bind in sub-binds
-                                   when (eq (et-bind-var bind) var)
-                                   return bind)
-           always (and sub-bind (et-subtype? (et-bind-type sub-bind)
-                                             (et-bind-type super-bind)))))
+  (cl-loop for (var . super-type) in super-binds
+           for sub-type = (alist-get var sub-binds)
+           always (and sub-type (et-subtype? sub-type super-type))))
 
 (defun et--case-subtype? (sub super)
   (cl-assert (et-type-case-p sub))
   (cl-assert (et-type-case-p super))
 
-  (and (cl-loop with sub-vars = (mapcar #'et-typeof-var (et-type-case-typeofs sub))
-                for typeof in (et-type-case-typeofs super)
-                always (memq (et-typeof-var typeof) sub-vars))
+  (and (cl-loop with sub-vars = (et-type-case-typeofs sub)
+                for super-var in (et-type-case-typeofs super)
+                always (memq super-var sub-vars))
        ;; Macro expansion in `et-subtype?' means that the value should always be a datatype
        (et-datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
        (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))))
@@ -983,21 +968,6 @@ which are invalid for types."
 
 ;;;; Simplify
 
-(defun et--sub-binds? (sub-binds super-binds)
-  "Whether SUPER-BINDS are implied by SUB-BINDS."
-  (cl-assert (listp sub-binds))
-  (cl-assert (listp super-binds))
-
-  (cl-loop for super-bind in super-binds
-           for matching-sub-binds =
-           (cl-loop for b in sub-binds
-                    when (eq (et-bind-var b) (et-bind-var super-bind))
-                    collect b)
-           do (cl-assert (<= (length matching-sub-binds) 1))
-           always (or (null matching-sub-binds)
-                      (et-subtype? (et-bind-type (car matching-sub-binds))
-                                   (et-bind-type super-bind)))))
-
 (defun et-simplify-type (type)
   (et--verify-type type)
 
@@ -1007,9 +977,7 @@ which are invalid for types."
                            ;; case is a subtype of c, so case is redundant
                            thereis
                            (and (et-subtype? (make-et-type :cases (list case))
-                                             (make-et-type :cases (list c)))
-                                (et--sub-binds? (et-type-case-binds case)
-                                                (et-type-case-binds c))))
+                                             (make-et-type :cases (list c)))))
 
            collect case into new-cases
            finally return (make-et-type :cases new-cases)))
@@ -1058,14 +1026,12 @@ LARGER than the intersection of the binds.
 For now, we are just returning the smallest bind found in the sequence,
 or if they are not ordered, then the first one."
 
-  (cl-loop for (_var . binds) in (seq-group-by #'et-bind-var (append a-binds b-binds))
+  (cl-loop for (_var . binds) in (seq-group-by #'car (append a-binds b-binds))
            collect
            (if (null (cdr binds)) (car binds)
-             (cl-loop for bind in binds
-                      when (cl-loop for other in binds
-                                    always (et-subtype? (et-bind-type bind) (et-bind-type other)))
-                      return bind
-                      finally return (car binds)))))
+             (cl-assert (eq (length binds) 2)) ; The bind can either be in one or both
+             (if (et-subtype? (cdr (cadr binds)) (cdr (car binds)))
+                 (cadr binds) (car binds)))))
 
 (defun et--intersect-cases (a-case b-case)
   "Return a list of cases resulting from intersecting A-CASE and B-CASE."
@@ -1520,7 +1486,7 @@ substituted.
   (cl-assert (stringp string))
   (let ((val-str (cl-prin1-to-string (eval expr2))))
     (or (equal string val-str)
-        (error "Expressions not equal: \"%s\" \"%s\"" string val))))
+        (error "Expressions not equal: \"%s\" \"%s\"" string val-str))))
 
 (defmacro et-assert-true (expr)
   (or (eval expr) (error "Returned nil")))
