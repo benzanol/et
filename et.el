@@ -173,7 +173,7 @@ the two args respectively."
    (t 'INVALID)))
 
 (defun et--datatype-constraints (sub-name sub-args super-name super-args co contra iso co-literal)
-  (cl-flet ((valid-if (valid) (if valid nil (et-ql (q:never)))))
+  (cl-flet ((valid-if (valid) (if valid nil (et-ql (Q:NEVER)))))
 
     (pcase (list sub-name super-name)
       (`(,_ Any) nil)
@@ -181,7 +181,7 @@ the two args respectively."
       ('(Plist Plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
                 for sub-val = (plist-get sub-args prop)
-                unless sub-val return (et-ql (q:never))
+                unless sub-val return (et-ql (Q:NEVER))
                 nconc (funcall co sub-val super-val)))
 
       (`(Literal ,_)
@@ -284,7 +284,7 @@ structure which can be parsed by `et-parse-type'.")
 (defun et-alias-expand (alias)
   "Expand an alias to a type."
   (let ((s-args (cl-loop for type in (et-alias-args alias)
-                         collect (et-q (:structure (((TYPE ,type))))))))
+                         collect (et-q (:structure (((S:TYPE ,type))))))))
     (et-parse-type (et--alias-call (et-alias-name alias) s-args))))
 
 (defun et-expand-all-aliases (type)
@@ -396,7 +396,7 @@ a valid `et-type-case-value'."
 
 
 ;;; ============================================================
-;;; Matcher
+;;; Matching
 ;;;; Matcher struct
 
 (cl-defstruct et-matcher
@@ -406,9 +406,9 @@ DNF is the possible match factors in disjunctive-nominal form. It is a
 list of cases, each of which is a list of match factors.
 
 Each match factor is one of:
-  (m:datatype DT-NAME ARGS...)
-  (m:match VAR)
-  (m:set VAR `et-type')
+  (M:DATATYPE DT-NAME ARGS...)
+  (M:MATCH VAR)
+  (M:SET VAR `et-type')
 
 ARGS is a mix of constant args (where the corresponding arg role is
 'CONST,) and DNFs for the other role types."
@@ -429,7 +429,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
         (dolist (case (et-matcher-dnf matcher))
           (dolist (factor case)
             (pcase factor
-              (`(m:datatype ,(and name (pred symbolp)) . ,args)
+              (`(M:DATATYPE ,(and name (pred symbolp)) . ,args)
                (et--datatype-map-args
                 name args
                 (lambda (arg role)
@@ -437,10 +437,10 @@ ARGS is a mix of constant args (where the corresponding arg role is
                     ('CONST nil)
                     ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
                     (_ (error "Unknown role type: %s" role))))))
-              (`(m:alias ,(pred symbolp) . ,args)
+              (`(M:ALIAS ,(pred symbolp) . ,args)
                (dolist (arg args) (make-et-matcher :generics generics :dnf arg)))
-              (`(m:match ,(pred genericp)))
-              (`(m:set ,(pred genericp) ,(pred et-type-p)))
+              (`(M:MATCH ,(pred genericp)))
+              (`(M:SET ,(pred genericp) ,(pred et-type-p)))
               (_ (error "Invalid match factor: %s" factor))))))))
 
   matcher)
@@ -452,7 +452,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
 
 (defun et--expand-alias-as-matcher-dnf (name args generics)
   "Expand an alias within a matcher."
-  (let* ((s-args (cl-loop for arg in args collect (et-q (:structure (((MATCHER-DNF ,arg)))))))
+  (let* ((s-args (cl-loop for arg in args collect (et-q (:structure (((S:MATCHER-DNF ,arg)))))))
          (structure (et-parse-structure (et--alias-call name s-args) generics)))
     (et-structure-to-matcher-dnf structure generics)))
 
@@ -468,7 +468,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
            (cl-loop for factor in case
                     collect
                     (pcase factor
-                      (`(m:alias ,name . ,args)
+                      (`(M:ALIAS ,name . ,args)
                        (et--matcher-dnf-expand-aliases
                         (et--expand-alias-as-matcher-dnf name args generics)
                         generics))
@@ -506,7 +506,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
 
     (cl-loop for case in (et-type-cases type)
              nconc (et--sub-constraints-2 matcher case) into result
-             finally return (if (member '(q:never) result) (et-q ((q:never)))
+             finally return (if (member '(Q:NEVER) result) (et-q ((Q:NEVER)))
                               (delete-dups result)))))
 
 (defun et--sub-constraints-2 (matcher case)
@@ -518,25 +518,25 @@ ARGS is a mix of constant args (where the corresponding arg role is
            (cl-loop for match-factor in match-case
                     for gens = (et-matcher-generics matcher)
                     nconc (et--sub-or-super-constraints-3 match-factor case gens))
-           unless (member '(q:never) result)
+           unless (member '(Q:NEVER) result)
            return result
            ;; If all cases failed, fallback to 2.2 or 2.3
            finally return
            (let ((val (et-type-case-value case)))
              (if (et-alias-p val)
                  (et--sub-constraints matcher (et-alias-expand val))
-               (et-q ((q:never)))))))
+               (et-q ((Q:NEVER)))))))
 
 (defun et--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
   (et--verify-matcher (make-et-matcher :generics generics :dnf (list (list match-factor))))
   (et--verify-type (make-et-type :cases (list case)))
 
   (pcase match-factor
-    (`(m:match ,var) (et-q ((,(if is-super 'q:leq 'q:geq) ,var ,(et-type case)))))
-    (`(m:set ,var ,type) (et-q ((,(if is-super 'q:leq 'q:geq) ,var ,type))))
-    (`(m:datatype ,mdt-name . ,mdt-args)
+    (`(M:MATCH ,var) (et-q ((,(if is-super 'Q:LEQ 'Q:GEQ) ,var ,(et-type case)))))
+    (`(M:SET ,var ,type) (et-q ((,(if is-super 'Q:LEQ 'Q:GEQ) ,var ,type))))
+    (`(M:DATATYPE ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
-       ((pred et-alias-p) (et-q ((q:never))))
+       ((pred et-alias-p) (et-q ((Q:NEVER))))
        ((and dt (pred et-datatype-p))
         (et--sub-or-super-constraints-4
          mdt-name mdt-args (et-datatype-name dt) (et-datatype-args dt)
@@ -561,7 +561,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
        (lambda (dnf type) (et--sub-constraints (make-matcher dnf) type))
        (lambda (dnf type) (et-iso-match (make-matcher dnf) type))
        (lambda (literal type)
-         (let ((literal-m (make-matcher (et-q (((m:datatype Literal ,literal)))))))
+         (let ((literal-m (make-matcher (et-q (((M:DATATYPE Literal ,literal)))))))
            (et--super-constraints literal-m type)))))))
 
 
@@ -580,7 +580,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
     (cl-loop for m-case in (et-matcher-dnf matcher)
              nconc (et--super-constraints-2 m-case type (et-matcher-generics matcher))
              into result
-             finally return (if (member '(q:never) result) (et-q ((q:never)))
+             finally return (if (member '(Q:NEVER) result) (et-q ((Q:NEVER)))
                               (delete-dups result)))))
 
 (defun et--super-constraints-2 (match-case type generics)
@@ -591,10 +591,10 @@ ARGS is a mix of constant args (where the corresponding arg role is
            for result =
            (cl-loop for match-factor in match-case
                     nconc (et--sub-or-super-constraints-3 match-factor case generics 'SUPER))
-           unless (member '(q:never) result)
+           unless (member '(Q:NEVER) result)
            return result
            ;; If all cases failed, return never
-           finally return (et-q ((q:never)))))
+           finally return (et-q ((Q:NEVER)))))
 
 
 ;;; ============================================================
@@ -602,13 +602,13 @@ ARGS is a mix of constant args (where the corresponding arg role is
 ;;;; Parsing
 
 ;; A "type structure" is a list of lists of the following form:
-;; \(`DT' NAME ARGS...)
-;; \(`ALIAS' NAME ARGS...)
-;; \(`BIND' VAR TYPE) - only valid in types
-;; \(`GENERIC' VAR) - only valid in matchers
-;; \(`SET' VAR DNF) - only valid in matchers
-;; \(`MATCHER-DNF' MATCHER-DNF) - used for matcher alias expansion
-;; \(`TYPE' TYPE) - used for type alias expansion
+;; \(`S:DT' NAME ARGS...)
+;; \(`S:ALIAS' NAME ARGS...)
+;; \(`S:BIND' VAR TYPE) - only valid in types
+;; \(`S:GENERIC' VAR) - only valid in matchers
+;; \(`S:SET' VAR DNF) - only valid in matchers
+;; \(`S:MATCHER-DNF' DNF) - used for matcher alias expansion
+;; \(`S:TYPE' TYPE) - used for type alias expansion
 
 (defun et-parse-structure (spec generics)
   (let ((case-fold-search nil)
@@ -618,11 +618,11 @@ ARGS is a mix of constant args (where the corresponding arg role is
       ((pred symbolp) (et--parse-string (symbol-name spec) generics))
       (`(:parse ,(and str (pred stringp))) (et--parse-string str generics))
 
-      ((or (pred stringp) (pred numberp)) (et-q (((DT Literal ,spec)))))
+      ((or (pred stringp) (pred numberp)) (et-q (((S:DT Literal ,spec)))))
 
       (`(:structure ,structure) structure)
 
-      (`(:bind ,var ,type) (et-q (((BIND ,var ,(et-parse-structure type generics))))))
+      (`(:bind ,var ,type) (et-q (((S:BIND ,var ,(et-parse-structure type generics))))))
 
       (`(:or . ,args) (mapcan parse args))
       (`(:and . ,args)
@@ -632,32 +632,32 @@ ARGS is a mix of constant args (where the corresponding arg role is
       (`(:sym ,val)
        (when (stringp val) (setq val (intern val)))
        (or (symbolp val) (error "Not a symbol: %s" val))
-       (et-q (((DT Literal ,val)))))
+       (et-q (((S:DT Literal ,val)))))
 
       (`(:num ,val)
        (and (stringp val) (string-match-p "^[0-9][0-9_]*\\.?[0-9_]*$" val)
             (setq val (string-to-number val)))
        (or (numberp val) (error "Not a number: %s" val))
-       (et-q (((DT Literal ,val)))))
+       (et-q (((S:DT Literal ,val)))))
 
       (`(:str ,str)
        (or (stringp str) (error "Not a string: %s" str))
-       (et-q (((DT Literal ,str)))))
+       (et-q (((S:DT Literal ,str)))))
 
       (`(:set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
-       (et-q (((SET ,var ,(funcall parse type))))))
+       (et-q (((S:SET ,var ,(funcall parse type))))))
 
       (`(,(and name (pred symbolp) (pred (not keywordp))) . ,args)
        (cond
         ((memq name generics)
          (or (null args) (error "Generic type cannot have arguments"))
-         (et-q (((GENERIC ,name)))))
+         (et-q (((S:GENERIC ,name)))))
 
         ((et--name-is-alias? name)
-         (et-q (((ALIAS ,name ,@(mapcar parse args))))))
+         (et-q (((S:ALIAS ,name ,@(mapcar parse args))))))
 
-        (t (et-q (((DT ,name ,@(et--datatype-map-type-args name args parse))))))))
+        (t (et-q (((S:DT ,name ,@(et--datatype-map-type-args name args parse))))))))
 
       (_ (error "Invalid structure spec: %s" spec)))))
 
@@ -729,10 +729,10 @@ Depth tracks < > and { } nesting."
 
 (defun et--format-structure-factor (factor)
   (pcase factor
-    (`(GENERIC ,var) (format "@%s" (substring (symbol-name var) 1)))
-    (`(SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
-    (`(,(or 'DT 'ALIAS) ,name . ,args) (et--format-structure-named name args))
-    (`(BIND ,var ,type-struct) (format "{%s : %s}" var (et--format-structure type-struct)))
+    (`(S:GENERIC ,var) (format "@%s" (substring (symbol-name var) 1)))
+    (`(S:SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
+    (`(,(or 'S:DT 'S:ALIAS) ,name . ,args) (et--format-structure-named name args))
+    (`(S:BIND ,var ,type-struct) (format "{%s : %s}" var (et--format-structure type-struct)))
     (_ (error "Invalid structure factor: %s" factor))))
 
 (defun et--format-structure-named (name args)
@@ -746,14 +746,14 @@ Depth tracks < > and { } nesting."
                 ((and (pred listp) d)
                  (when (and (= (length d) 1) (= (length (car d)) 1))
                    (pcase (car (car d))
-                     (`(DT Cons ,car-sub ,cdr-sub)
+                     (`(S:DT Cons ,car-sub ,cdr-sub)
                       (nconc elems (list (et--format-structure car-sub)))
                       (setq right-sub cdr-sub)
                       t))))))
        (let ((tail-nil-p
               (and (= (length right-sub) 1)
                    (= (length (car right-sub)) 1)
-                   (equal (car (car right-sub)) '(DT Literal nil)))))
+                   (equal (car (car right-sub)) '(S:DT Literal nil)))))
          (if tail-nil-p
              (format "(%s)" (mapconcat #'identity elems " "))
            (format "(%s . %s)"
@@ -778,7 +778,7 @@ Depth tracks < > and { } nesting."
   (cl-loop for case-struct in structure
            for (values . binds) =
            (cl-loop for f in case-struct
-                    if (eq (car f) 'BIND)
+                    if (eq (car f) 'S:BIND)
                     collect (make-et-bind :var (cadr f) :type (et-structure-to-type (caddr f))) into binds
                     else collect f into values
                     finally return (cons values binds))
@@ -786,17 +786,17 @@ Depth tracks < > and { } nesting."
            when (cdr values) do (error "Case cannot intersect multiple values: %s" case-struct)
            for factor = (car case-struct)
            nconc
-           (if (eq (car factor) 'TYPE)
+           (if (eq (car factor) 'S:TYPE)
                (apply #'list (et-type-cases (cadr factor)))
              (list (make-et-type-case
                     :binds binds
                     :value
                     (pcase factor
-                      (`(DT ,name . ,args)
+                      (`(S:DT ,name . ,args)
                        (make-et-datatype
                         :name name
                         :args (et--datatype-map-type-args name args #'et-structure-to-type)))
-                      (`(ALIAS ,name . ,args)
+                      (`(S:ALIAS ,name . ,args)
                        (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))
                       (f (error "Invalid type factor: %s" f))))))
            into cases
@@ -811,18 +811,18 @@ Depth tracks < > and { } nesting."
            (cons
             (cl-typecase value
               (et-datatype
-               (et-ql DT ,(et-datatype-name value)
+               (et-ql S:DT ,(et-datatype-name value)
                       ,@(et--datatype-map-type-args
                          (et-datatype-name value)
                          (et-datatype-args value)
                          #'et-type-to-structure)))
               (et-alias
-               (et-ql ALIAS ,(et-alias-name value)
+               (et-ql S:ALIAS ,(et-alias-name value)
                       ,@(mapcar #'et-type-to-structure (et-alias-args value))))
               (t (error "Unsupported type case value: %s" value)))
 
             (cl-loop for bind in (et-type-case-binds case)
-                     collect (et-ql BIND ,(et-bind-var bind)
+                     collect (et-ql S:BIND ,(et-bind-var bind)
                                     ,(et-type-to-structure (et-bind-type bind)))))))
 
 
@@ -852,14 +852,14 @@ Depth tracks < > and { } nesting."
              (cl-loop for factor in case
                       collect
                       (pcase factor
-                        (`(DT ,name . ,args)
-                         (et-q (((m:datatype ,name ,@(et--datatype-map-type-args name args convert-sub))))))
-                        (`(ALIAS ,name . ,args)
-                         (et-q (((m:alias ,name ,@(mapcar convert-sub args))))))
-                        (`(GENERIC ,var) (et-q (((m:match ,var)))))
-                        (`(SET ,var ,inner-dnf)
-                         (et-q (((m:set ,var ,(et-structure-to-type inner-dnf))))))
-                        (`(MATCHER-DNF ,matcher-dnf) (copy-tree matcher-dnf))
+                        (`(S:DT ,name . ,args)
+                         (et-q (((M:DATATYPE ,name ,@(et--datatype-map-type-args name args convert-sub))))))
+                        (`(S:ALIAS ,name . ,args)
+                         (et-q (((M:ALIAS ,name ,@(mapcar convert-sub args))))))
+                        (`(S:GENERIC ,var) (et-q (((M:MATCH ,var)))))
+                        (`(S:SET ,var ,inner-dnf)
+                         (et-q (((M:SET ,var ,(et-structure-to-type inner-dnf))))))
+                        (`(S:MATCHER-DNF ,matcher-dnf) (copy-tree matcher-dnf))
                         (_ (error "Invalid match factor: %s" factor)))
                       into and-items
                       finally return (apply #'et--dnf-and and-items)))))
@@ -879,13 +879,13 @@ Depth tracks < > and { } nesting."
              (cl-loop for factor in case
                       collect
                       (pcase factor
-                        (`(m:datatype ,name . ,args)
-                         (et-q (DT ,name ,@(et--datatype-map-type-args name args convert-sub))))
-                        (`(m:alias ,name . ,args)
-                         (et-q (ALIAS ,name ,@(mapcar convert-sub args))))
-                        (`(m:match ,var) (et-q (GENERIC ,var)))
-                        (`(m:set ,var ,type)
-                         (et-q (SET ,var ,(et-type-to-structure type)))))))))
+                        (`(M:DATATYPE ,name . ,args)
+                         (et-q (S:DT ,name ,@(et--datatype-map-type-args name args convert-sub))))
+                        (`(M:ALIAS ,name . ,args)
+                         (et-q (S:ALIAS ,name ,@(mapcar convert-sub args))))
+                        (`(M:MATCH ,var) (et-q (S:GENERIC ,var)))
+                        (`(M:SET ,var ,type)
+                         (et-q (S:SET ,var ,(et-type-to-structure type)))))))))
 
 
 ;;;; Parse/print matcher
@@ -914,14 +914,14 @@ Depth tracks < > and { } nesting."
 
 
 ;;; ============================================================
-;;; Features
+;;; Type features
 ;;;; Subtype
 
 (defun et-datatype-subtype? (sub super)
   (cl-assert (et-datatype-p sub))
   (cl-assert (et-datatype-p super))
 
-  (cl-flet ((valid-if (valid) (if valid nil (et-ql (q:never)))))
+  (cl-flet ((valid-if (valid) (if valid nil (et-ql (Q:NEVER)))))
     (let ((constraints
            (et--datatype-constraints
             (et-datatype-name sub) (et-datatype-args sub)
@@ -931,13 +931,13 @@ Depth tracks < > and { } nesting."
             (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
             (lambda (literal b) (valid-if (and (et-subtype? (et-literal literal) b)))))))
 
-      (not (member '(q:never) constraints)))))
+      (not (member '(Q:NEVER) constraints)))))
 
 ;; Techincally, this function is duplicated logic. In theory, it
 ;; should convert one of the types to a matcher, perform matching, and
 ;; then check if the resulting constraints are valid. Since there are
 ;; no generics, the resulting constraints would be either nil, or just
-;; contain q:never, which would tell us if it is a subtype.
+;; contain Q:NEVER, which would tell us if it is a subtype.
 
 (defun et-subtype? (sub super)
   (et--verify-type sub)
@@ -1121,19 +1121,19 @@ that is a subtype of both A and B."
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
 Returns the symbol NEVER if invalid."
-  (if (member '(q:never) constraints) 'INVALID
+  (if (member '(Q:NEVER) constraints) 'INVALID
     (cl-loop
      for gen in generics
      for gen-result =
      (let ((guess
             (cl-loop for (fact g type) in constraints
-                     when (and (eq g gen) (memq fact '(q:eq q:leq)))
+                     when (and (eq g gen) (memq fact '(Q:EQ Q:LEQ)))
                      collect type into types
                      finally return (et-simplify-type (apply #'et--and types)))))
        (if (cl-loop for (fact g type) in constraints
                     always
                     (or (not (eq g gen))
-                        (not (memq fact '(q:eq q:geq)))
+                        (not (memq fact '(Q:EQ Q:GEQ)))
                         (et-subtype? type guess)))
            guess (et-never)))
      when (equal gen-result (et-never))
@@ -1147,19 +1147,19 @@ Returns the symbol NEVER if invalid.
 
 However, unlike `et--match-satisfy-constraints-biggest', this allows
 values to be the never type."
-  (if (member '(q:never) constraints) 'INVALID
+  (if (member '(Q:NEVER) constraints) 'INVALID
     (cl-loop
      for gen in generics
      for gen-result =
      (let ((guess
             (cl-loop for (fact g type) in constraints
-                     when (and (eq g gen) (memq fact '(q:eq q:geq)))
+                     when (and (eq g gen) (memq fact '(Q:EQ Q:GEQ)))
                      collect type into types
                      finally return (et-simplify-type (apply #'et--or types)))))
        (if (cl-loop for (fact g type) in constraints
                     always
                     (or (not (eq g gen))
-                        (not (memq fact '(q:eq q:leq)))
+                        (not (memq fact '(Q:EQ Q:LEQ)))
                         (et-subtype? guess type)))
            guess 'INVALID))
      ;; Unlike biggest, the never type actually represents a valid possible answer
@@ -1284,7 +1284,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
              for type in result
              do (setq return-struct
                       (cl-subst (et-q (TYPE ,type))
-                                (et-q (ALIAS ,gen))
+                                (et-q (S:ALIAS ,gen))
                                 return-struct
                                 :test #'equal)))
 
