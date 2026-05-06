@@ -99,11 +99,11 @@ An list of (NAME PLIST), where PLIST has the following properties:
 If B is a parent of A, then swapping the name A for B in any datatype
 creates a strictly larger type.
 
-For example, (:cons CAR CDR) <= (:cons:rr CAR CDR) no matter what CAR
-and CDR are, so :cons:rr is a parent type of :cons."
+For example, (Cons CAR CDR) <= (Cons:RR CAR CDR) no matter what CAR
+and CDR are, so Cons:RR is a parent type of Cons."
   (pcase dt-name
-    (':cons (list :cons:rr :cons:ww :cons:wr :cons:rw))
-    (':integer (list :number))))
+    ('Cons (et-ql Cons:RR Cons:WW Cons:WR Cons:RW))
+    ('Integer (et-ql Number))))
 
 (defun et--datatype-arg-roles (dt-name dt-args)
   "Returns a list of `CONST' | `CO' | `CONTRA' | `ISO'.
@@ -116,16 +116,16 @@ covariant, contravariant, or isovariant."
 
   (pcase (cons dt-name dt-args)
     (`(,(guard (alist-get dt-name et-scoped-datatypes))) nil)
-    (`(:literal ,_arg) (list 'CONST))
-    (`(:cons ,_car ,_cdr) (list 'ISO 'ISO))
-    (`(:cons:rr ,_car ,_cdr) (list 'CO 'CO))
-    (`(:cons:ww ,_car ,_cdr) (list 'CONTRA 'CONTRA))
-    (`(:vector ,_elem) (list 'ISO))
-    (`(:plist . ,args)
+    (`(Literal ,_arg) (et-ql CONST))
+    (`(Cons ,_car ,_cdr) (et-ql ISO ISO))
+    (`(Cons:RR ,_car ,_cdr) (et-ql CO CO))
+    (`(Cons:WW ,_car ,_cdr) (et-ql CONTRA CONTRA))
+    (`(Vector ,_elem) (et-ql ISO))
+    (`(PList . ,args)
      (cl-loop for (prop _val) on args by #'cddr
               do (or (keywordp prop) (error "Expected keyword, found %s" prop))
-              nconc (list 'CONST 'CO)))
-    (`(,(or :integer :number :string :symbol :any)) nil)
+              nconc (et-ql CONST CO)))
+    (`(,(or Integer Number String Symbol Any)) nil)
     (_ (error "Invalid datatype: %s %s" dt-name dt-args))))
 
 (defun et--datatype-intersect-args (name args1 args2 intersect union)
@@ -148,7 +148,7 @@ the two args respectively."
 
   (cond
    ;; Handling for normal datatypes, where arguments have a fixed order
-   ((memq name '(:vector :cons :cons:rr :cons:ww :cons:wr :cons:rw))
+   ((memq name '(Vector Cons Cons:rr Cons:ww Cons:wr Cons:rw))
     (cl-assert (eq (length args1) (length args2)))
     (cl-loop for role in (et--datatype-arg-roles name args1)
              for arg1 in args1
@@ -161,7 +161,7 @@ the two args respectively."
              when (or (eq new-arg 'INVALID) (et-never-p new-arg)) return 'INVALID
              collect new-arg))
 
-   ((eq name :plist)
+   ((eq name 'PList)
     (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
       (cl-loop for prop in (delete-dups all-props)
                for val1 = (plist-get args1 prop)
@@ -176,23 +176,23 @@ the two args respectively."
   (cl-flet ((valid-if (valid) (if valid nil (et-ql (q:never)))))
 
     (pcase (list sub-name super-name)
-      (`(,_ :any) nil)
+      (`(,_ Any) nil)
 
-      ('(:plist :plist)
+      ('(Plist Plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
                 for sub-val = (plist-get sub-args prop)
                 unless sub-val return (et-ql (q:never))
                 nconc (funcall co sub-val super-val)))
 
-      (`(:literal ,_)
+      (`(Literal ,_)
        (let ((val (car sub-args)))
          (pcase super-name
-           (:literal (valid-if (eq val (car super-args))))
-           (:integer (valid-if (integerp val)))
-           (:number (valid-if (numberp val)))
-           (:string (valid-if (stringp val)))
-           (:symbol (valid-if (symbolp val)))
-           ((or :cons :cons:rr :cons:ww :cons:rw :cons:wr)
+           ('Literal (valid-if (eq val (car super-args))))
+           ('Integer (valid-if (integerp val)))
+           ('Number (valid-if (numberp val)))
+           ('String (valid-if (stringp val)))
+           ('Symbol (valid-if (symbolp val)))
+           ((or 'Cons 'Cons:RR 'Cons:WW 'Cons:RW 'Cons:WR)
             (if (not (consp val)) (valid-if nil)
               (nconc (funcall co-literal (car val) (car super-args))
                      (funcall co-literal (cdr val) (cadr super-args)))))
@@ -242,38 +242,44 @@ FUNC is called with one argument, the current argument"
 (cl-defstruct et-alias "A type alias factor of an `et-type'." name args)
 
 (defvar et-aliases nil
-  "An alist where each entry is (NAME-KEYWORD TYPE-FN PROPS...).
+  "An alist where each entry is (NAME-SYMBOL TYPE-FN PROPS...).
 
 TYPE-FN is a function which takes the alias arguments and returns a
 structure which can be parsed by `et-parse-type'.")
 
-(defmacro et-defalias (keyword arglist &rest body)
-  "Alias KEYWORD types to return a specific type."
+(defmacro et-defalias (symbol arglist &rest body)
+  "Alias SYMBOL types to return a specific type."
   (declare (indent 2))
-  (cl-assert (keywordp keyword))
-  (cl-assert (string-match-p "^:[A-Z]" (symbol-name keyword)))
+  (cl-assert (symbolp symbol))
+  (cl-assert (string-match-p "^[A-Z]" (symbol-name symbol)))
   (cl-assert (listp arglist))
 
   (let ((plist nil))
     (while (keywordp (car body))
       (setq plist (nconc plist (list (pop body) (pop body)))))
 
+    (cl-assert (eq (length body) 1))
+
     `(et--define-alias
-      ,keyword
+      ',symbol
       ,`(lambda . ,(cl--transform-lambda
-                    (cons arglist body)
-                    (format "et-alias%s" keyword)))
+                    (list arglist (list #'et-q (car body)))
+                    (format "et-alias%s" symbol)))
       (list ,@plist))))
 
-(defun et--define-alias (keyword function props)
-  (when (plist-get (cdr (alist-get keyword et-aliases)) :read-only)
-    (error "Alias %s is already defined, and is read-only" keyword))
-  (setf (alist-get keyword et-aliases) (cons function props)))
+(defun et--define-alias (symbol function props)
+  (when (plist-get (cdr (alist-get symbol et-aliases)) :read-only)
+    (error "Alias %s is already defined, and is read-only" symbol))
+  (setf (alist-get symbol et-aliases) (cons function props)))
 
 (defun et--alias-call (name args)
   "Call the alias expansion function for alias NAME with args ARGS."
   (let ((type-fn (or (car (alist-get name et-aliases)) (error "Alias %s is not defined" name))))
     (apply type-fn args)))
+
+(defun et--name-is-alias? (name)
+  (cl-assert (symbolp name))
+  (not (not (alist-get name et-aliases))))
 
 (defun et-alias-expand (alias)
   "Expand an alias to a type."
@@ -375,17 +381,18 @@ a valid `et-type-case-value'."
            finally return (make-et-type :cases cases)))
 
 (defun et-dt (name &rest args)
-  (cl-assert (keywordp name))
-  (cl-assert (string-match-p "^:[a-z]" (symbol-name name)))
+  (cl-assert (symbolp name))
+  (cl-assert (string-match-p "^[A-Z]" (symbol-name name)))
   (et-type (make-et-datatype :name name :args args)))
 
 (defun et-alias (name &rest args)
-  (cl-assert (keywordp name))
-  (cl-assert (string-match-p "^:[A-Z]" (symbol-name name)))
+  (cl-assert (symbolp name))
+  (cl-assert (string-match-p "^[A-Z]" (symbol-name name)))
   (et-type (make-et-alias :name name :args args)))
 
-(defun et-any () (et-dt :any))
+(defun et-any () (et-dt 'Any))
 (defun et-never () (make-et-type :cases nil))
+(defun et-literal (val) (et-dt 'Literal val))
 
 
 ;;; ============================================================
@@ -422,7 +429,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
         (dolist (case (et-matcher-dnf matcher))
           (dolist (factor case)
             (pcase factor
-              (`(m:datatype ,(and name (pred keywordp)) . ,args)
+              (`(m:datatype ,(and name (pred symbolp)) . ,args)
                (et--datatype-map-args
                 name args
                 (lambda (arg role)
@@ -430,7 +437,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
                     ('CONST nil)
                     ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
                     (_ (error "Unknown role type: %s" role))))))
-              (`(m:alias ,(pred keywordp) . ,args)
+              (`(m:alias ,(pred symbolp) . ,args)
                (dolist (arg args) (make-et-matcher :generics generics :dnf arg)))
               (`(m:match ,(pred genericp)))
               (`(m:set ,(pred genericp) ,(pred et-type-p)))
@@ -546,7 +553,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
          (lambda (type dnf) (et--sub-constraints (make-matcher dnf) type))
          (lambda (type dnf) (et--super-constraints (make-matcher dnf) type))
          (lambda (type dnf) (et-iso-match (make-matcher dnf) type))
-         (lambda (literal dnf) (et--sub-constraints (make-matcher dnf) (et-dt :literal literal))))
+         (lambda (literal dnf) (et--sub-constraints (make-matcher dnf) (et-literal literal))))
       ;; supertype matching (sub=MATCHER < super=TYPE)
       (et--datatype-constraints
        m-name m-args t-name t-args
@@ -554,7 +561,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
        (lambda (dnf type) (et--sub-constraints (make-matcher dnf) type))
        (lambda (dnf type) (et-iso-match (make-matcher dnf) type))
        (lambda (literal type)
-         (let ((literal-m (make-matcher (et-q (((m:datatype :literal ,literal)))))))
+         (let ((literal-m (make-matcher (et-q (((m:datatype Literal ,literal)))))))
            (et--super-constraints literal-m type)))))))
 
 
@@ -608,8 +615,10 @@ ARGS is a mix of constant args (where the corresponding arg role is
         (parse (lambda (arg) (et-parse-structure arg generics))))
 
     (pcase spec
-      ((pred stringp) (et--parse-string spec generics))
-      ((pred keywordp) (et--parse-string (substring (symbol-name spec) 1) generics))
+      ((pred symbolp) (et--parse-string (symbol-name spec) generics))
+      (`(:parse ,(and str (pred stringp))) (et--parse-string str generics))
+
+      ((or (pred stringp) (pred numberp)) (et-q (((DT Literal ,spec)))))
 
       (`(:structure ,structure) structure)
 
@@ -620,37 +629,32 @@ ARGS is a mix of constant args (where the corresponding arg role is
        (or args (error "`and' cannot be empty"))
        (cl-reduce #'et--dnf-and (mapcar parse args)))
 
-      (`(:never) nil)
-      (`(:any) (et-q (((DT :any)))))
-      (`(:nil) (et-q (((DT :literal nil)))))
-      (`(:t) (et-q (((DT :literal t)))))
-
       (`(:sym ,val)
        (when (stringp val) (setq val (intern val)))
        (or (symbolp val) (error "Not a symbol: %s" val))
-       (et-q (((DT :literal ,val)))))
+       (et-q (((DT Literal ,val)))))
 
       (`(:num ,val)
        (and (stringp val) (string-match-p "^[0-9][0-9_]*\\.?[0-9_]*$" val)
             (setq val (string-to-number val)))
        (or (numberp val) (error "Not a number: %s" val))
-       (et-q (((DT :literal ,val)))))
+       (et-q (((DT Literal ,val)))))
 
       (`(:str ,str)
        (or (stringp str) (error "Not a string: %s" str))
-       (et-q (((DT :literal ,str)))))
+       (et-q (((DT Literal ,str)))))
 
       (`(:set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
        (et-q (((SET ,var ,(funcall parse type))))))
 
-      (`(,(and name (pred keywordp)) . ,args)
+      (`(,(and name (pred symbolp) (pred (not keywordp))) . ,args)
        (cond
         ((memq name generics)
          (or (null args) (error "Generic type cannot have arguments"))
          (et-q (((GENERIC ,name)))))
 
-        ((string-match-p "^:[A-Z]" (symbol-name name))
+        ((et--name-is-alias? name)
          (et-q (((ALIAS ,name ,@(mapcar parse args))))))
 
         (t (et-q (((DT ,name ,@(et--datatype-map-type-args name args parse))))))))
@@ -675,20 +679,24 @@ ARGS is a mix of constant args (where the corresponding arg role is
 (defun et--parse-atom (s generics)
   "Parse a single type atom into an `et-type'."
   (cond
-   ((string-match "{\\(.*\\)}" s) (et--parse-string (substring s 1 -1) generics))
+   ((string-match "^{\\(.*\\)}$" s) (et--parse-string (substring s 1 -1) generics))
+
+   ;; @symbol
+   ((string-match "^@\\(.*\\)" s) (intern (match-string 1 s)))
 
    ;; Var=Type
-   ((string-match "^\\([a-zA-Z0-9]*\\)=\\(.*\\)$" s)
-    (let ((var (intern (concat ":" (match-string 1 s))))
+   ((string-match "^\\([-a-zA-Z0-9]*\\)=\\(.*\\)$" s)
+    (let ((var (intern (match-string 1 s)))
           (expr (match-string 2 s)))
-      (et-parse-structure (list :set var expr) generics)))
+      (et-parse-structure (list :set var (list :parse expr)) generics)))
 
    ;; Name or Name<...>
    ((string-match "^\\([A-Za-z][a-zA-Z0-9:]*\\)\\(?:<\\(.*\\)>\\)?$" s)
-    (let* ((kwd (intern (concat ":" (match-string 1 s))))
-           (inner (match-string 2 s))
-           (arg-strs (when inner (et--split-at-depth inner ?~))))
-      (et-parse-structure (cons kwd arg-strs) generics)))
+    (let* ((name (intern (match-string 1 s)))
+           (inner (match-string 2 s)))
+      (cl-loop for arg-str in (when inner (et--split-at-depth inner ?~))
+               collect (list :parse arg-str) into args
+               finally return (et-parse-structure (cons name args) generics))))
 
    (t (error "Invalid parse syntax: %s" s))))
 
@@ -723,30 +731,29 @@ Depth tracks < > and { } nesting."
   (pcase factor
     (`(GENERIC ,var) (format "@%s" (substring (symbol-name var) 1)))
     (`(SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
-    (`(DT ,name . ,args) (et--format-structure-dt name args))
-    (`(ALIAS ,name . ,args) (et--format-structure-alias name args))
+    (`(,(or 'DT 'ALIAS) ,name . ,args) (et--format-structure-named name args))
     (`(BIND ,var ,type-struct) (format "{%s : %s}" var (et--format-structure type-struct)))
     (_ (error "Invalid structure factor: %s" factor))))
 
-(defun et--format-structure-dt (name args)
+(defun et--format-structure-named (name args)
   (pcase (cons name args)
-    (`(:literal ,val)
+    (`(Literal ,val)
      (format "`%s'" (prin1-to-string val)))
 
-    ((and `(:cons ,left-sub ,right-sub) (guard nil))
+    ((and `(Cons ,left-sub ,right-sub) (guard nil))
      (let ((elems (list (et--format-structure left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
                  (when (and (= (length d) 1) (= (length (car d)) 1))
                    (pcase (car (car d))
-                     (`(DT :cons ,car-sub ,cdr-sub)
+                     (`(DT Cons ,car-sub ,cdr-sub)
                       (nconc elems (list (et--format-structure car-sub)))
                       (setq right-sub cdr-sub)
                       t))))))
        (let ((tail-nil-p
               (and (= (length right-sub) 1)
                    (= (length (car right-sub)) 1)
-                   (equal (car (car right-sub)) '(DT :literal nil)))))
+                   (equal (car (car right-sub)) '(DT Literal nil)))))
          (if tail-nil-p
              (format "(%s)" (mapconcat #'identity elems " "))
            (format "(%s . %s)"
@@ -754,7 +761,7 @@ Depth tracks < > and { } nesting."
                    (et--format-structure right-sub))))))
 
     (_
-     (let* ((name-str (substring (symbol-name name) 1))
+     (let* ((name-str (symbol-name name))
             (strs (et--datatype-map-args
                    name args
                    (lambda (arg role)
@@ -762,12 +769,6 @@ Depth tracks < > and { } nesting."
                        (et--format-structure arg))))))
        (if (null args) name-str
          (format "%s<%s>" name-str (string-join strs ", ")))))))
-
-(defun et--format-structure-alias (name args)
-  (let* ((name-str (substring (symbol-name name) 1))
-         (strs (mapcar #'et--format-structure args)))
-    (if (null args) name-str
-      (format "%s<%s>" name-str (string-join strs ", ")))))
 
 
 ;;;; To/from type
@@ -928,7 +929,7 @@ Depth tracks < > and { } nesting."
             (lambda (a b) (valid-if (et-subtype? a b)))
             (lambda (a b) (valid-if (et-subtype? b a)))
             (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
-            (lambda (literal b) (valid-if (and (et-subtype? (et-dt :literal literal) b)))))))
+            (lambda (literal b) (valid-if (and (et-subtype? (et-literal literal) b)))))))
 
       (not (member '(q:never) constraints)))))
 
@@ -1268,7 +1269,10 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (let* ((arg-types (cl-loop for _expr in exprs
                              for idx upfrom 1
                              collect (et-check-path idx)))
-         (args-type (apply #'et-alias :Tuple:r arg-types))
+         (args-type (cl-loop with acc = (et-literal nil)
+                             for arg-type in (nreverse arg-types)
+                             do (setq acc (et-dt 'Cons:RR arg-type acc))
+                             finally return acc))
          (result (et--sub-match arglist-matcher args-type)))
     (when (eq result 'INVALID)
       (error "Invalid arguments! Expected %s, got %s"
@@ -1308,7 +1312,7 @@ substituted.
          (when (vectorp (car arguments))
            ;; Make sure the generics have the correct format
            (cl-loop for var across (car arguments)
-                    do (or (keywordp var) (error "Generics vector should contain symbols"))
+                    do (or (symbolp var) (error "Generics vector should contain symbols"))
                     do (or (let ((case-fold-search nil))
                              (string-match-p "^:[A-Z]" (format "%s" var)))
                            (error "Var should start with an uppercase letter")))
@@ -1350,7 +1354,7 @@ substituted.
       ;;            finally return (apply #'et-raw-or case-types)))
       (or (et--get-var-bind sym) (error "Free variable: %s" sym)))
 
-     (expr (et-dt :literal expr)))))
+     (expr (et-literal expr)))))
 
 
 ;;;; Check position helpers
@@ -1361,7 +1365,7 @@ substituted.
 (defun et-check-tail (start)
   (cl-loop for idx upfrom start below (length et--current-expr)
            for type = (et-with-path (list idx) (et-check))
-           finally return (or type (et-dt :literal nil))))
+           finally return (or type (et-literal nil))))
 
 
 ;;;; Root level functions
@@ -1408,24 +1412,25 @@ substituted.
 ;;; Application
 ;;;; Built-in aliases
 
-(et-defalias :Boolean ()
-  (et-q (:or :t :nil)))
+(et-defalias Nil () (Literal nil))
+(et-defalias True () (Literal t))
+(et-defalias Boolean () (:or True Nil))
 
-(et-defalias :List (elem) (et-q (:or :nil (:cons ,elem (:List ,elem)))))
-(et-defalias :List:r (elem) (et-q (:or :nil (:cons:rr ,elem (:List:r ,elem)))))
+(et-defalias List (elem) (:or Nil (Cons ,elem (List ,elem))))
+(et-defalias List:R (elem) (:or Nil (Cons:RR ,elem (List:R ,elem))))
 
-(et-defalias :Tree (elem) (et-q (:or ,elem (:List (:Tree ,elem)))))
-(et-defalias :Tree:r (elem) (et-q (:or ,elem (:List:r (:Tree:r ,elem)))))
+(et-defalias Tree (elem) (:or ,elem (List (Tree ,elem))))
+(et-defalias Tree:R (elem) (:or ,elem (:List:r (:Tree:r ,elem))))
 
-(et-defalias :Alist (key val) (et-q (:List (:cons ,key ,val))))
-(et-defalias :Alist:r (key val) (et-q (:List:ro (:cons:rr ,key ,val))))
+(et-defalias Alist (key val) (List (Cons ,key ,val)))
+(et-defalias Alist:R (key val) (List:R (Cons:RR ,key ,val)))
 
 (defun et--expand-tuple (cons args)
-  (if (null args) :nil
+  (if (null args) 'Nil
     (et-q (,cons ,(car args) ,(et--expand-tuple cons (cdr args))))))
 
-(et-defalias :Tuple (&rest args) (et--expand-tuple :cons args))
-(et-defalias :Tuple:r (&rest args) (et--expand-tuple :cons:rr args))
+(et-defalias Tuple (&rest args) ,(et--expand-tuple 'Cons args))
+(et-defalias Tuple:R (&rest args) ,(et--expand-tuple 'Cons:RR args))
 
 
 ;;; ============================================================
@@ -1485,6 +1490,13 @@ substituted.
         (v2 (eval expr2)))
     (or (equal v1 v2) (error "Expressions not equal: \"%s\" \"%s\"" v1 v2))))
 
+(defmacro et-assert-string= (string expr2)
+  (declare (indent 1))
+  (cl-assert (stringp string))
+  (let ((val-str (cl-prin1-to-string (eval expr2))))
+    (or (equal string val-str)
+        (error "Expressions not equal: \"%s\" \"%s\"" string val))))
+
 (defmacro et-assert-true (expr)
   (or (eval expr) (error "Returned nil")))
 
@@ -1499,17 +1511,17 @@ substituted.
     (or (et-subtype? expr-type (eval type))
         (error "Not subtype: %s" (et-pp expr-type)))
     (setq et--current-expr "dummy")
-    (et-dt :literal nil)))
+    (et-literal nil)))
 
 (et-define-checker :assert-error (_expr)
   (condition-case _err (et-check-path 1)
-    (error (setq et--current-expr nil) (et-dt :literal nil))
+    (error (setq et--current-expr nil) (et-literal nil))
     (:success (error "Didn't error"))))
 
 (et-define-checker :typeof (_expr)
   (et-warn '(0) "%s" (et-pp (et-check-path 1)))
   (setq et--current-expr nil)
-  (et-dt :literal nil))
+  (et-literal nil))
 
 (et-define-checker :narrows ()
   (cl-loop for ((var . _) . type) in (reverse et--narrow-binds)
@@ -1517,7 +1529,7 @@ substituted.
            finally do
            (et-warn '(0) "%s" (string-join strs "\\n")))
   (setq et--current-expr nil)
-  (et-dt :literal nil))
+  (et-literal nil))
 
 
 ;;; ============================================================
