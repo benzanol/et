@@ -719,8 +719,8 @@ Depth tracks < > and { } nesting."
     (`(S:GENERIC ,var) (format "@%s" (substring (symbol-name var) 1)))
     (`(S:SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
     (`(,(or 'S:DT 'S:ALIAS) ,name . ,args) (et--format-structure-named name args))
-    (`(S:BIND ,var ,type-struct) (format "{%s : %s}" var (et--format-structure type-struct)))
-    (`(S:TYPEOF ,var) (format "{typeof %s}" var))
+    (`(S:BIND ,var ,type-struct) (format "{%s : %s}" (et-var-name var) (et--format-structure type-struct)))
+    (`(S:TYPEOF ,var) (format "{typeof %s}" (et-var-name var)))
     (_ (error "Invalid structure factor: %s" factor))))
 
 (defun et--format-structure-named (name args)
@@ -1040,15 +1040,22 @@ or if they are not ordered, then the first one."
 
   (let* ((a (et-type-case-value a-case))
          (b (et-type-case-value b-case))
-         (sub (cond ((et-subtype? (et-type a-case) (et-type b-case)) a)
-                    ((et-subtype? (et-type b-case) (et-type a-case)) b))))
+         (a-case-raw (make-et-type-case :value a))
+         (b-case-raw (make-et-type-case :value b))
+         ;; Check if one of the values is a subtype of the other
+         (sub-val (cond ((et-subtype? (et-type a-case-raw) (et-type b-case-raw)) a)
+                        ((et-subtype? (et-type b-case-raw) (et-type a-case-raw)) b)))
+         (make-case
+          (lambda (val)
+            (make-et-type-case
+             :value val
+             :binds (et--intersect-binds (et-type-case-binds a-case) (et-type-case-binds b-case))
+             :typeofs (delete-dups (append (et-type-case-typeofs a-case)
+                                           (et-type-case-typeofs b-case)
+                                           nil))))))
 
     (cond
-     (sub
-      (list (make-et-type-case
-             :value sub
-             :binds (et--intersect-binds (et-type-case-binds a-case)
-                                         (et-type-case-binds b-case)))))
+     (sub-val (list (funcall make-case sub-val)))
 
      ((et-alias-p a) (cl-loop for exp-case in (et-type-cases (et-alias-expand a))
                               nconc (et--intersect-cases exp-case b-case)))
@@ -1058,13 +1065,7 @@ or if they are not ordered, then the first one."
      ((and (et-datatype-p a) (et-datatype-p b))
       (let ((dt (et--intersect-datatypes a b)))
         (if (eq dt 'INVALID) nil
-          (list (make-et-type-case
-                 :value dt
-                 :binds (et--intersect-binds (et-type-case-binds a-case)
-                                             (et-type-case-binds b-case))
-                 :typeofs (delete-dups (append (et-type-case-typeofs a-case)
-                                               (et-type-case-typeofs b-case)
-                                               nil)))))))
+          (list (funcall make-case dt)))))
 
      (t (error "Signals not yet supported")))))
 

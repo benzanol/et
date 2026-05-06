@@ -76,7 +76,11 @@
  (et :or (:and Any (:typeof a)))
  )
 
-(et--and (et Any) (et :and Any (:typeof a)))
+(let ((var-a (make-et-var :name 'a :type (et Any)))
+      (var-b (make-et-var :name 'b :type (et Any))))
+  (et-assert-equal (et :and Integer (:typeof ,var-a) (:typeof ,var-b))
+    (et--and (et :and Integer (:typeof ,var-b)) (et :and Number (:typeof ,var-a)))))
+
 
 (et-assert-equal t
   (et-subtype? (et :and String (:bind b String) (:bind a Integer))
