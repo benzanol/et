@@ -79,7 +79,10 @@
 (let ((var-a (make-et-var :name 'a :type (et Any)))
       (var-b (make-et-var :name 'b :type (et Any))))
   (et-assert-equal (et :and Integer (:typeof ,var-a) (:typeof ,var-b))
-    (et--and (et :and Integer (:typeof ,var-b)) (et :and Number (:typeof ,var-a)))))
+    (et--and (et :and Integer (:typeof ,var-b)) (et :and Number (:typeof ,var-a))))
+  (et-assert-equal (et :and Integer (:bind ,var-b Cons:RR<@a~@b>))
+    (et--and (et :and Integer (:bind ,var-b Cons:RR<@a~Symbol>))
+             (et :and Number (:bind ,var-b Cons:RR<Symbol~@b>)))))
 
 
 (et-assert-equal t

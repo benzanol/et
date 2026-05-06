@@ -1004,22 +1004,10 @@ which are invalid for types."
                 result)))))
 
 (defun et--intersect-binds (a-binds b-binds)
-  "Create a list of binds which are true if both A-BINDS and B-BINDS are.
+  "Create a list of binds which are true if both A-BINDS and B-BINDS are."
 
-We cannot necessarily just apply `et--and' to the binds of each bound
-variable, because `et--and' garuntees that the result will be SMALLER
-than the intersection, but for the bind to be satisfied it must be
-LARGER than the intersection of the binds.
-
-For now, we are just returning the smallest bind found in the sequence,
-or if they are not ordered, then the first one."
-
-  (cl-loop for (_var . binds) in (seq-group-by #'car (append a-binds b-binds))
-           collect
-           (if (null (cdr binds)) (car binds)
-             (cl-assert (eq (length binds) 2)) ; The bind can either be in one or both
-             (if (et-subtype? (cdr (cadr binds)) (cdr (car binds)))
-                 (cadr binds) (car binds)))))
+  (cl-loop for (var . binds) in (seq-group-by #'car (append a-binds b-binds))
+           collect (cons var (apply #'et--and (mapcar #'cdr binds)))))
 
 (defun et--intersect-cases (a-case b-case)
   "Return a list of cases resulting from intersecting A-CASE and B-CASE."
