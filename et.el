@@ -148,7 +148,7 @@ the two args respectively."
 
   (cond
    ;; Handling for normal datatypes, where arguments have a fixed order
-   ((memq name '(Vector Cons Cons:rr Cons:ww Cons:wr Cons:rw))
+   ((memq name '(Vector Cons Cons:RR Cons:WW Cons:WR Cons:RW))
     (cl-assert (eq (length args1) (length args2)))
     (cl-loop for role in (et--datatype-arg-roles name args1)
              for arg1 in args1
@@ -299,18 +299,15 @@ structure which can be parsed by `et-parse-type'.")
            finally return (make-et-type :cases new-cases)))
 
 
-;;;; Signals
-
-(cl-defstruct et-signal
-  "A type representing that something threw a signal."
-  symbol)
-
-
-;;;; Binds
+;;;; Bind/typeof
 
 (cl-defstruct et-bind
   "A variable bind factor of an `et-type'."
   var type)
+
+(cl-defstruct et-typeof
+  "a typeof factor of an `et-type'."
+  var)
 
 
 ;;;; Type struct
@@ -318,11 +315,12 @@ structure which can be parsed by `et-parse-type'.")
 (cl-defstruct et-type-case
   "Struct representing a case of an `et-type'.
 
-BINDS is a list of `et-bind's.
+BINDS is a list of `et-bind'.
 
-VALUE is an instance of either `et-datatype', `et-alias', or
-`et-signal'."
-  value binds)
+TYPEOFS is a list of `et-typeof'.
+
+VALUE is an instance of either `et-datatype' or `et-alias'."
+  value binds typeofs)
 
 (cl-defstruct et-type
   "Struct representing a root-level et type.
@@ -338,24 +336,17 @@ VALUE is an instance of either `et-datatype', `et-alias', or
   (when et-debug
     (dolist (case (et-type-cases type))
       (let ((val (et-type-case-value case)))
-        (if (et-datatype-p val)
-            ;; Check that all of the arguments have the correct role
-            (let ((roles (et--datatype-arg-roles (et-datatype-name val) (et-datatype-args val))))
-              (or (eq (length (et-datatype-args val)) (length roles))
-                  (error "Wrong number of arguments for datatype %s" (et-datatype-name val)))
-              (cl-loop for role in roles
-                       for arg in (et-datatype-args val)
-                       do (pcase role
-                            ('CONST nil)
-                            ((or 'CO 'CONTRA 'ISO) (et--verify-type arg))
-                            (_ (error "Unknown role type: %s" role)))))
-          ;; Otherwise, it must be an alias or signal
-          (or (et-alias-p val)
-              (et-signal-p val)
-              (error "Expected datatype, alias, or signal. Found %s" val))))
+        (cond
+         ((et-datatype-p val)
+          ;; Check that all of the arguments have the correct role
+          (et--datatype-map-type-args (et-datatype-name val) (et-datatype-args val) #'et--verify-type))
+         ((et-alias-p val) (mapc #'et--verify-type (et-alias-args val)))
+         (_ (error "Expected datatype or alias, found %s" val))))
 
-      (dolist (b (et-type-case-binds case))
-        (or (et-bind-p b) (error "Expected bind, found %s" b)))))
+      (dolist (x (et-type-case-binds case))
+        (or (et-bind-p x) (error "Expected bind, found %s" b)))
+      (dolist (x (et-type-case-typeofs case))
+        (or (et-typeof-p x) (error "Expected bind, found %s" b)))))
 
   type)
 
@@ -604,9 +595,10 @@ ARGS is a mix of constant args (where the corresponding arg role is
 ;; A "type structure" is a list of lists of the following form:
 ;; \(`S:DT' NAME ARGS...)
 ;; \(`S:ALIAS' NAME ARGS...)
-;; \(`S:BIND' VAR TYPE) - only valid in types
-;; \(`S:GENERIC' VAR) - only valid in matchers
-;; \(`S:SET' VAR DNF) - only valid in matchers
+;; \(`S:BIND' VAR TYPE) - only for types
+;; \(`S:TYPEOF' VAR) - only for types
+;; \(`S:GENERIC' VAR) - only for matchers
+;; \(`S:SET' VAR DNF) - only for matchers
 ;; \(`S:MATCHER-DNF' DNF) - used for matcher alias expansion
 ;; \(`S:TYPE' TYPE) - used for type alias expansion
 
@@ -623,6 +615,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
       (`(:structure ,structure) structure)
 
       (`(:bind ,var ,type) (et-q (((S:BIND ,var ,(et-parse-structure type generics))))))
+      (`(:typeof ,var) (et-q (((S:TYPEOF ,var)))))
 
       (`(:or . ,args) (mapcan parse args))
       (`(:and . ,args)
@@ -774,33 +767,39 @@ Depth tracks < > and { } nesting."
 ;;;; To/from type
 
 (defun et-structure-to-type (structure)
-  "Convert a structure to an `et-type'."
-  (cl-loop for case-struct in structure
-           for (values . binds) =
-           (cl-loop for f in case-struct
-                    if (eq (car f) 'S:BIND)
-                    collect (make-et-bind :var (cadr f) :type (et-structure-to-type (caddr f))) into binds
-                    else collect f into values
-                    finally return (cons values binds))
-           when (null values) do (error "Case value missing: %s" case-struct)
-           when (cdr values) do (error "Case cannot intersect multiple values: %s" case-struct)
-           for factor = (car case-struct)
-           nconc
-           (if (eq (car factor) 'S:TYPE)
-               (apply #'list (et-type-cases (cadr factor)))
-             (list (make-et-type-case
-                    :binds binds
-                    :value
-                    (pcase factor
-                      (`(S:DT ,name . ,args)
-                       (make-et-datatype
-                        :name name
-                        :args (et--datatype-map-type-args name args #'et-structure-to-type)))
-                      (`(S:ALIAS ,name . ,args)
-                       (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))
-                      (f (error "Invalid type factor: %s" f))))))
-           into cases
-           finally return (make-et-type :cases cases)))
+  "Convert a structure to an `et-type'.
+
+This function will not succeed for all structures. Structures can
+represent multiple types in a single case, but types do not support
+this, so it will fail in this case.
+
+Also, there are certain structure types that are designed for matchers,
+which are invalid for types."
+
+  (let (cases values binds typeofs)
+    (dolist (factors structure)
+      (setq values nil binds nil typeofs nil)
+      (pcase factors
+        (`((S:TYPE ,type)) (cl-callf append (et-type-cases type) cases))
+        (_
+         (dolist (f factors)
+           (pcase f
+             (`(S:BIND ,var ,struct)
+              (push (make-et-bind :var var :type (et-structure-to-type struct)) binds))
+             (`(S:TYPEOF ,var) (push (make-et-typeof :var var) typeofs))
+             (`(S:DT ,name . ,args)
+              (let ((new-args (et--datatype-map-type-args name args #'et-structure-to-type)))
+                (push (make-et-datatype :name name :args new-args) values)))
+             (`(S:ALIAS ,name . ,args)
+              (push (make-et-alias :name name :args (mapcar #'et-structure-to-type args)) values))
+             (_ (error "Invalid structure factor for type: %s" f))))
+
+         (when (null values) (error "Case value missing: %s" factors))
+         (when (cdr values) (error "Case cannot intersect multiple values: %s" factors))
+
+         (push (make-et-type-case :binds binds :value (car values)) cases))))
+
+    (make-et-type :cases (nreverse cases))))
 
 (defun et-type-to-structure (type)
   "Convert an `et-type' to a structure DNF."
