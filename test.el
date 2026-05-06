@@ -70,6 +70,26 @@
    (et-matcher [A] Tuple:R A (Cons:WW A Integer))
    (et Tuple:R Integer (Cons Number Number))))
 
+(et-sub-match
+ (et-matcher [T] Any&T)
+ ;; (et :or (:and Number (:typeof a)) (:and String (:bind a String)))
+ (et :or (:and Any (:typeof a)))
+ )
+
+(et--and (et Any) (et :and Any (:typeof a)))
+
+(et-assert-equal t
+  (et-subtype? (et :and String (:bind b String) (:bind a Integer))
+               (et :and String (:bind a Number))))
+(et-assert-equal nil
+  (et-subtype? (et :and String (:bind a Integer))
+               (et :and String (:bind a Number))))
+(et-assert-equal nil
+  (et-subtype? (et :and String)
+               (et :and String (:bind a Number))))
+
+
+
 (et-expand-all-aliases
  (et Tuple:R A (Cons Number Number))
  )

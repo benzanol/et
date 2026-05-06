@@ -652,7 +652,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
 
         (t (et-q (((S:DT ,name ,@(et--datatype-map-type-args name args parse))))))))
 
-      (_ (error "Invalid structure spec: %s" spec)))))
+      (_ (error "Invalid parse syntax: %s" spec)))))
 
 (defun et--parse-string (s generics)
   (when (string-empty-p s) (error "Empty type expression"))
@@ -726,6 +726,7 @@ Depth tracks < > and { } nesting."
     (`(S:SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
     (`(,(or 'S:DT 'S:ALIAS) ,name . ,args) (et--format-structure-named name args))
     (`(S:BIND ,var ,type-struct) (format "{%s : %s}" var (et--format-structure type-struct)))
+    (`(S:TYPEOF ,var) (format "{typeof %s}" var))
     (_ (error "Invalid structure factor: %s" factor))))
 
 (defun et--format-structure-named (name args)
@@ -797,7 +798,7 @@ which are invalid for types."
          (when (null values) (error "Case value missing: %s" factors))
          (when (cdr values) (error "Case cannot intersect multiple values: %s" factors))
 
-         (push (make-et-type-case :binds binds :value (car values)) cases))))
+         (push (make-et-type-case :value (car values) :binds binds :typeofs typeofs) cases))))
 
     (make-et-type :cases (nreverse cases))))
 
@@ -820,9 +821,12 @@ which are invalid for types."
                       ,@(mapcar #'et-type-to-structure (et-alias-args value))))
               (t (error "Unsupported type case value: %s" value)))
 
-            (cl-loop for bind in (et-type-case-binds case)
-                     collect (et-ql S:BIND ,(et-bind-var bind)
-                                    ,(et-type-to-structure (et-bind-type bind)))))))
+            (nconc
+             (cl-loop for bind in (et-type-case-binds case)
+                      collect (et-ql S:BIND ,(et-bind-var bind)
+                                     ,(et-type-to-structure (et-bind-type bind))))
+             (cl-loop for typeof in (et-type-case-typeofs case)
+                      collect (et-ql S:TYPEOF ,(et-typeof-var typeof)))))))
 
 
 ;;;; Parse/print type
@@ -932,6 +936,29 @@ which are invalid for types."
 
       (not (member '(Q:NEVER) constraints)))))
 
+(defun et--binds-subtype? (sub-binds super-binds)
+  (cl-assert (seq-every-p #'et-bind-p sub-binds))
+  (cl-assert (seq-every-p #'et-bind-p super-binds))
+
+  (cl-loop for super-bind in super-binds
+           for var = (et-bind-var super-bind)
+           for sub-bind = (cl-loop for bind in sub-binds
+                                   when (eq (et-bind-var bind) var)
+                                   return bind)
+           always (and sub-bind (et-subtype? (et-bind-type sub-bind)
+                                             (et-bind-type super-bind)))))
+
+(defun et--case-subtype? (sub super)
+  (cl-assert (et-type-case-p sub))
+  (cl-assert (et-type-case-p super))
+
+  (and (cl-loop with sub-vars = (mapcar #'et-typeof-var (et-type-case-typeofs sub))
+                for typeof in (et-type-case-typeofs super)
+                always (memq (et-typeof-var typeof) sub-vars))
+       ;; Macro expansion in `et-subtype?' means that the value should always be a datatype
+       (et-datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
+       (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))))
+
 ;; Techincally, this function is duplicated logic. In theory, it
 ;; should convert one of the types to a matcher, perform matching, and
 ;; then check if the resulting constraints are valid. Since there are
@@ -948,14 +975,10 @@ which are invalid for types."
     (setq super (et-expand-all-aliases super))
 
     (cl-loop for sub-case in (et-type-cases sub)
-             for sub-val = (et-type-case-value sub-case)
-             unless (et-datatype-p sub-val) do (error "Invalid case type")
              always
              (cl-loop for super-case in (et-type-cases super)
-                      for super-val = (et-type-case-value super-case)
-                      unless (et-datatype-p super-val) do (error "Invalid case type")
                       thereis
-                      (et-datatype-subtype? sub-val super-val)))))
+                      (et--case-subtype? sub-case super-case)))))
 
 
 ;;;; Simplify
@@ -1070,9 +1093,12 @@ or if they are not ordered, then the first one."
       (let ((dt (et--intersect-datatypes a b)))
         (if (eq dt 'INVALID) nil
           (list (make-et-type-case
+                 :value dt
                  :binds (et--intersect-binds (et-type-case-binds a-case)
                                              (et-type-case-binds b-case))
-                 :value dt)))))
+                 :typeofs (delete-dups (append (et-type-case-typeofs a-case)
+                                               (et-type-case-typeofs b-case)
+                                               nil)))))))
 
      (t (error "Signals not yet supported")))))
 
