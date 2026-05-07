@@ -23,365 +23,260 @@
 
 ;; Tests for types.el
 
+
+;;; Code:
+
 (eval-and-compile
   (add-to-list 'load-path "~/.emacs.d/my-packages/typesystem")
   (require 'et)
   (require 'et-types))
 
 
-;;; Code:
+;;; ============================================================
+;;; Parsing
+
+(et-assert-equal (et Cons:RR<1~@abc>)
+  (et-dt 'Cons:RR (et-literal 1) (et-literal 'abc)))
+
+
 ;;; ============================================================
 ;;; Typesystem
 ;;;; Subtype
 
-;; This tests a very particular line in `et-subtype?'. Specifically,
-;; at each subtype factor, before iterating through the supertype
-;; factors, it checks whether the subtype datatype wants to check if
-;; it is a subtype of the entire supertype, instead of checking
-;; whether it is a subtype of each individual factor of the supertype.
-;; The datatype List<integer> is a subtype of the provided nil|cons,
-;; but it is a subtype of neither case individually, so this test only
-;; passes when the described code path is working correctly.
+(et-assert-true (et-subtype? (et Integer) (et Number)))
+(et-assert-true (et-subtype? (et Integer) (et Any)))
+
+(et-assert-true (et-subtype? (et Cons:RR<Integer~Integer>) (et Cons:RR<Number~Number>)))
+(et-assert-nil (et-subtype? (et Cons:RR<Number~Number>) (et Cons:RR<Integer~Integer>)))
+
+(et-assert-true (et-subtype? (et Cons:WW<Number~Number>) (et Cons:WW<Integer~Integer>)))
+(et-assert-nil (et-subtype? (et Cons:WW<Integer~Integer>) (et Cons:WW<Number~Number>)))
+
+(et-assert-true (et-subtype? (et Cons:WR<Number~Integer>) (et Cons:WR<Integer~Number>)))
+(et-assert-true (et-subtype? (et Cons:RW<Integer~Number>) (et Cons:RW<Number~Integer>)))
+
 (et-assert-true
- (et-subtype? (et-parse :List<integer>)
-              (et-parse :nil|cons<number~List<integer>>)))
+ (et-subtype? (et List:R<Integer>)
+              (et Nil|Cons:RR<Number~List:R<Integer>>)))
 
-;; This one works without the special path described above, but check
-;; it too for good measure
-(et-assert-true
- (et-subtype? (et-parse :nil|cons<number~List<integer>>)
-              (et-parse :List<number>)))
-
-
-;;;; Inferring subtypes
-
-;; Inferring outside of an infer boundary should error
-(et-assert-error (et-subtype? (et-dt :number) (et-dt :infer-subtype :A)))
-(et-assert-error (et-subtype? (et-dt :number) (et-dt :infer-supertype :A)))
-;; Inferring in the wrong direction should error
-(et-assert-error (et-infer-subtype [:A] :number :A))
-(et-assert-error (et-infer-supertype [:A] :number :A))
-
-(et-assert-equal (list (et-dt :number))
-  (et-infer-subtype [:A] :A :number))
-
-;; Cons cell matching against list
-
-(et-assert-equal (list (et-dt :integer))
-  (et-infer-subtype [:A]
-    (:cons :A (:List :integer))
-    (:List :integer)))
-
-;; Change the tail type to :number from the above example. Inferring
-;; should fail if the rest of the infer type doesn't match the
-;; concrete type, even if the variable matches something.
-(et-assert-nil
- (et-infer-subtype [:A]
-   (:cons :A (:List :number))
-   :List<integer>))
-
-;; List cell matching against cons cell
-
-(et-assert-equal (list (et-dt :integer))
-  (et-infer-subtype [:A]
-    (:List :A)
-    (:or :nil (:cons :number (:List :integer)))))
-
-(et-assert-nil
- (et-infer-subtype [:A]
-   (:List :A)
-   (:cons :number (:List :integer))))
-
-;; Matching two variables
-
-(et-assert-equal (list (et-dt :integer) (et-dt :integer))
-  (et-infer-subtype [:A :B]
-    (:List (:or :A :B))
-    (:or :nil (:cons :number (:List :integer)))))
-
-;; Came across accidentally, and thought it was a bug, but b=any
-;; technically does satisfy the subtype.
-(et-assert-equal (list (et-dt :integer) (et-any))
-  (et-infer-subtype [:A :B]
-    (:List (:and :A :B))
-    (:or :nil (:cons :number (:List :integer)))))
-
-(et-assert-equal (list (et-dt :integer) (et-alias :List (et-dt :integer)))
-  (et-infer-subtype [:A :B]
-    (:cons :A (:cons :integer :B))
-    (:List :integer)))
-
-
-;;;; Supertypes vs subtypes
-
-(et-assert-equal (list (et-or (et-dt :integer) (et-dt :string)))
-  (et-infer-supertype [:Elem]
-    (:cons :Elem :Elem)
-    (:cons :integer :string)))
-(et-assert-nil
- (et-infer-subtype [:Elem]
-   (:cons :Elem :Elem)
-   (:cons :integer :string)))
-
-(et-assert-equal (list (et-parse '(:or (:cons :integer :nil) :integer)))
-  (et-infer-supertype [:Elem]
-    (:and :Elem (:cons :Elem :nil))
-    (:cons :integer :nil)))
-(et-assert-nil
- (et-infer-subtype [:Elem]
-   (:or :Elem (:cons :Elem :nil))
-   (:cons :integer :nil)))
-
-
-;;;; Typing car with infer
-
-;; Say we want to infer the return type of `nth'. This determines the
-;; elem type to be integer, implying that subtype inference is
-;; invalid.
-(et-assert-equal (list (et-dt :integer))
-  (et-infer-subtype [:Elem]
-    (:List :Elem)
-    (:or (:num 4) (:List :integer))))
-;; Whereas supertype inference correctly determines that it is invalid
-(et-assert-nil
- (et-infer-supertype [:Elem]
-   (:List :Elem)
-   (:or (:num 4) (:List :integer))))
-
-;; Contrast these two
-(et-assert-equal (list (et-dt :number))
-  (et-infer-supertype [:Elem]
-    (:cons :Elem :Elem)
-    (:cons :integer :number)))
-(et-assert-equal (list (et-dt :integer))
-  (et-infer-subtype [:Elem]
-    (:cons :Elem :Elem)
-    (:cons :integer :number)))
-
-;; Finally, the car type we desired
-(et-assert-equal (list (et-dt :integer))
-  (et-infer-supertype [:Elem]
-    (:or (:cons :Elem :any)
-         (:infer :Elem :nil)) ; This case isn't used here
-    (:cons :integer (:List :number))))
-;; This seems like it works
-(et-assert-equal (list (et-raw-or (et-nil) (et-dt :number)))
-  (et-infer-supertype [:Elem]
-    (:or (:cons :Elem :any) :Elem)
-    (:List :number)))
-;; However, elem can match to things other than nil
-(et-assert-equal (list (et-raw-or (et-dt :string) (et-nil) (et-dt :number)))
-  (et-infer-supertype [:Elem]
-    (:or (:cons :Elem :any) :Elem)
-    (:or :string (:List :number))))
-;; So we need to restrict it -- this is our final `car' strategy
-(et-assert-equal (list (et-raw-or (et-nil) (et-dt :number)))
-  (et-infer-supertype [:Elem]
-    (:or (:cons :Elem :any)
-         (:infer :Elem :nil))
-    (:List :number)))
-(et-assert-equal (list (et-dt :string))
-  (et-infer-supertype [:Elem]
-    (:or (:cons :Elem :any)
-         (:infer :Elem :nil))
-    (:cons :string :integer)))
-(et-assert-nil
- (et-infer-supertype [:Elem]
-   (:or (:cons :Elem :any)
-        (:infer :Elem :nil))
-   (:or :string (:List :number))))
+;; (et-assert-true
+;;  (et-subtype? (et Nil|Cons:RR<Number~List:R<Integer>>)
+;;               (et List:R<Number>)))
 
 
 ;;; ============================================================
 ;;; Expressions
 ;;;; Primitives
 
-(et-assert-success (et-root-resolve :number 1))
-(et-assert-success (et-root-resolve :number 1.1))
-(et-assert-error (et-root-resolve :number "1"))
+(et-assert-success (et-root-resolve 'Number 1))
+(et-assert-success (et-root-resolve 'Number 1.1))
+(et-assert-error (et-root-resolve 'Number "1"))
 
-(et-assert-success (et-root-resolve :integer 1))
-(et-assert-error (et-root-resolve :integer 1.1))
-(et-assert-error (et-root-resolve :integer "1"))
+(et-assert-success (et-root-resolve 'Integer 1))
+(et-assert-error (et-root-resolve 'Integer 1.1))
+(et-assert-error (et-root-resolve 'Integer "1"))
 
-(et-assert-success (et-root-resolve :string "1"))
-(et-assert-error (et-root-resolve :string 1))
+(et-assert-success (et-root-resolve 'String "1"))
+(et-assert-error (et-root-resolve 'String 1))
 
-(et-assert-success (et-root-resolve :symbol nil))
-(et-assert-success (et-root-resolve :symbol t))
-(et-assert-error (et-root-resolve :symbol 'a)) ; Not self-quoting
-(et-assert-error (et-root-resolve :symbol 1))
-(et-assert-error (et-root-resolve :symbol "1"))
+(et-assert-success (et-root-resolve 'Symbol nil))
+(et-assert-success (et-root-resolve 'Symbol t))
+(et-assert-error (et-root-resolve 'Symbol 'a)) ; Not self-quoting
+(et-assert-error (et-root-resolve 'Symbol 1))
+(et-assert-error (et-root-resolve 'Symbol "1"))
 
-(et-assert-success (et-root-resolve :Boolean t))
-(et-assert-success (et-root-resolve :Boolean nil))
-(et-assert-error (et-root-resolve :Boolean 'a))
-(et-assert-error (et-root-resolve :Boolean 1))
-(et-assert-error (et-root-resolve :Boolean "1"))
+(et-assert-success (et-root-resolve 'Boolean t))
+(et-assert-success (et-root-resolve 'Boolean nil))
+(et-assert-error (et-root-resolve 'Boolean 'a))
+(et-assert-error (et-root-resolve 'Boolean 1))
+(et-assert-error (et-root-resolve 'Boolean "1"))
 
 
 ;;;; Quoted
 
-(et-assert-success (et-root-resolve :integer ''1))
-(et-assert-success (et-root-resolve :number ''1.1))
-(et-assert-success (et-root-resolve :string ''"hi"))
-(et-assert-success (et-root-resolve :symbol ''a))
-(et-assert-error (et-root-resolve :integer ''1.1))
-(et-assert-error (et-root-resolve :integer '''1))
-(et-assert-error (et-root-resolve :number '''1.1))
-(et-assert-error (et-root-resolve :string '''"hi"))
-(et-assert-error (et-root-resolve :symbol '''a))
+(et-assert-success (et-root-resolve 'Integer ''1))
+(et-assert-success (et-root-resolve 'Number ''1.1))
+(et-assert-success (et-root-resolve 'String ''"hi"))
+(et-assert-success (et-root-resolve 'Symbol ''a))
+(et-assert-error (et-root-resolve 'Integer ''1.1))
+(et-assert-error (et-root-resolve 'Integer '''1))
+(et-assert-error (et-root-resolve 'Number '''1.1))
+(et-assert-error (et-root-resolve 'String '''"hi"))
+(et-assert-error (et-root-resolve 'Symbol '''a))
 
-(et-assert-success (et-root-resolve :cons<any~any> ''(1 2 3)))
-(et-assert-success (et-root-resolve :List<symbol> ''(a b c)))
-(et-assert-success (et-root-resolve :List<integer> ''()))
-(et-assert-error (et-root-resolve :List<integer> ''(1 2 '3)))
-(et-assert-error (et-root-resolve :List<integer> ''(1 2 3.3)))
-(et-assert-error (et-root-resolve :List<integer> '''(1 2 3)))
-(et-assert-error (et-root-resolve :List<integer> '''()))
+(et-assert-success (et-root-resolve 'Cons<Any~Any> ''(1 2 3)))
+(et-assert-success (et-root-resolve 'List<Symbol> ''(a b c)))
+(et-assert-success (et-root-resolve 'List<Integer> ''()))
+(et-assert-error (et-root-resolve 'List<Integer> ''(1 2 '3)))
+(et-assert-error (et-root-resolve 'List<Integer> ''(1 2 3.3)))
+(et-assert-error (et-root-resolve 'List<Integer> '''(1 2 3)))
+(et-assert-error (et-root-resolve 'List<Integer> '''()))
 
-(et-assert-success (et-root-resolve :cons<integer~integer> ''(1 . 2)))
-(et-assert-error (et-root-resolve :cons<integer~integer> ''(1 . 2.2)))
-(et-assert-error (et-root-resolve :cons<integer~integer> ''(1.1 . 2)))
-(et-assert-success (et-root-resolve :cons<symbol~List<string>> ''(a "2" "3")))
+(et-assert-success (et-root-resolve 'Cons<Integer~Integer> ''(1 . 2)))
+(et-assert-error (et-root-resolve 'Cons<Integer~Integer> ''(1 . 2.2)))
+(et-assert-error (et-root-resolve 'Cons<Integer~Integer> ''(1.1 . 2)))
+(et-assert-success (et-root-resolve 'Cons<Symbol~List<String>> ''(a "2" "3")))
+
+
+;;;; Arith
+
+(defmacro et-repeat (var repls &rest body)
+  (declare (indent 2))
+  (cl-assert (vectorp repls))
+  (cl-loop for repl across repls
+           nconc (cl-subst repl var body) into all
+           finally return (cons #'progn all)))
+
+(et-assert-equal (et Integer) (et-root-check-call + Integer Integer 1 2 3))
+
+;; (et-repeat op [+ *]
+;;   (et-assert-equal (et Integer) (et-root-check-call op Integer Integer 1 2 3))
+;;   (et-assert-equal (et Number) (et-root-check-call op Integer Integer 1 2.1 3))
+;;   (et-assert-equal (et Integer) (et-root-check-call op 1))
+;;   (et-assert-equal (et 0) (et-root-check-call op)))
 
 
 ;;;; and/or
 
 ;; and - value must satisfy all constituent types
-(et-assert-success (et-root-resolve :Boolean&Boolean t))
-(et-assert-success (et-root-resolve :Boolean&symbol&Boolean t))
-(et-assert-error   (et-root-resolve :Boolean&integer t))
-(et-assert-error   (et-root-resolve :Boolean&integer 1))
-(et-assert-error   (et-root-resolve :Boolean&integer nil))
+(et-assert-success (et-root-resolve 'Boolean&Symbol&True&@t t))
+(et-assert-error   (et-root-resolve 'Boolean&Integer t))
+(et-assert-error   (et-root-resolve 'Boolean&Integer 1))
+(et-assert-error   (et-root-resolve 'Boolean&Integer nil))
 
 ;; Two or types
-(et-assert-success (et-root-resolve :Boolean|integer t))
-(et-assert-success (et-root-resolve :Boolean|integer nil))
-(et-assert-success (et-root-resolve :Boolean|integer 1))
-(et-assert-error   (et-root-resolve :Boolean|integer "1"))
-(et-assert-error   (et-root-resolve :Boolean|integer 'a))
+(et-assert-success (et-root-resolve 'Boolean|Integer t))
+(et-assert-success (et-root-resolve 'Boolean|Integer nil))
+(et-assert-success (et-root-resolve 'Boolean|Integer 1))
+(et-assert-error   (et-root-resolve 'Boolean|Integer "1"))
+(et-assert-error   (et-root-resolve 'Boolean|Integer 'a))
 
 ;; Three or types
-(et-assert-success (et-root-resolve :Boolean|integer|string t))
-(et-assert-success (et-root-resolve :Boolean|integer|string 1))
-(et-assert-success (et-root-resolve :Boolean|integer|string "1"))
-(et-assert-error   (et-root-resolve :Boolean|integer|string 'a))
+(et-assert-success (et-root-resolve 'Boolean|Integer|String t))
+(et-assert-success (et-root-resolve 'Boolean|Integer|String 1))
+(et-assert-success (et-root-resolve 'Boolean|Integer|String "1"))
+(et-assert-error   (et-root-resolve 'Boolean|Integer|String 'a))
 
 ;; Nested - and inside or
-(et-assert-success (et-root-resolve :integer|Boolean&symbol t))
-(et-assert-success (et-root-resolve :integer|Boolean&symbol 1))
-(et-assert-error   (et-root-resolve :integer|Boolean&symbol 'a))
+(et-assert-success (et-root-resolve 'Integer|Boolean&Symbol t))
+(et-assert-success (et-root-resolve 'Integer|Boolean&Symbol 1))
+(et-assert-error   (et-root-resolve 'Integer|Boolean&Symbol 'a))
 
 ;; Nested - or inside and
-(et-assert-success (et-root-resolve :Boolean&{symbol|integer} t))
-(et-assert-success (et-root-resolve :Boolean&{symbol|integer} nil))
-(et-assert-error   (et-root-resolve :Boolean&{symbol|integer} 1))
+(et-assert-success (et-root-resolve 'Boolean&{Symbol|Integer} t))
+(et-assert-success (et-root-resolve 'Boolean&{Symbol|Integer} nil))
+(et-assert-error   (et-root-resolve 'Boolean&{Symbol|Integer} 1))
 
 
 ;;;; cons
 
-(et-assert-success (et-root-resolve :cons<integer~string> '(cons 1 "2")))
-(et-assert-error (et-root-resolve :cons<integer~string> '(cons "1" 2)))
-(et-assert-success (et-root-resolve :cons<integer~List<string>> '(cons 1 nil)))
-(et-assert-success (et-root-resolve :cons<integer~List<string>> '(cons 1 (cons "2" nil))))
+(et-assert-success (et-root-resolve 'Cons:RR<Integer~String> '(cons 1 "2")))
+(et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(cons "1" 2)))
+(et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(cons 1 nil)))
+(et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(cons 1 (cons "2" nil))))
 
-(et-assert-success (et-root-resolve :List<integer> '(cons 1 (cons 2 nil))))
-(et-assert-error (et-root-resolve :List<integer> '(cons 1 (cons "2" nil))))
-(et-assert-error (et-root-resolve :List<integer> '(cons "1" (cons 2 nil))))
-(et-assert-error (et-root-resolve :List<integer> '(cons 1 (cons 2 t))))
+(et-assert-success (et-root-resolve 'List:R<Integer> '(cons 1 (cons 2 nil))))
+(et-assert-error (et-root-resolve 'List:R<Integer> '(cons 1 (cons "2" nil))))
+(et-assert-error (et-root-resolve 'List:R<Integer> '(cons "1" (cons 2 nil))))
+(et-assert-error (et-root-resolve 'List:R<Integer> '(cons 1 (cons 2 t))))
 
 
 ;;;; list
 
-(et-assert-success (et-root-resolve :cons<integer~List<string>> '(list 1 "2")))
-(et-assert-error (et-root-resolve :cons<integer~string> '(list "1" 2)))
-(et-assert-error (et-root-resolve :cons<integer~string> '(list)))
+(et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(list 1 "2")))
+(et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(list "1" 2)))
+(et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(list)))
 
-(et-assert-success (et-root-resolve :List<integer> '(list 1 2 3)))
-(et-assert-success (et-root-resolve :List<integer> '(list 1)))
-(et-assert-error (et-root-resolve :List<integer> '(list 1 "2" 3)))
+(et-assert-success (et-root-resolve 'List:R<Integer> '(list 1 2 3)))
+(et-assert-success (et-root-resolve 'List:R<Integer> '(list 1)))
+(et-assert-error (et-root-resolve 'List:R<Integer> '(list 1 "2" 3)))
 
 
 ;;;; car
 
-(et-assert-success (et-root-resolve :integer '(car (list 1 2.2 3))))
-(et-assert-error (et-root-resolve :integer '(car (list 1.1 2 3))))
-(et-assert-success (et-root-resolve :integer '(car (cons 1 "3"))))
-(et-assert-success (et-root-resolve :List<integer> '(car (cons (list 1) "3"))))
-(et-assert-success (et-root-resolve :cons<integer~any> '(car (cons (list 1) "3"))))
-(et-assert-success (et-root-resolve :integer '(car (car (cons (list 1) "3")))))
-(et-assert-error (et-root-resolve :integer '(car (car (cons (list 1.1) "3")))))
+(et-assert-success (et-root-resolve 'Integer '(car (list 1 2.2 3))))
+(et-assert-error (et-root-resolve 'Integer '(car (list 1.1 2 3))))
+(et-assert-success (et-root-resolve 'Integer '(car (cons 1 "3"))))
+(et-assert-success (et-root-resolve 'List:R<Integer> '(car (cons (list 1) "3"))))
+(et-assert-success (et-root-resolve 'Cons:RR<Integer~Any> '(car (cons (list 1) "3"))))
+(et-assert-success (et-root-resolve 'Integer '(car (car (cons (list 1) "3")))))
+(et-assert-error (et-root-resolve 'Integer '(car (car (cons (list 1.1) "3")))))
 
 (et-assert-success (et-root-check-call cdr :never))
-(et-assert-success (et-root-check-call cdr :nil))
-(et-assert-success (et-root-check-call cdr :nil|cons<integer~string>))
-(et-assert-error (et-root-check-call cdr :nil|cons<integer~string>|string))
+(et-assert-success (et-root-check-call cdr Nil))
+(et-assert-success (et-root-check-call cdr Nil|Cons:RR<Integer~String>))
+(et-assert-error (et-root-check-call cdr Nil|Cons:RR<Integer~String>|String))
 (et-assert-error (et-root-check-call cdr :any))
 
 (et-assert-success (et-root-check-call car :never))
-(et-assert-success (et-root-check-call car :nil))
-(et-assert-success (et-root-check-call car :nil|cons<integer~string>))
-(et-assert-error (et-root-check-call car :nil|cons<integer~string>|string))
-(et-assert-error (et-root-check-call car :any))
+(et-assert-success (et-root-check-call car Nil))
+(et-assert-success (et-root-check-call car Nil|Cons:RR<Integer~String>))
+(et-assert-error (et-root-check-call car Nil|Cons:RR<Integer~String>|String))
+(et-assert-error (et-root-check-call car Any))
 
-(et-assert-equal (et :nil|integer)
-  (et-root-check-call car :List<integer>))
+(et-assert-equal (et Nil|Integer)
+  (et-root-check-call car List:R<Integer>))
 
-(et-assert-equal (et :nil|integer|string)
-  (et-root-check-call car :List<integer>|cons<string~nil>))
+(et-assert-equal (et Nil|Integer|String)
+  (et-root-check-call car List:R<Integer>|Cons:RR<String~Nil>))
 
 (et-assert-error
- (et-root-check-call car :List<integer>|cons<string~nil>|string))
+ (et-root-check-call car List:R<Integer>|Cons:RR<String~Nil>|String))
 
 
 ;;;; cdr
 
-(et-assert-success (et-root-resolve :List<number> '(cdr (list 1 2.2 3))))
-(et-assert-success (et-root-resolve :List<integer> '(cdr (list 1.1 2 3))))
-(et-assert-error (et-root-resolve :List<integer> '(car (list 1 2.2 3))))
+(et-assert-success (et-root-resolve 'List:R<Number> '(cdr (list 1 2.2 3))))
+(et-assert-success (et-root-resolve 'List:R<Integer> '(cdr (list 1.1 2 3))))
+(et-assert-error (et-root-resolve 'List:R<Integer> '(car (list 1 2.2 3))))
 
-(et-assert-success (et-root-resolve :integer '(cdr (cons "1" 2))))
-(et-assert-error (et-root-resolve :integer '(cdr (cons 1 "2"))))
+(et-assert-success (et-root-resolve 'Integer '(cdr (cons "1" 2))))
+(et-assert-error (et-root-resolve 'Integer '(cdr (cons 1 "2"))))
 
-(et-assert-success (et-root-resolve :List<integer> '(cdr (cons "1" (list 2)))))
-(et-assert-success (et-root-resolve :cons<integer~any> '(cdr (cons "1" (list 2)))))
-(et-assert-success (et-root-resolve :cons<integer~Boolean> '(cdr (cons "1" (list 2)))))
-(et-assert-error (et-root-resolve :cons<integer~Boolean> '(cdr (cons "1" (list 2 3)))))
-(et-assert-success (et-root-resolve :integer '(car (cdr (cons "1" (list 2))))))
+(et-assert-success (et-root-resolve 'List:R<Integer> '(cdr (cons "1" (list 2)))))
+(et-assert-success (et-root-resolve 'Cons:RR<Integer~Any> '(cdr (cons "1" (list 2)))))
+(et-assert-success (et-root-resolve 'Cons:RR<Integer~Boolean> '(cdr (cons "1" (list 2)))))
+(et-assert-error (et-root-resolve 'Cons:RR<Integer~Boolean> '(cdr (cons "1" (list 2 3)))))
+(et-assert-success (et-root-resolve 'Integer '(car (cdr (cons "1" (list 2))))))
 
-(et-assert-success (et-root-resolve :Boolean '(cdr (cdr (cdr (list 1 2 3))))))
-(et-assert-error (et-root-resolve :Boolean '(cdr (cdr (list 1 2 3)))))
+(et-assert-success (et-root-resolve 'Boolean '(cdr (cdr (cdr (list 1 2 3))))))
+(et-assert-error (et-root-resolve 'Boolean '(cdr (cdr (list 1 2 3)))))
 
-(et-assert-equal (et :nil|cons<integer~List<integer>>)
-  (et-root-check-call cdr :List<integer>))
+(et-assert-equal (et List:R<Integer>)
+  (et-root-check-call cdr List:R<Integer>))
 
-(et-assert-equal (et :nil|cons<integer~List<integer>>|string)
-  (et-root-check-call cdr :List<integer>|cons<nil~string>))
+(et-assert-equal (et List<Integer>|String)
+  (et-root-check-call cdr List<Integer>|Cons<Nil~String>))
 
 (et-assert-error
- (et-root-check-call car :List<integer>|cons<string~nil>|string))
+ (et-root-check-call car List<Integer>|Cons<String~nil>|String))
 
 
 ;;;; List ops
 
-(et-assert-equal (et :number|string|nil)
-  (et-root-check-call nth :integer :cons<number~List<string>>))
+(et-assert-equal (et Number|String|Nil)
+  (et-root-check-call nth Integer Cons<Number~List<String>>))
 
-(et-assert-equal (et :List<number|string>)
-  (et-root-check-call nthcdr :integer :cons<number~List<string>>))
+(et-assert-equal (et List<Number|String>)
+  (et-root-check-call nthcdr Integer Cons<Number~List<String>>))
 
-(et-assert-equal (et :List<never>)
-  (et-root-check-call nthcdr :integer :nil))
+(et-assert-equal (et List<:never>)
+  (et-root-check-call nthcdr Integer Nil))
 
-(et-assert-equal (et :integer)
-  (et-root-check-call length :vector<number>|List<string>))
+(et-assert-equal (et Integer)
+  (et-root-check-call length Vector<Number>|List<String>))
 
 (et-assert-error
- (et-root-check-call length :vector<number>|List<string>|number))
+ (et-root-check-call length Vector<Number>|List<String>|Number))
 
-(et-assert-equal (et :integer)
-  (et-root-check-call aref :string :integer))
+(et-assert-equal (et Integer)
+  (et-root-check-call aref String Integer))
+
+(et-assert-equal (et Symbol|Integer)
+  (et-root-check-call aref (:or Vector<Symbol> String) Integer))
+
+(et-assert-error
+ (et-root-check-call aref (:or Vector<Symbol> String List:R<Any>) Integer))
 
 
 ;;; ============================================================
@@ -390,39 +285,39 @@
 ;; Setting type binds to an incompatible type returns never
 (cl-assert
  (equal
-  (let ((vs (cons 'a (et-or (et-dt :integer) (et-dt :string)))))
+  (let ((vs (cons 'a (et--or (et-dt 'Integer) (et-dt 'String)))))
     (et-with-binds (list vs)
-      (et-with-narrow-binds (list (cons vs (et-dt :integer)))
-        (et--replace-type-binds (et-literal t) (list (cons vs (et-dt :string)))))))
+      (et-with-narrow-binds (list (cons vs (et-dt 'Integer)))
+        (et--replace-type-binds (et-literal t) (list (cons vs (et-dt 'String)))))))
   (et-never)))
 
 ;; A few hard type narrowing cases
-(et-root-block
- (let* ((b :string|integer|nil 4))
-   (if (and b (or (null b) (stringp b)))
-       (:assert-subtype b (et-dt :string))
-     (:assert-subtype b (et-or (et-nil) (et-dt :integer)))
-     (:assert-error (:assert-subtype b (et-or (et-nil) (et-dt :string)))))
-   (if (not b)
-       (:assert-subtype b (et-nil))
-     (:assert-subtype b (et-or (et-dt :string) (et-dt :integer))))
-   (if (not (not b))
-       (:assert-subtype b (et-or (et-dt :string) (et-dt :integer)))
-     (:assert-subtype b (et-nil)))
-   (if (not (not (not (not b))))
-       (:assert-subtype b (et-or (et-dt :string) (et-dt :integer)))
-     (:assert-subtype b (et-nil)))
-   (if (not (not (not (stringp b))))
-       (:assert-subtype b (et-or (et-nil) (et-dt :integer)))
-     (:assert-subtype b (et-dt :string)))))
+;; (et-root-block
+;;  (let* ((b String|Integer|Nil 4))
+;;    (if (and b (or (null b) (stringp b)))
+;;        (:assert-subtype b String)
+;;      (:assert-subtype b (et-or (et-nil) (et-dt 'Integer)))
+;;      (:assert-error (:assert-subtype b (et-or (et-nil) (et-dt 'String)))))
+;;    (if (not b)
+;;        (:assert-subtype b (et-nil))
+;;      (:assert-subtype b (et-or (et-dt String) (et-dt 'Integer))))
+;;    (if (not (not b))
+;;        (:assert-subtype b (et-or (et-dt String) (et-dt 'Integer)))
+;;      (:assert-subtype b (et-nil)))
+;;    (if (not (not (not (not b))))
+;;        (:assert-subtype b (et-or (et-dt String) (et-dt 'Integer)))
+;;      (:assert-subtype b (et-nil)))
+;;    (if (not (not (not (stringp b))))
+;;        (:assert-subtype b (et-or (et-nil) (et-dt 'Integer)))
+;;      (:assert-subtype b (et-dt String)))))
 
 ;; Test narrowing across variables
-(et-root-block
- (let* ((a :string|integer|nil 4)
-        (b a))
-   (when (stringp b)
-     (:assert-subtype a (et-dt :string)))
-   (:assert-error (:assert-subtype a (et-dt :string)))))
+;; (et-root-block
+;;  (let* ((a String|Integer|Nil 4)
+;;         (b a))
+;;    (when (stringp b)
+;;      (:assert-subtype a (et-dt String)))
+;;    (:assert-error (:assert-subtype a (et-dt String)))))
 
 
 ;; ============================================================

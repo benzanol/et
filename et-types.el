@@ -34,7 +34,7 @@
 (et-define-checker let* (varlist &rest _body)
   ;; Process let forms
   (cl-loop
-   with let-vars-rev = nil
+   with let-binds-rev = nil
    for form in varlist
    for idx upfrom 0
    do
@@ -43,23 +43,23 @@
        ;; Binding with a type annotation
        (`(,var ,type ,val)
         ;; Parse the type
-        (et-with-path (list 1) (setq type (et-parse type)))
+        (et-with-path (list 1) (setq type (et-parse-type type)))
         ;; Ensure the value fits the type
-        (et-with-vars let-vars-rev (et-with-path (list 2) (et-resolve type)))
+        (et-with-binds let-binds-rev (et-with-path (list 2) (et-resolve type)))
         ;; Push the binding
         (setq et--current-expr (list var val))
-        (push (make-et-var :name var :type type) let-vars-rev))
+        (push (cons var type) let-binds-rev))
 
        ;; Binding with no type annotation
        (`(,var ,_val)
-        (let ((type (et-with-vars let-vars-rev (et-with-path (list 1) (et-check)))))
-          (push (make-et-var :name var :type type) let-vars-rev)
-          (et-warn '(0) "%s: %s" var (et-pp type))))
+        (let ((type (et-with-binds let-binds-rev (et-with-path (list 1) (et-check)))))
+          (push (cons var type) let-binds-rev)
+          (et-warn (list 0) "%s: %s" var (et-pp type))))
 
        (wrong (error "Invalid let binding: %s" wrong))))
 
    finally return
-   (et-with-vars let-vars-rev
+   (et-with-binds let-binds-rev
      (et-check-tail 2))))
 
 
@@ -70,20 +70,20 @@
     (pcase spec
       ;; With explicit type
       (`(,var ,etype ,_val)
-       (et-with-path `(1 1) (setq type (et-parse etype)))
+       (et-with-path (list 1 1) (setq type (et-parse-type etype)))
        (setq variable var)
        ;; Ensure the value fits the type
-       (et-with-path `(1 2) (et-resolve (et-alias :List type))))
+       (et-with-path (list 1 2) (et-resolve (et-alias 'List:R type))))
 
       ;; With implicit type
       (`(,var ,_val)
        (setq variable var)
-       (et-with-path `(1 1)
+       (et-with-path (list 1 1)
          (let* ((list-type (et-check))
-                (infer (et-infer-subtype [:Elem] :List<Elem> list-type)))
-           (unless infer (error "Expected list, found %s" (et-pp list-type)))
+                (infer (et--sub-match (et-matcher [T] List:R<T>) list-type)))
+           (when (eq infer 'INVALID) (error "Expected list, found %s" (et-pp list-type)))
            (setq type (car infer))))
-       (et-warn '(1 0) "%s: %s" var (et-pp type)))
+       (et-warn (list 1 0) "%s: %s" var (et-pp type)))
 
       (_ (error "Invalid dolist variable spec")))
 
@@ -91,7 +91,7 @@
     (et-with-binds (list (cons variable type))
       (et-check-tail 2))
 
-    (et-nil)))
+    (et Nil)))
 
 
 ;;;; setq
@@ -103,7 +103,7 @@
 
   (cl-loop for (var _val) on args by #'cddr
            for idx upfrom 0 by 2
-           for type = (or (et--get-var-bind var)
+           for type = (or (et--get-symbol-bind var)
                           (et-with-path (list (1+ idx))
                             (error "Assignment to free variable")))
            do (et-with-path (list (+ idx 2))
@@ -114,35 +114,40 @@
 
 ;;;; and/or
 
+(defun et--non-nil (type)
+  ;; TODO: Should be
+  ;; (et-subtract cond-type (et Nil))
+  (et--and type (et True)))
+
 (defun et--and-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were non-nil
-  (let* ((non-nil-binds (et--type-binds (et-subtract cond-type (et-nil))))
+  (let* ((non-nil-binds (et--type-binds (et--non-nil cond-type)))
          (output-type (et-with-narrow-binds non-nil-binds (funcall checker)))
 
-         (output-non-nil (et-subtract output-type (et-nil)))
+         (output-non-nil (et--non-nil output-type))
          ;; If `and' returns non-nil, then both non-nil binds will be true (intersect them)
          (merged-non-nil-binds
           (et--intersect-binds non-nil-binds (et--type-binds output-non-nil))))
 
-    (et-or (et--replace-type-binds output-non-nil merged-non-nil-binds)
-           ;; If `and' returns nil, it could be from either `cond-type' OR `output-type' being nil
-           (et-and cond-type (et-nil))
-           (et-and output-type (et-nil)))))
+    (et--or (et--replace-type-binds output-non-nil merged-non-nil-binds)
+            ;; If `and' returns nil, it could be from either `cond-type' OR `output-type' being nil
+            (et--and cond-type (et Nil))
+            (et--and output-type (et Nil)))))
 
 (defun et--or-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were nil
-  (let* ((nil-binds (et--type-binds (et-and cond-type (et-nil))))
+  (let* ((nil-binds (et--type-binds (et--and cond-type (et Nil))))
          (output-type (et-with-narrow-binds nil-binds (funcall checker)))
 
-         (output-nil (et-and output-type (et-nil)))
+         (output-nil (et--and output-type (et Nil)))
          ;; If `or' returns nil, then both nil binds will be true (intersect them)
          (merged-nil-binds
           (et--intersect-binds nil-binds (et--type-binds output-nil))))
 
-    (et-or (et--replace-type-binds output-nil merged-nil-binds)
-           ;; If `or' returns non-nil, it could be from either `cond-type' OR `output-type'
-           (et-subtract cond-type (et-nil))
-           (et-subtract output-type (et-nil)))))
+    (et--or (et--replace-type-binds output-nil merged-nil-binds)
+            ;; If `or' returns non-nil, it could be from either `cond-type' OR `output-type'
+            (et--non-nil cond-type)
+            (et--non-nil output-type))))
 
 (et-define-checker and (&rest args)
   (cl-loop with acc-type = (et-literal t)
@@ -152,7 +157,7 @@
            finally return acc-type))
 
 (et-define-checker or (&rest args)
-  (cl-loop with acc-type = (et-nil)
+  (cl-loop with acc-type = (et Nil)
            for pos upfrom 1 to (length args)
            do (cl-callf et--or-return-type acc-type
                 (lambda () (et-with-path (list pos) (et-check))))
@@ -164,22 +169,25 @@
 (et-define-checker if (_cond _then &rest _else)
   (let* ((cond-type (et-check-path 1)))
 
-    (et-warn-narrows "non-nil:\\n%s" (et-subtract cond-type (et-nil))
-                     "nil:\\n%s" (et-and cond-type (et-nil)))
+    (et-warn-narrows "non-nil:\\n%s" (et Nil) ; (et-subtract cond-type (et Nil))
+                     "nil:\\n%s" (et--and cond-type (et Nil)))
 
-    (et-or (et--and-return-type cond-type (lambda () (et-check-path 2)))
-           (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
+    (et--or (et--and-return-type cond-type (lambda () (et-check-path 2)))
+            (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
+
+;; (et-assert-equal (et $a::2&True)
+;;   (et--and-return-type (et $a::{1|2}&True) (lambda () (et $a::{2|3}&True))))
 
 (et-define-checker when (_cond &rest then)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "non-nil:\\n%s" (et-subtract cond-type (et-nil)))
+    (et-warn-narrows "non-nil:\\n%s" (et--non-nil cond-type))
     ;; Special case for empty then block because (when cond) always returns nil
-    (if (null then) (et-nil)
+    (if (null then) (et Nil)
       (et--and-return-type cond-type (lambda () (et-check-tail 2))))))
 
 (et-define-checker unless (_cond &rest _else)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "nil:\\n%s" (et-and cond-type (et-nil)))
+    (et-warn-narrows "nil:\\n%s" (et--and cond-type (et Nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (et--or-return-type cond-type (lambda () (et-check-tail 2)))))
 
@@ -194,92 +202,58 @@
 
 ;;;; Arithmetic
 
-(defun et--check-arithmetic-function (args)
-  (cl-loop with is-integer = t
-           for pos upfrom 1 to (length args)
-           for type = (et-check-path pos)
-           do (or (et-subtype? type (et-dt :number))
-                  (et-with-path (list pos)
-                    (error "Argument must be a number, got %s" (et-pp type))))
-           do (setq is-integer (and is-integer (et-subtype? type (et-dt :integer))))
-           finally return (et-dt (if is-integer :integer :number))))
+(et-define-type-checker + [N]
+  (:or Nil&{N=0} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
+  N)
 
-(et-define-checker + (&rest args) (et--check-arithmetic-function args))
-(et-define-checker - (&rest args) (et--check-arithmetic-function args))
-(et-define-checker * (&rest args) (et--check-arithmetic-function args))
-(et-define-checker / (&rest args) (et--check-arithmetic-function args))
-(et-define-checker 1+ (arg) (et--check-arithmetic-function (list arg)))
-(et-define-checker 1- (arg) (et--check-arithmetic-function (list arg)))
+(et-define-type-checker - [N]
+  (:or Nil&{N=0} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
+  N)
 
+(et-define-type-checker * [N]
+  (:or Nil&{N=1} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
+  N)
 
-;;;; cons/list
+(et-define-type-checker / [N]
+  (:or NonNilList:R<Integer>&{N=Integer} NonNilList:R<Number>&{N=Number})
+  N)
 
-(et-define-checker cons (_lval _rval)
-  (et-dt :cons
-         (et-check-path 1)
-         (et-check-path 2)))
+(et-define-type-checker 1+ [N] (Args Integer&{N=Integer} Number&{N=Number}) N)
+(et-define-type-checker 1- [N] (Args Integer&{N=Integer} Number&{N=Number}) N)
 
 
-(et-define-checker list (&rest args)
-  (cl-loop with type = (et-literal nil)
-           for idx downfrom (length args) to 1
-           do (setq type (et-dt :cons (et-check-path idx) type))
-           finally return type))
+;;;; Sequences
 
+(et-define-type-checker cons [L R] (Args L R) Cons<L~R>)
+(et-define-type-checker list [T] T T)
 
-;;;; Sequence access
+(et-define-type-checker car [L] (Args (:or Nil&L=Nil Cons:RR<L~Any>)) L)
+(et-define-type-checker cdr [R] (Args (:or Nil&R=Nil Cons:RR<Any~R>)) R)
 
-(et-define-type-checker car [:T]
-  (:or :infer<T=nil@nil> (:cons :T :any))
-  :T)
+(et-define-type-checker nth [T] (Args Integer List:R<T>) T|Nil)
 
-(et-define-type-checker cdr [:T]
-  (:or :infer<T=nil@nil> (:cons :any :T))
-  :T)
+(et-define-type-checker nthcdr [T] (Args Integer List:R<T>) List<T>)
 
-(et-define-type-checker nth [:T]
-  :integer
-  (:List :T)
-  (:or :nil :T))
+(et-define-type-checker length [] (Args String|List:R<Any>|Vector:R<Any>) Integer)
 
-(et-define-type-checker nthcdr [:T]
-  :integer
-  (:List :T)
-  (:List :T))
-
-(et-define-type-checker length []
-  (:or :string (:List :any) (:vector :any))
-  :integer)
-
-(et-define-type-checker aref [:T]
-  (:or (:vector :T) :infer<T=integer@string>)
-  :integer
-  :T)
+(et-define-type-checker aref [T] (Args Vector:R<T>|{String&T=Integer} Integer) T)
 
 
 ;;;; Predicates
 
 (defmacro et-define-predicate (name type)
-  `(et-define-checker ,name (_expr)
-     (let* ((type ,type)
-            (expr-type (et-check-path 1))
-            (t-case (et-and expr-type type))
-            (nil-case (et-subtract expr-type type))
-            (t-type (if (et-never? t-case) (et-never)
-                      (et--replace-type-binds (et-literal t) (et--type-binds t-case))))
-            (nil-type (if (et-never? nil-case) (et-never)
-                        (et--replace-type-binds (et-nil) (et--type-binds nil-case)))))
-       (et-or t-type nil-type))))
+  `(et-define-type-checker ,name [T]
+     (Tuple:R T)
+     (:or (:and True (:binds-of (:and T ,type))) Nil)))
 
-
-(et-define-predicate stringp (et-dt :string))
-(et-define-predicate numberp (et-dt :number))
-(et-define-predicate integerp (et-dt :integer))
-(et-define-predicate consp (et-dt :cons (et-any) (et-any)))
-;; listp does not technically check if it is a valid list
-(et-define-predicate listp (et-or (et-dt nil) (et-dt :cons (et-any) (et-any))))
-(et-define-predicate null (et-nil))
-(et-define-predicate not (et-nil))
+(et-define-predicate stringp String)
+(et-define-predicate numberp Number)
+(et-define-predicate integerp Integer)
+;; Todo: We need a Cons:-- type which all cons types extend
+(et-define-predicate consp Cons:RR<Any~Any>|Cons:WW<Any~Any>|Cons:RW<Any~Any>|Cons:WR<Any~Any>)
+(et-define-predicate listp Nil|Cons:RR<Any~Any>)
+(et-define-predicate null Nil)
+(et-define-predicate not Nil)
 
 
 ;;; ============================================================
