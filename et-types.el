@@ -34,7 +34,7 @@
 (et-define-checker let* (varlist &rest _body)
   ;; Process let forms
   (cl-loop
-   with let-binds-rev = nil
+   with let-vars-rev = nil
    for form in varlist
    for idx upfrom 0
    do
@@ -45,21 +45,21 @@
         ;; Parse the type
         (et-with-path (list 1) (setq type (et-parse type)))
         ;; Ensure the value fits the type
-        (et-with-binds let-binds-rev (et-with-path (list 2) (et-resolve type)))
+        (et-with-vars let-vars-rev (et-with-path (list 2) (et-resolve type)))
         ;; Push the binding
         (setq et--current-expr (list var val))
-        (push (cons var type) let-binds-rev))
+        (push (make-et-var :name var :type type) let-vars-rev))
 
        ;; Binding with no type annotation
        (`(,var ,_val)
-        (let ((type (et-with-binds let-binds-rev (et-with-path (list 1) (et-check)))))
-          (push (cons var type) let-binds-rev)
+        (let ((type (et-with-vars let-vars-rev (et-with-path (list 1) (et-check)))))
+          (push (make-et-var :name var :type type) let-vars-rev)
           (et-warn '(0) "%s: %s" var (et-pp type))))
 
        (wrong (error "Invalid let binding: %s" wrong))))
 
    finally return
-   (et-with-binds let-binds-rev
+   (et-with-vars let-vars-rev
      (et-check-tail 2))))
 
 

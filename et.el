@@ -92,6 +92,9 @@ An list of (NAME PLIST), where PLIST has the following properties:
   "A datatype factor of an `et-type'."
   name args)
 
+(defun et--datatype-name? (name)
+  (not (not (memq name '(Any Literal Number Integer String Symbol Vector
+                             Cons Cons:RR Cons:WW Cons:RW Cons:WR)))))
 
 (defun et--datatype-parents (dt-name)
   "Return a list of datatype names which are parents of `DT-NAME'.
@@ -276,10 +279,6 @@ structure which can be parsed by `et-parse-type'.")
   "Call the alias expansion function for alias NAME with args ARGS."
   (let ((type-fn (or (car (alist-get name et-aliases)) (error "Alias %s is not defined" name))))
     (apply type-fn args)))
-
-(defun et--name-is-alias? (name)
-  (cl-assert (symbolp name))
-  (not (not (alist-get name et-aliases))))
 
 (defun et-alias-expand (alias)
   "Expand an alias to a type."
@@ -589,12 +588,17 @@ ARGS is a mix of constant args (where the corresponding arg role is
 ;; A "type structure" is a list of lists of the following form:
 ;; \(`S:DT' NAME ARGS...)
 ;; \(`S:ALIAS' NAME ARGS...)
-;; \(`S:BIND' VAR TYPE) - only for types
-;; \(`S:TYPEOF' VAR) - only for types
-;; \(`S:GENERIC' VAR) - only for matchers
-;; \(`S:SET' VAR DNF) - only for matchers
-;; \(`S:MATCHER-DNF' DNF) - used for matcher alias expansion
+
+;; Types only:
+;; \(`S:BIND' VAR TYPE)
+;; \(`S:TYPEOF' VAR)
+;; \(`S:BINDS-OF' TYPE)
 ;; \(`S:TYPE' TYPE) - used for type alias expansion
+
+;; Matchers only:
+;; \(`S:GENERIC' VAR)
+;; \(`S:SET' VAR DNF)
+;; \(`S:MATCHER-DNF' DNF) - used for matcher alias expansion
 
 (defun et-parse-structure (spec generics)
   (let ((case-fold-search nil)
@@ -618,9 +622,14 @@ ARGS is a mix of constant args (where the corresponding arg role is
 
       (`(:literal ,val) (et-q (((S:DT Literal ,val)))))
 
+      (`(:binds-of ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
+
       (`(:set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
        (et-q (((S:SET ,var ,(funcall parse type))))))
+
+      ('(Nil) (et-q (((S:DT Literal nil)))))
+      ('(True) (et-q (((S:DT Literal t)))))
 
       (`(,(and name (pred symbolp) (pred (not keywordp))) . ,args)
        (cond
@@ -628,10 +637,10 @@ ARGS is a mix of constant args (where the corresponding arg role is
          (or (null args) (error "Generic type cannot have arguments"))
          (et-q (((S:GENERIC ,name)))))
 
-        ((et--name-is-alias? name)
-         (et-q (((S:ALIAS ,name ,@(mapcar parse args))))))
+        ((et--datatype-name? name)
+         (et-q (((S:DT ,name ,@(et--datatype-map-type-args name args parse))))))
 
-        (t (et-q (((S:DT ,name ,@(et--datatype-map-type-args name args parse))))))))
+        (t (et-q (((S:ALIAS ,name ,@(mapcar parse args))))))))
 
       (_ (error "Invalid parse syntax: %s" spec)))))
 
@@ -666,7 +675,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
       (et-parse-structure (list :set var (list :parse expr)) generics)))
 
    ;; Name or Name<...>
-   ((string-match "^\\([A-Za-z][a-zA-Z0-9:]*\\)\\(?:<\\(.*\\)>\\)?$" s)
+   ((string-match "^\\([-a-zA-Z0-9:]+\\)\\(?:<\\(.*\\)>\\)?$" s)
     (let* ((name (intern (match-string 1 s)))
            (inner (match-string 2 s)))
       (cl-loop for arg-str in (when inner (et--split-at-depth inner ?~))
@@ -704,7 +713,7 @@ Depth tracks < > and { } nesting."
 
 (defun et--format-structure-factor (factor)
   (pcase factor
-    (`(S:GENERIC ,var) (format "@%s" (substring (symbol-name var) 1)))
+    (`(S:GENERIC ,var) (format "@%s" (symbol-name var)))
     (`(S:SET ,var ,sub) (format "%s=%s" var (et--format-structure sub)))
     (`(,(or 'S:DT 'S:ALIAS) ,name . ,args) (et--format-structure-named name args))
     (`(S:BIND ,var ,type-struct) (format "{%s : %s}" (et-var-name var) (et--format-structure type-struct)))
@@ -738,11 +747,13 @@ Depth tracks < > and { } nesting."
 
     (_
      (let* ((name-str (symbol-name name))
-            (strs (et--datatype-map-args
-                   name args
-                   (lambda (arg role)
-                     (if (eq role 'CONST) (format "%s" arg)
-                       (et--format-structure arg))))))
+            (strs (if (not (et--datatype-name? name))
+                      (mapcar #'et--format-structure args)
+                    (et--datatype-map-args
+                     name args
+                     (lambda (arg role)
+                       (if (eq role 'CONST) (format "%s" arg)
+                         (et--format-structure arg)))))))
        (if (null args) name-str
          (format "%s<%s>" name-str (string-join strs ", ")))))))
 
@@ -759,29 +770,31 @@ this, so it will fail in this case.
 Also, there are certain structure types that are designed for matchers,
 which are invalid for types."
 
-  (let (cases values binds typeofs)
-    (dolist (factors structure)
-      (setq values nil binds nil typeofs nil)
-      (pcase factors
-        (`((S:TYPE ,type)) (cl-callf append (et-type-cases type) cases))
-        (_
-         (dolist (f factors)
-           (pcase f
-             (`(S:BIND ,var ,struct) (push (cons var (et-structure-to-type struct)) binds))
-             (`(S:TYPEOF ,var) (push var typeofs))
-             (`(S:DT ,name . ,args)
-              (let ((new-args (et--datatype-map-type-args name args #'et-structure-to-type)))
-                (push (make-et-datatype :name name :args new-args) values)))
-             (`(S:ALIAS ,name . ,args)
-              (push (make-et-alias :name name :args (mapcar #'et-structure-to-type args)) values))
-             (_ (error "Invalid structure factor for type: %s" f))))
-
-         (when (null values) (error "Case value missing: %s" factors))
-         (when (cdr values) (error "Case cannot intersect multiple values: %s" factors))
-
-         (push (make-et-type-case :value (car values) :binds binds :typeofs typeofs) cases))))
-
-    (make-et-type :cases (nreverse cases))))
+  (cl-loop for factors in structure
+           collect
+           (cl-loop for factor in factors
+                    collect
+                    (pcase factor
+                      (`(S:TYPE ,type) (apply #'list (et-type-cases type)))
+                      (`(S:DT ,name . ,args)
+                       (let ((new-args (et--datatype-map-type-args name args #'et-structure-to-type)))
+                         (list (make-et-type-case :value (make-et-datatype :name name :args new-args)))))
+                      (`(S:ALIAS ,name . ,args)
+                       (list (make-et-type-case :value (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))))
+                      (`(S:BIND ,var ,struct)
+                       (list (make-et-type-case
+                              :value (make-et-datatype :name 'Any)
+                              :binds (list (cons var (et-structure-to-type struct))))))
+                      (`(S:TYPEOF ,var)
+                       (list (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var))))
+                      (`(S:BINDS-OF ,struct) (et--binds-of-cases (et-structure-to-type struct)))
+                      (_ (error "Invalid structure factor for type: %s" factor)))
+                    into and-case-lists
+                    finally return
+                    (apply #'et--and (cl-loop for cs in and-case-lists
+                                              collect (make-et-type :cases cs))))
+           into or-types
+           finally return (apply #'et--or or-types)))
 
 (defun et-type-to-structure (type)
   "Convert an `et-type' to a structure DNF."
@@ -1136,6 +1149,42 @@ values to be the never type."
      collect gen-result)))
 
 
+;;;; Binds of
+
+(defun et--remove-type-binds (type)
+  (cl-assert (et-type-p type))
+
+  (cl-loop for case in (et-type-cases type)
+           for val = (et-type-case-value case)
+           collect
+           (make-et-type-case
+            :value
+            (cl-typecase val
+              (et-alias
+               (make-et-alias
+                :name (et-alias-name val)
+                :args (mapcar #'et--remove-type-binds (et-alias-args val))))
+              (et-datatype
+               (make-et-datatype
+                :name (et-datatype-name val)
+                :args (et--datatype-map-type-args (et-datatype-name val) (et-datatype-args val)
+                                                  #'et--remove-type-binds)))
+              (t (error "Invalid case val: %s" val))))
+           into cases
+           finally return (make-et-type :cases cases)))
+
+(defun et--binds-of-cases (type)
+  (cl-loop for case in (et-type-cases type)
+           collect (make-et-type-case
+                    :value (make-et-datatype :name 'Any)
+                    :binds (et--intersect-binds
+                            (et-type-case-binds case)
+                            (cl-loop for var in (et-type-case-typeofs case)
+                                     collect (cons var (et--remove-type-binds type)))))
+           into new-cases
+           finally return (delete-dups new-cases)))
+
+
 ;;; ============================================================
 ;;; Checking
 ;;;; Path
@@ -1166,17 +1215,20 @@ values to be the never type."
 
 ;;;; Binds
 
-(defvar et--binds nil)
-(defvar et--narrow-binds nil)
+(defvar et--binds nil
+  "Stack of (SYMBOL . `et-var').")
+(defvar et--narrow-binds nil
+  "Stack of (`et-var' . `et-type').")
 
-(defun et--get-var-bind (var)
-  (when-let ((base-bind (assoc var et--binds)))
-    (or (alist-get base-bind et--narrow-binds)
-        (cdr base-bind))))
+(defun et--var-bind (var)
+  (cl-assert (et-var-p var))
+  (or (alist-get var et--narrow-binds)
+      (et-var-type var)))
 
-(defmacro et-with-binds (binds &rest body)
+(defmacro et-with-vars (vars &rest body)
   (declare (indent 1))
-  `(let ((et--binds (append ,binds et--binds)))
+  `(let* ((vars (cl-loop for v in ,vars collect (cons (et-var-name v) v)))
+          (et--binds (append vars et--binds)))
      ,@body))
 
 (defmacro et-with-narrow-binds (binds &rest body)
@@ -1231,7 +1283,9 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
   `(prog1 ',expr-type
      (setf (get ',expr-type 'et-checker)
-           (lambda . ,(cl--transform-lambda (cons arglist body) (format "et--checker:%s" expr-type))))))
+           (lambda . ,(cl--transform-lambda
+                       (cons arglist body)
+                       (format "et--checker:%s" expr-type))))))
 
 (defun et--type-checker-body (arglist-matcher return-struct exprs)
   (let* ((arg-types (cl-loop for _expr in exprs
@@ -1251,7 +1305,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
     (cl-loop for gen in (et-matcher-generics arglist-matcher)
              for type in result
              do (setq return-struct
-                      (cl-subst (et-q (TYPE ,type))
+                      (cl-subst (et-q (S:TYPE ,type))
                                 (et-q (S:ALIAS ,gen))
                                 return-struct
                                 :test #'equal)))
@@ -1280,10 +1334,10 @@ substituted.
          (when (vectorp (car arguments))
            ;; Make sure the generics have the correct format
            (cl-loop for var across (car arguments)
-                    do (or (symbolp var) (error "Generics vector should contain symbols"))
+                    do (or (symbolp var) (error "Generic vars must be symbols"))
                     do (or (let ((case-fold-search nil))
-                             (string-match-p "^:[A-Z]" (format "%s" var)))
-                           (error "Var should start with an uppercase letter")))
+                             (string-match-p "^[A-Z]" (format "%s" var)))
+                           (error "Generic vars must start with an uppercase letter")))
            (append (pop arguments) nil))))
     (unless (eq (length arguments) 2)
       (error "Incorrect number of arguments"))
@@ -1308,19 +1362,12 @@ substituted.
 
      ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
 
-      ;; Todo: fix
-      ;; Allow for type narrowing on variable names.
-      ;; For example, if a: Number | nil,
-      ;; then return the type Number&{a: Number} | nil
-      ;; (let* ((var-type (or (et--get-var-bind sym) (error "Free variable: %s" sym)))
-      ;;        (varspec (assoc sym et--binds)))
-      ;;   (cl-loop for case in (et-type-cases var-type)
-      ;;            for case-type = (make-et-type :cases (list case))
-      ;;            collect
-      ;;            (et--intersect-binds case-type (list (cons varspec case-type)))
-      ;;            into case-types
-      ;;            finally return (apply #'et-raw-or case-types)))
-      (or (et--get-var-bind sym) (error "Free variable: %s" sym)))
+      (let ((var (or (alist-get sym et--binds) (error "Free variable: %s" sym))))
+        (et--and
+         (or (et--var-bind var)
+             (error "Free variable: %s" sym))
+         (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
+                                     :typeofs (list var))))))
 
      (expr (et-literal expr)))))
 
@@ -1356,13 +1403,8 @@ substituted.
   (et--root expr (et-check)))
 
 (defmacro et-root-check-call (func &rest arg-types)
-  (let* ((vars (cl-loop for type in arg-types
-                        for idx upfrom 1
-                        collect (cons (intern (format "var%s" idx))
-                                      (et-parse-type type)))))
-    `(et--root ,(list '\` (cons func (mapcar #'car vars)))
-       (et-with-binds ,(list '\` vars)
-         (et-check)))))
+  `(et--root ',(cons func (cl-loop for type in arg-types collect (list :type type)))
+     (et-check)))
 
 (defun et-resolve (type)
   (setq type (et-parse-type type))
