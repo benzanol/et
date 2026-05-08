@@ -31,7 +31,141 @@
 
 
 ;;; ============================================================
-;;; Helpers
+;;; Testing macros
+;;;; Flycheck rebasing
+
+(defvar et--error-path nil)
+
+(defmacro et--with-error-path (path &rest body)
+  (declare (indent 1))
+  `(let ((et--error-path (append et--error-path ,path)))
+     ,@body))
+
+(defun et-error (path string &rest args)
+  (signal 'error (list (apply #'format (concat string (et--error-message-suffix path)) args))))
+
+(defun et--error-message-suffix (path)
+  (format "\0;;flycheck-path:%s" (append et--error-path path)))
+
+(defun et--flycheck-reposition-error (err)
+  "If ERR has a ;;flycheck-path: sentinel, reposition it."
+  (ignore ; return nil so other handlers still run
+   (ignore-errors
+     (when-let* ((msg (flycheck-error-message err))
+                 (match (string-match "\0;;flycheck-path:\\((.*)\\)" msg))
+                 (path (car (read-from-string (match-string 1 msg))))
+                 (prev-start t))
+
+       ;; Strip the path from the displayed message
+       (setf (flycheck-error-message err)
+             (replace-regexp-in-string "\\\\n" "\n" (substring msg 0 match)))
+       (if (eq (flycheck-error-level err) 'warning)
+           (setf (flycheck-error-level err) 'info))
+
+       ;; Find the macro call in the buffer and walk the path
+       (with-current-buffer (flycheck-error-buffer err)
+         (save-excursion
+           (goto-char (flycheck-error-pos err)) ; start near the error
+           (beginning-of-defun)
+
+           (dolist (idx path)
+             (search-forward-regexp "\\=['`]?[[(]")
+             (forward-char 1)
+             (dotimes (_ idx) (forward-sexp))
+             (forward-sexp) (backward-sexp))
+
+           (setf (flycheck-error-line err) (line-number-at-pos))
+           (setf (flycheck-error-column err) (1+ (current-column)))
+           (forward-sexp)
+           (setf (flycheck-error-end-line err) (line-number-at-pos))
+           (setf (flycheck-error-end-column err) (1+ (current-column)))))))))
+
+(add-hook 'flycheck-process-error-functions #'et--flycheck-reposition-error)
+
+
+;;;; Repeat
+
+(defmacro et-repeat (var repls &rest body)
+  (declare (indent 2))
+  (cl-assert (vectorp repls))
+  (cl-loop for repl across repls
+           collect (cl-subst repl var body) into all
+           finally return (cons #'ignore all)))
+
+
+;;;; Testing
+
+(eval-and-compile
+  (defvar et-run-tests (if noninteractive t nil)
+    "Whether to run et tests when compiling source files."))
+
+(defmacro et-test (&rest body)
+  "BODY can start with a series of VAR VECTOR... forms."
+
+  (when (and et-run-tests (null load-file-name))
+    ;; Require the file without tests
+    (when (stringp (car command-line-args-left))
+      (let ((et-run-tests nil))
+        (load-file (car command-line-args-left))))
+
+    ;; Repeat var
+    (let* ((evaller
+            (lambda (body start-idx)
+              (cl-loop for expr in body
+                       for idx upfrom 0
+                       do (et--with-error-path (list (+ idx start-idx))
+                            (eval expr)))))
+           repeat-var repeat-forms)
+
+      (when (symbolp (car body))
+        (setq repeat-var (pop body)
+              repeat-forms (pop body)))
+
+      (if repeat-var
+          (cl-loop for form across repeat-forms
+                   do (funcall evaller (cl-subst form repeat-var body) 3))
+        (funcall evaller body 1)))))
+
+
+;;;; Assert macros
+
+(defmacro et-assert-equal (expr1 expr2)
+  (declare (indent 1))
+  `(let* ((val1 (condition-case err ,expr1
+                  (error (et-error '(1) "%s" err))))
+          (val2 (condition-case err ,expr2
+                  (error (et-error '(2) "%s" err)))))
+     (or (equal val1 val2)
+         (et-error '(0) "=> %s" (cl-prin1-to-string val2)))))
+
+(defmacro et-assert-equal-reverse (expr2 expr1)
+  (declare (indent 1))
+  `(et-assert-equal ,expr1 ,expr2))
+
+(defmacro et-assert-string= (str1 expr2)
+  (declare (indent 1))
+  `(let* ((val2 (condition-case err ,expr2
+                  (error (et-error '(2) "%s" err))))
+          (str2 (cl-prin1-to-string val2)))
+     (or (equal ,str1 str2) (et-error '(0) "=> %s" str2))))
+
+(defmacro et-assert-error (expr)
+  (declare (indent 1))
+  `(condition-case val ,expr
+     (error nil)
+     (:success (et-error '(0) "=> %s" val))))
+
+(defmacro et-assert-success (expr)
+  (declare (indent 1))
+  `(condition-case err ,expr
+     (error (et-error '(0) "%s" err))))
+
+(defmacro et-assert (expr) `(et-assert-equal t ,expr))
+(defmacro et-assert-nil (expr) `(et-assert-equal nil ,expr))
+
+
+;;; ============================================================
+;;; Utils
 ;;;; Quote macro
 
 (eval-and-compile
@@ -39,6 +173,11 @@
     (cond ((eq (car-safe expr) #'quote) (list #'copy-tree expr))
           ((consp expr) (cons (et--copy-quotes (car expr)) (et--copy-quotes (cdr expr))))
           (t expr))))
+
+(et-test
+ (et-assert-equal '(a (copy-tree '(b)) c (copy-tree ''(((1 2 'hi)))))
+   (et--copy-quotes '(a '(b) c ''(((1 2 'hi)))))))
+
 
 (defmacro et-q (expr)
   "Like `backquote', but return copies of all list literals.
@@ -93,7 +232,13 @@ An list of (NAME PLIST), where PLIST has the following properties:
   name args)
 
 (defun et--datatype-name? (name)
-  (not (not (memq name '(Any Literal Number Integer String Symbol Vector Vector:R
+  ;; Positive and Negative do not serve much practical purpose, but
+  ;; exist primarily to give an example of datatypes without a well
+  ;; defined intersection (Positive ∩ Integer).
+  (not (not (memq name '(Any Literal
+                             Number Integer Positive Negative
+                             String Symbol
+                             Vector Vector:R
                              Cons Cons:RR Cons:WW Cons:RW Cons:WR)))))
 
 (defun et--datatype-parents (dt-name)
@@ -107,7 +252,9 @@ and CDR are, so Cons:RR is a parent type of Cons."
   (pcase dt-name
     ('Cons (et-ql Cons:RR Cons:WW Cons:WR Cons:RW))
     ('Vector (et-ql Vector:R Vector:W))
-    ('Integer (et-ql Number))))
+    ('Integer (et-ql Number))
+    ('Positive (et-ql Number))
+    ('Negative (et-ql Number))))
 
 (defun et--datatype-arg-roles (dt-name dt-args)
   "Returns a list of `CONST' | `CO' | `CONTRA' | `ISO'.
@@ -197,6 +344,8 @@ the two args respectively."
          (pcase super-name
            ('Literal (valid-if (eq val (car super-args))))
            ('Integer (valid-if (integerp val)))
+           ('Positive (valid-if (and (numberp val) (> val 0))))
+           ('Negative (valid-if (and (numberp val) (< val 0))))
            ('Number (valid-if (numberp val)))
            ('String (valid-if (stringp val)))
            ('Symbol (valid-if (symbolp val)))
@@ -301,6 +450,32 @@ structure which can be parsed by `et-parse-type'.")
                    (list case))
            into new-cases
            finally return (make-et-type :cases new-cases)))
+
+
+;;;; Built-in aliases
+
+(et-defalias Nil () (Literal nil))
+(et-defalias True () (Literal t))
+(et-defalias Boolean () (:or True Nil))
+
+(et-defalias List (elem) (:or Nil (Cons ,elem (List ,elem))))
+(et-defalias List:R (elem) (:or Nil (Cons:RR ,elem (List:R ,elem))))
+(et-defalias NonNilList (elem) (Cons ,elem (List ,elem)))
+(et-defalias NonNilList:R (elem) (Cons:RR ,elem (List:R ,elem)))
+
+(et-defalias Tree (elem) (:or ,elem (List (Tree ,elem))))
+(et-defalias Tree:R (elem) (:or ,elem (:List:r (:Tree:r ,elem))))
+
+(et-defalias Alist (key val) (List (Cons ,key ,val)))
+(et-defalias Alist:R (key val) (List:R (Cons:RR ,key ,val)))
+
+(defun et--expand-tuple (cons args)
+  (if (null args) 'Nil
+    (et-q (,cons ,(car args) ,(et--expand-tuple cons (cdr args))))))
+
+(et-defalias Tuple (&rest args) ,(et--expand-tuple 'Cons args))
+(et-defalias Tuple:R (&rest args) ,(et--expand-tuple 'Cons:RR args))
+(et-defalias Args (&rest args) ,(et--expand-tuple 'Cons:RR args))
 
 
 ;;;; Type struct
@@ -634,7 +809,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
 
       (`(:literal ,val) (et-q (((S:DT Literal ,val)))))
 
-      (`(:binds-of ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
+      (`(:bindsof ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
 
       (`(:set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
@@ -692,7 +867,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
                      (error "Invalid test variable: %s" (match-string 1 s)))
            (list :parse (match-string 2 s)))
      generics))
-   ;; =$TestVar  ->  Typeof TestVar
+   ;; ::$TestVar  ->  Typeof TestVar
    ((string-match "^::\\(\\$[a-z]\\)$" s)
     (et-parse-structure
      (list :typeof (or (alist-get (intern (match-string 1 s)) et--test-variables)
@@ -866,6 +1041,34 @@ which are invalid for types."
   (princ (format "#<%s>" (et-pp type)) stream))
 
 
+
+(et-test
+ (et-assert-equal (et Cons:RR<1~@abc>)
+   (et-type (make-et-datatype :name 'Cons:RR :args (list (et-literal 1) (et-literal 'abc)))))
+
+ (et-assert-equal (et Number)
+   (et-type (make-et-datatype :name 'Number)))
+
+ (et-assert-equal (et (:structure (((S:TYPE ,(et :or Abc Xyz))))))
+   (et-type (make-et-alias :name 'Abc) (make-et-alias :name 'Xyz)))
+
+ (et-assert-equal (et {$a::5}&4)
+   (et-type (make-et-type-case
+             :value (make-et-datatype :name 'Literal :args (list 4))
+             :binds (list (cons (alist-get '$a et--test-variables) (et-literal 5))))))
+
+ (et-assert-equal (et {::$a}&{$b::6}&Integer)
+   (et-type (make-et-type-case
+             :value (make-et-datatype :name 'Integer)
+             :binds (list (cons (alist-get '$b et--test-variables) (et-literal 6)))
+             :typeofs (list (alist-get '$a et--test-variables)))))
+
+ (et-assert-equal (et :bindsof<{::$a}&{$a::2|3}&{1|2}>)
+   (et-type (make-et-type-case
+             :value (make-et-datatype :name 'Any)
+             :binds (list (cons (alist-get '$a et--test-variables) (et-literal 2)))))))
+
+
 ;;;; To/from matcher
 
 (defun et-structure-to-matcher-dnf (structure generics)
@@ -992,6 +1195,23 @@ which are invalid for types."
              (cl-loop for super-case in (et-type-cases super)
                       thereis
                       (et--case-subtype? sub-case super-case)))))
+
+(et-test
+ (et-assert (et-subtype? (et Integer) (et Number)))
+ (et-assert (et-subtype? (et Integer) (et Any)))
+
+ (et-assert (et-subtype? (et Cons:RR<Integer~Integer>) (et Cons:RR<Number~Number>)))
+ (et-assert-nil (et-subtype? (et Cons:RR<Number~Number>) (et Cons:RR<Integer~Integer>)))
+
+ (et-assert (et-subtype? (et Cons:WW<Number~Number>) (et Cons:WW<Integer~Integer>)))
+ (et-assert-nil (et-subtype? (et Cons:WW<Integer~Integer>) (et Cons:WW<Number~Number>)))
+
+ (et-assert (et-subtype? (et Cons:WR<Number~Integer>) (et Cons:WR<Integer~Number>)))
+ (et-assert (et-subtype? (et Cons:RW<Integer~Number>) (et Cons:RW<Number~Integer>)))
+
+ (et-assert
+  (et-subtype? (et List:R<Integer>)
+               (et Nil|Cons:RR<Number~List:R<Integer>>))))
 
 
 ;;;; Simplify
@@ -1176,25 +1396,7 @@ values to be the never type."
      collect gen-result)))
 
 
-;;;; Binds of
-
-(defun et--remove-type-binds (type)
-  (cl-assert (et-type-p type))
-
-  (cl-loop for case in (et-type-cases type)
-           for val = (et-type-case-value case)
-           collect
-           (make-et-type-case
-            :value
-            (pcase val
-              ((cl-struct et-alias name args)
-               (make-et-alias :name name :args (mapcar #'et--remove-type-binds args)))
-              ((cl-struct et-datatype name args)
-               (let ((new-args (et--datatype-map-type-args name args #'et--remove-type-binds)))
-                 (make-et-datatype :name name :args new-args)))
-              (_ (error "Invalid case val: %s" val))))
-           into cases
-           finally return (make-et-type :cases cases)))
+;;;; Binds utils
 
 (defun et--type-binds (type)
   ;; binds is an alist of `et-var' to a list of types (which will be `et--or'ed)
@@ -1216,6 +1418,24 @@ values to be the never type."
                                         (:and 4 (:typeof ,a-var))))
                     `((,a-var . ,(et 2|4)) (,b-var . ,(et 1))))))
 
+(defun et--remove-type-binds (type)
+  (cl-assert (et-type-p type))
+
+  (cl-loop for case in (et-type-cases type)
+           for val = (et-type-case-value case)
+           collect
+           (make-et-type-case
+            :value
+            (pcase val
+              ((cl-struct et-alias name args)
+               (make-et-alias :name name :args (mapcar #'et--remove-type-binds args)))
+              ((cl-struct et-datatype name args)
+               (let ((new-args (et--datatype-map-type-args name args #'et--remove-type-binds)))
+                 (make-et-datatype :name name :args new-args)))
+              (_ (error "Invalid case val: %s" val))))
+           into cases
+           finally return (make-et-type :cases cases)))
+
 (defun et--binds-of-cases (type)
   (cl-loop for case in (et-type-cases type)
            collect (make-et-type-case
@@ -1232,373 +1452,6 @@ values to be the never type."
            collect (make-et-type-case :value (et-type-case-value case) :binds binds)
            into cases
            finally return (make-et-type :cases cases)))
-
-
-;;; ============================================================
-;;; Checking
-;;;; Path
-
-(defvar et--current-expr nil)
-(defvar et--current-path nil)
-
-(defmacro et-with-path (path &rest body)
-  (declare (indent 1))
-  (let ((path-var (make-symbol "path"))
-        (parent-var (make-symbol "parent")))
-    `(let* ((,path-var ,path)
-            (et--current-path (append et--current-path ,path-var))
-            (,parent-var (when ,path-var (et--traverse-tree (butlast ,path-var) et--current-expr)))
-            (et--current-expr (if ,path-var (nth (car (last ,path-var)) ,parent-var)
-                                et--current-expr)))
-       (unwind-protect (progn ,@body)
-         (when ,path-var
-           (setf (nth (car (last ,path-var)) ,parent-var)
-                 et--current-expr))))))
-
-(defun et--traverse-tree (path tree)
-  (if (null path) tree
-    (when (>= (car path) (length tree))
-      (error "Index out of bounds: %s %s" (car path) tree))
-    (et--traverse-tree (cdr path) (nth (car path) tree))))
-
-
-;;;; Binds
-
-(defvar et--binds nil
-  "Stack of (SYMBOL . `et-var').")
-(defvar et--narrow-binds nil
-  "Stack of (`et-var' . `et-type').")
-
-(defun et--get-symbol-bind (sym)
-  (cl-assert (symbolp sym))
-  (when-let ((var (alist-get sym et--binds)))
-    (or (alist-get var et--narrow-binds)
-        (et-var-type var))))
-
-(defun et--var-bind (var)
-  (cl-assert (et-var-p var))
-  (or (alist-get var et--narrow-binds)
-      (et-var-type var)))
-
-(defmacro et-with-binds (binds &rest body)
-  (declare (indent 1))
-  `(let* ((vars (cl-loop for (sym . type) in ,binds
-                         collect (cons sym (make-et-var :name sym :type type))))
-          (et--binds (append vars et--binds)))
-     ,@body))
-
-(defmacro et-with-narrow-binds (binds &rest body)
-  (declare (indent 1))
-  `(let ((et--narrow-binds (append ,binds et--narrow-binds)))
-     ,@body))
-
-(defun et-pp-binds (binds &optional sep)
-  (cl-loop for (var . type) in binds
-           collect (format "%s: %s" (if (symbolp var) var (car var)) (et-pp type)) into strs
-           finally return (string-join strs (or sep "\\n"))))
-
-
-;;;; Error/warn
-
-(defun et--error-advice (error string &rest args)
-  (if et--current-path
-      (apply error (format "%s\0;;flycheck-path:%s" string et--current-path)
-             args)
-    (apply error string args)))
-
-(advice-add #'error :around #'et--error-advice)
-
-(defun et-warn (path msg &rest args)
-  (setq msg (format "%s\0;;flycheck-path:%s" msg (append et--current-path path)))
-  (apply #'byte-compile-warn msg args))
-
-(defvar et-display-narrows nil
-  "Whether to display narrowed types on if/when/etc blocks.")
-
-(defun et-warn-narrows (&rest types)
-  "Display a list of binds to the user at path=(0).
-
-TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
-
-  (when et-display-narrows
-    (cl-loop for (fmt type) on types by #'cddr
-             for binds = (et-pp type) ; TODO: display just binds instead of whole type
-             when binds
-             collect (format fmt (et-pp-binds binds)) into strs
-             finally do
-             (when strs
-               (et-warn '(0) (string-join strs "\\n"))))))
-
-
-;;;; Define checker
-
-(defmacro et-define-checker (expr-type arglist &rest body)
-  (declare (indent 2))
-  (cl-assert (symbolp expr-type))
-  (cl-assert (listp arglist))
-
-  `(prog1 ',expr-type
-     (setf (get ',expr-type 'et-checker)
-           (lambda . ,(cl--transform-lambda
-                       (cons arglist body)
-                       (format "et--checker:%s" expr-type))))))
-
-(defun et--type-checker-body (arglist-matcher return-struct exprs)
-  (let* ((arg-types (cl-loop for _expr in exprs
-                             for idx upfrom 1
-                             collect (et-check-path idx)))
-         (args-type (cl-loop with acc = (et-literal nil)
-                             for arg-type in (nreverse arg-types)
-                             do (setq acc (et-dt 'Cons:RR arg-type acc))
-                             finally return acc))
-         (result (et--sub-match arglist-matcher args-type)))
-    (when (eq result 'INVALID)
-      (error "Invalid arguments! Expected %s, got %s"
-             (et-pp-matcher arglist-matcher) (et-pp args-type)))
-
-    ;; Replace all places where the generic variable appeared in the return type
-    ;; with the value determined for that generic
-    (cl-loop for gen in (et-matcher-generics arglist-matcher)
-             for type in result
-             do (setq return-struct
-                      (cl-subst (et-q (S:TYPE ,type))
-                                (et-q (S:ALIAS ,gen))
-                                return-struct
-                                :test #'equal)))
-
-    (et-structure-to-type return-struct)))
-
-(defmacro et-define-type-checker (func &rest arguments)
-  "Define a checker using argument and return types.
-
-FUNC is the function to define the checker for.
-
-GENERICS is a vector of symbols, representing generic variables. Each
-generic variable should be uppercase.
-
-ARGLIST is a parsable expression to use to match the arglist against.
-
-RETURN is a parsable expression to use for the return type. This can use
-the generic variable names as aliases, and they will be correctly
-substituted.
-
-\(fn FUNC [GENERICS] ARGLIST RETURN)"
-  (declare (indent 2))
-  (cl-assert (symbolp func))
-
-  (let ((generics
-         (when (vectorp (car arguments))
-           ;; Make sure the generics have the correct format
-           (cl-loop for var across (car arguments)
-                    do (or (symbolp var) (error "Generic vars must be symbols"))
-                    do (or (let ((case-fold-search nil))
-                             (string-match-p "^[A-Z]" (format "%s" var)))
-                           (error "Generic vars must start with an uppercase letter")))
-           (append (pop arguments) nil))))
-    (unless (eq (length arguments) 2)
-      (error "Incorrect number of arguments"))
-
-    `(et-define-checker ,func (&rest exprs)
-       (et--type-checker-body
-        ,(et-parse-matcher (car arguments) generics)
-        (copy-tree ',(et-parse-structure (cadr arguments) nil))
-        exprs))))
-
-
-;;;; Check
-
-(defun et-check ()
-  "Returns the type of the current expr, if typechecking did not error."
-  (et--verify-type
-   (pcase et--current-expr
-     (`(,func . ,args)
-      (or (apply (or (get func 'et-checker) (error "No checker for function: %s" func))
-                 args)
-          (error "Checker for %s returned nil" func)))
-
-     ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
-
-      (let ((var (or (alist-get sym et--binds) (error "Free variable: %s" sym))))
-        (et--and
-         (or (et--var-bind var)
-             (error "Free variable: %s" sym))
-         (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
-                                     :typeofs (list var))))))
-
-     (expr (et-literal expr)))))
-
-
-;;;; Check position helpers
-
-(defun et-check-path (&rest path)
-  (et-with-path path (et-check)))
-
-(defun et-check-tail (start)
-  (cl-loop for idx upfrom start below (length et--current-expr)
-           for type = (et-with-path (list idx) (et-check))
-           finally return (or type (et-literal nil))))
-
-
-;;;; Root level functions
-
-(defmacro et--root (expr &rest body)
-  (declare (indent 1))
-  `(progn
-     (cl-assert (null et--current-expr))
-     (cl-assert (null et--current-path))
-     (cl-assert (null et--binds))
-     (let ((et--current-expr ,expr))
-       ,@body)))
-
-(defmacro et-root-block (&rest body)
-  (et--root (cons #'progn body)
-    (et-check-tail 1)
-    et--current-expr))
-
-(defun et-root-check (expr)
-  (et--root expr (et-check)))
-
-(defmacro et-root-check-call (func &rest arg-types)
-  `(et--root ',(cons func (cl-loop for type in arg-types collect (list :type type)))
-     (et-check)))
-
-(defun et-resolve (type)
-  (let ((expr-type (et-check)))
-    (unless (et-subtype? expr-type type)
-      (error "Type %s is not assignable to type %s"
-             (et-pp expr-type) (et-pp type)))))
-
-(defun et-root-resolve (type expr)
-  (et--root expr (et-resolve (et-parse-type type))))
-
-
-;;; ============================================================
-;;; Application
-;;;; Built-in aliases
-
-(et-defalias Nil () (Literal nil))
-(et-defalias True () (Literal t))
-(et-defalias Boolean () (:or True Nil))
-
-(et-defalias List (elem) (:or Nil (Cons ,elem (List ,elem))))
-(et-defalias List:R (elem) (:or Nil (Cons:RR ,elem (List:R ,elem))))
-(et-defalias NonNilList (elem) (Cons ,elem (List ,elem)))
-(et-defalias NonNilList:R (elem) (Cons:RR ,elem (List:R ,elem)))
-
-(et-defalias Tree (elem) (:or ,elem (List (Tree ,elem))))
-(et-defalias Tree:R (elem) (:or ,elem (:List:r (:Tree:r ,elem))))
-
-(et-defalias Alist (key val) (List (Cons ,key ,val)))
-(et-defalias Alist:R (key val) (List:R (Cons:RR ,key ,val)))
-
-(defun et--expand-tuple (cons args)
-  (if (null args) 'Nil
-    (et-q (,cons ,(car args) ,(et--expand-tuple cons (cdr args))))))
-
-(et-defalias Tuple (&rest args) ,(et--expand-tuple 'Cons args))
-(et-defalias Tuple:R (&rest args) ,(et--expand-tuple 'Cons:RR args))
-(et-defalias Args (&rest args) ,(et--expand-tuple 'Cons:RR args))
-
-
-;;; ============================================================
-;;; Utils
-;;;; Flycheck move error
-
-(defun et--flycheck-reposition-error (err)
-  "If ERR has a ;;flycheck-path: sentinel, reposition it."
-  (ignore ; return nil so other handlers still run
-   (ignore-errors
-     (when-let* ((msg (flycheck-error-message err))
-                 (match (string-match "\0;;flycheck-path:\\((.*)\\)" msg))
-                 (path (car (read-from-string (match-string 1 msg))))
-                 (prev-start t))
-
-       ;; Strip the sentinel from the displayed message
-       (setf (flycheck-error-message err)
-             (replace-regexp-in-string "\\\\n" "\n" (substring msg 0 match)))
-       (if (eq (flycheck-error-level err) 'warning)
-           (setf (flycheck-error-level err) 'info))
-
-       ;; Find the macro call in the buffer and walk the path
-       (with-current-buffer (flycheck-error-buffer err)
-         (save-excursion
-           (goto-char (flycheck-error-pos err)) ; start near the error
-           (beginning-of-defun)
-
-           (dolist (idx path)
-             (or (looking-at-p "[[(]") (error "Not at sexp start"))
-             (forward-char 1)
-             (dotimes (_ idx) (forward-sexp))
-             (forward-sexp) (backward-sexp))
-
-           (setf (flycheck-error-line err) (line-number-at-pos))
-           (setf (flycheck-error-column err) (1+ (current-column)))
-           (forward-sexp)
-           (setf (flycheck-error-end-line err) (line-number-at-pos))
-           (setf (flycheck-error-end-column err) (1+ (current-column)))))))))
-
-(add-hook 'flycheck-process-error-functions #'et--flycheck-reposition-error)
-
-
-;;;; Assert at compile type
-
-(defmacro et-assert-error (expr)
-  (condition-case _err (eval expr)
-    (error nil)
-    (:success (error "Expected error"))))
-
-(defmacro et-assert-success (expr)
-  (ignore (eval expr)))
-
-(defmacro et-assert-equal (expr1 expr2)
-  (declare (indent 1))
-  (let ((v1 (eval expr1))
-        (v2 (eval expr2)))
-    (or (equal v1 v2) (error "Expressions not equal: \"%s\" \"%s\"" v1 v2))))
-
-(defmacro et-assert-string= (string expr2)
-  (declare (indent 1))
-  (cl-assert (stringp string))
-  (let ((val-str (cl-prin1-to-string (eval expr2))))
-    (or (equal string val-str)
-        (error "Expressions not equal: \"%s\" \"%s\"" string val-str))))
-
-(defmacro et-assert-true (expr)
-  (or (eval expr) (error "Returned nil")))
-
-(defmacro et-assert-nil (expr)
-  (when (eval expr) (error "Returned non-nil")))
-
-
-;;;; Testing checkers
-
-(et-define-checker :type (spec)
-  (et-parse-type spec))
-
-(et-define-checker :assert-subtype (_expr type-spec)
-  (let ((expr-type (et-check-path 1)))
-    (or (et-subtype? expr-type (et-parse-type type-spec))
-        (error "Not subtype: %s" (et-pp expr-type)))
-    (setq et--current-expr "dummy") ; To put into the compiled code in place of the (:assert-subtype) expr
-    (et-literal nil)))
-
-(et-define-checker :assert-error (_expr)
-  (condition-case _err (et-check-path 1)
-    (error (setq et--current-expr nil) (et-literal nil))
-    (:success (error "Didn't error"))))
-
-(et-define-checker :typeof (_expr)
-  (et-warn '(0) "%s" (et-pp (et-check-path 1)))
-  (setq et--current-expr nil)
-  (et-literal nil))
-
-(et-define-checker :narrows ()
-  (cl-loop for ((var . _) . type) in (reverse et--narrow-binds)
-           collect (format "%s: %s" var (et-pp type)) into strs
-           finally do
-           (et-warn '(0) "%s" (string-join strs "\\n")))
-  (setq et--current-expr nil)
-  (et-literal nil))
 
 
 ;;; ============================================================

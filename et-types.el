@@ -22,9 +22,7 @@
 ;;; Commentary:
 ;;; Code:
 
-(eval-and-compile
-  (add-to-list 'load-path "~/.emacs.d/my-packages/typesystem")
-  (require 'et))
+(require 'et-check)
 
 
 ;;; ============================================================
@@ -60,7 +58,7 @@
 
    finally return
    (et-with-binds let-binds-rev
-     (et-check-tail 2))))
+       (et-check-tail 2))))
 
 
 ;;;; dolist
@@ -89,7 +87,7 @@
 
     ;; Check the body
     (et-with-binds (list (cons variable type))
-      (et-check-tail 2))
+        (et-check-tail 2))
 
     (et Nil)))
 
@@ -103,7 +101,7 @@
 
   (cl-loop for (var _val) on args by #'cddr
            for idx upfrom 0 by 2
-           for type = (or (et--get-symbol-bind var)
+           for type = (or (et--get-symbol-type var)
                           (et-with-path (list (1+ idx))
                             (error "Assignment to free variable")))
            do (et-with-path (list (+ idx 2))
@@ -199,14 +197,34 @@
 (et-define-checker quote (expr)
   (et-literal expr))
 
+(et-test
+ (et-assert-success (et-root-resolve 'Integer ''1))
+ (et-assert-success (et-root-resolve 'Number ''1.1))
+ (et-assert-success (et-root-resolve 'String ''"hi"))
+ (et-assert-success (et-root-resolve 'Symbol ''a))
+ (et-assert-error (et-root-resolve 'Integer ''1.1))
+ (et-assert-error (et-root-resolve 'Integer '''1))
+ (et-assert-error (et-root-resolve 'Number '''1.1))
+ (et-assert-error (et-root-resolve 'String '''"hi"))
+ (et-assert-error (et-root-resolve 'Symbol '''a))
+
+ (et-assert-success (et-root-resolve 'Cons<Any~Any> ''(1 2 3)))
+ (et-assert-success (et-root-resolve 'List<Symbol> ''(a b c)))
+ (et-assert-success (et-root-resolve 'List<Integer> ''()))
+ (et-assert-error (et-root-resolve 'List<Integer> ''(1 2 '3)))
+ (et-assert-error (et-root-resolve 'List<Integer> ''(1 2 3.3)))
+ (et-assert-error (et-root-resolve 'List<Integer> '''(1 2 3)))
+ (et-assert-error (et-root-resolve 'List<Integer> '''()))
+
+ (et-assert-success (et-root-resolve 'Cons<Integer~Integer> ''(1 . 2)))
+ (et-assert-error (et-root-resolve 'Cons<Integer~Integer> ''(1 . 2.2)))
+ (et-assert-error (et-root-resolve 'Cons<Integer~Integer> ''(1.1 . 2)))
+ (et-assert-success (et-root-resolve 'Cons<Symbol~List<String>> ''(a "2" "3"))))
+
 
 ;;;; Arithmetic
 
-(et-define-type-checker + [N]
-  (:or Nil&{N=0} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
-  N)
-
-(et-define-type-checker - [N]
+(et-define-type-checker (+ -) [N]
   (:or Nil&{N=0} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
   N)
 
@@ -218,25 +236,145 @@
   (:or NonNilList:R<Integer>&{N=Integer} NonNilList:R<Number>&{N=Number})
   N)
 
-(et-define-type-checker 1+ [N] (Args Integer&{N=Integer} Number&{N=Number}) N)
-(et-define-type-checker 1- [N] (Args Integer&{N=Integer} Number&{N=Number}) N)
+(et-define-type-checker (1+ 1-) [N] (Args Integer&{N=Integer} Number&{N=Number}) N)
+
+
+(et-test
+ op [+ - * /]
+ (et-assert-equal (et Integer) (et-root-check-call op Integer Integer 1 2 3))
+ (et-assert-equal (et Integer) (et-root-check-call op Integer Integer 1 2 3))
+ (et-assert-equal (et Number) (et-root-check-call op Integer Integer 1 2.1 3))
+ (et-assert-equal (et Integer) (et-root-check-call op 1)))
+
+(et-test
+ (et-assert-equal (et 0) (et-root-check-call +))
+ (et-assert-equal (et 0) (et-root-check-call -))
+ (et-assert-equal (et 1) (et-root-check-call *))
+ (et-assert-error (et-root-check-call /)))
 
 
 ;;;; Sequences
+;;;;; cons
 
 (et-define-type-checker cons [L R] (Args L R) Cons<L~R>)
+
+(et-test
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~String> '(cons 1 "2")))
+ (et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(cons "1" 2)))
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(cons 1 nil)))
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(cons 1 (cons "2" nil))))
+
+ (et-assert-success (et-root-resolve 'List:R<Integer> '(cons 1 (cons 2 nil))))
+ (et-assert-error (et-root-resolve 'List:R<Integer> '(cons 1 (cons "2" nil))))
+ (et-assert-error (et-root-resolve 'List:R<Integer> '(cons "1" (cons 2 nil))))
+ (et-assert-error (et-root-resolve 'List:R<Integer> '(cons 1 (cons 2 t)))))
+
+
+;;;;; list
+
 (et-define-type-checker list [T] T T)
 
+(et-test
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(list 1 "2")))
+ (et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(list "1" 2)))
+ (et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(list)))
+
+ (et-assert-success (et-root-resolve 'List:R<Integer> '(list 1 2 3)))
+ (et-assert-success (et-root-resolve 'List:R<Integer> '(list 1)))
+ (et-assert-error (et-root-resolve 'List:R<Integer> '(list 1 "2" 3))))
+
+
+;;;;; car
+
 (et-define-type-checker car [L] (Args (:or Nil&L=Nil Cons:RR<L~Any>)) L)
+
+(et-test
+ (et-assert-success (et-root-resolve 'Integer '(car (list 1 2.2 3))))
+ (et-assert-error (et-root-resolve 'Integer '(car (list 1.1 2 3))))
+ (et-assert-success (et-root-resolve 'Integer '(car (cons 1 "3"))))
+ (et-assert-success (et-root-resolve 'List:R<Integer> '(car (cons (list 1) "3"))))
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~Any> '(car (cons (list 1) "3"))))
+ (et-assert-success (et-root-resolve 'Integer '(car (car (cons (list 1) "3")))))
+ (et-assert-error (et-root-resolve 'Integer '(car (car (cons (list 1.1) "3")))))
+
+ (et-assert-success (et-root-check-call cdr :never))
+ (et-assert-success (et-root-check-call cdr Nil))
+ (et-assert-success (et-root-check-call cdr Nil|Cons:RR<Integer~String>))
+ (et-assert-error (et-root-check-call cdr Nil|Cons:RR<Integer~String>|String))
+ (et-assert-error (et-root-check-call cdr :any))
+
+ (et-assert-success (et-root-check-call car :never))
+ (et-assert-success (et-root-check-call car Nil))
+ (et-assert-success (et-root-check-call car Nil|Cons:RR<Integer~String>))
+ (et-assert-error (et-root-check-call car Nil|Cons:RR<Integer~String>|String))
+ (et-assert-error (et-root-check-call car Any))
+
+ (et-assert-equal (et Nil|Integer)
+   (et-root-check-call car List:R<Integer>))
+
+ (et-assert-equal (et Nil|Integer|String)
+   (et-root-check-call car List:R<Integer>|Cons:RR<String~Nil>))
+
+ (et-assert-error
+     (et-root-check-call car List:R<Integer>|Cons:RR<String~Nil>|String)))
+
+
+;;;;; cdr
+
 (et-define-type-checker cdr [R] (Args (:or Nil&R=Nil Cons:RR<Any~R>)) R)
+
+(et-test
+ (et-assert-success (et-root-resolve 'List:R<Number> '(cdr (list 1 2.2 3))))
+ (et-assert-success (et-root-resolve 'List:R<Integer> '(cdr (list 1.1 2 3))))
+ (et-assert-error (et-root-resolve 'List:R<Integer> '(car (list 1 2.2 3))))
+
+ (et-assert-success (et-root-resolve 'Integer '(cdr (cons "1" 2))))
+ (et-assert-error (et-root-resolve 'Integer '(cdr (cons 1 "2"))))
+
+ (et-assert-success (et-root-resolve 'List:R<Integer> '(cdr (cons "1" (list 2)))))
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~Any> '(cdr (cons "1" (list 2)))))
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~Boolean> '(cdr (cons "1" (list 2)))))
+ (et-assert-error (et-root-resolve 'Cons:RR<Integer~Boolean> '(cdr (cons "1" (list 2 3)))))
+ (et-assert-success (et-root-resolve 'Integer '(car (cdr (cons "1" (list 2))))))
+
+ (et-assert-success (et-root-resolve 'Boolean '(cdr (cdr (cdr (list 1 2 3))))))
+ (et-assert-error (et-root-resolve 'Boolean '(cdr (cdr (list 1 2 3)))))
+
+ (et-assert-equal (et List:R<Integer>) (et-root-check-call cdr List:R<Integer>))
+ (et-assert-equal (et List<Integer>|String) (et-root-check-call cdr List<Integer>|Cons<Nil~String>))
+ (et-assert-error (et-root-check-call car List<Integer>|Cons<String~nil>|String)))
+
+
+;;;;; nth/nthcdr
 
 (et-define-type-checker nth [T] (Args Integer List:R<T>) T|Nil)
 
 (et-define-type-checker nthcdr [T] (Args Integer List:R<T>) List<T>)
 
+(et-test
+ (et-assert-equal (et Number|String|Nil) (et-root-check-call nth Integer Cons<Number~List<String>>))
+
+ (et-assert-equal (et List<Number|String>) (et-root-check-call nthcdr Integer Cons<Number~List<String>>))
+ (et-assert-equal (et List<:never>) (et-root-check-call nthcdr Integer Nil)))
+
+
+;;;;; length
+
 (et-define-type-checker length [] (Args String|List:R<Any>|Vector:R<Any>) Integer)
 
+(et-test
+ (et-assert-equal (et Integer) (et-root-check-call length Vector<Number>|List<String>))
+ (et-assert-error (et-root-check-call length Vector<Number>|List<String>|Number)))
+
+
+;;;;; aref
+
 (et-define-type-checker aref [T] (Args Vector:R<T>|{String&T=Integer} Integer) T)
+
+(et-test
+ (et-assert-equal (et Integer) (et-root-check-call aref String Integer))
+ (et-assert-equal (et Symbol|Integer) (et-root-check-call aref (:or Vector<Symbol> String) Integer))
+ (et-assert-error (et-root-check-call aref (:or Vector<Symbol> String List:R<Any>) Integer)))
 
 
 ;;;; Predicates
@@ -244,7 +382,7 @@
 (defmacro et-define-predicate (name type)
   `(et-define-type-checker ,name [T]
      (Tuple:R T)
-     (:or (:and True (:binds-of (:and T ,type))) Nil)))
+     (:or (:and True (:bindsof (:and T ,type))) Nil)))
 
 (et-define-predicate stringp String)
 (et-define-predicate numberp Number)
