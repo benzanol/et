@@ -115,7 +115,7 @@
 (defun et--non-nil (type)
   ;; TODO: Should be
   ;; (et-subtract cond-type (et Nil))
-  (et--and type (et True)))
+  (et--supersect type (et True)))
 
 (defun et--and-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were non-nil
@@ -129,15 +129,15 @@
 
     (et--or (et--replace-type-binds output-non-nil merged-non-nil-binds)
             ;; If `and' returns nil, it could be from either `cond-type' OR `output-type' being nil
-            (et--and cond-type (et Nil))
-            (et--and output-type (et Nil)))))
+            (et--supersect cond-type (et Nil))
+            (et--supersect output-type (et Nil)))))
 
 (defun et--or-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were nil
-  (let* ((nil-binds (et--type-binds (et--and cond-type (et Nil))))
+  (let* ((nil-binds (et--type-binds (et--supersect cond-type (et Nil))))
          (output-type (et-with-narrow-binds nil-binds (funcall checker)))
 
-         (output-nil (et--and output-type (et Nil)))
+         (output-nil (et--supersect output-type (et Nil)))
          ;; If `or' returns nil, then both nil binds will be true (intersect them)
          (merged-nil-binds
           (et--intersect-binds nil-binds (et--type-binds output-nil))))
@@ -168,7 +168,7 @@
   (let* ((cond-type (et-check-path 1)))
 
     (et-warn-narrows "non-nil:\\n%s" (et Nil) ; (et-subtract cond-type (et Nil))
-                     "nil:\\n%s" (et--and cond-type (et Nil)))
+                     "nil:\\n%s" (et--supersect cond-type (et Nil)))
 
     (et--or (et--and-return-type cond-type (lambda () (et-check-path 2)))
             (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
@@ -185,7 +185,7 @@
 
 (et-define-checker unless (_cond &rest _else)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "nil:\\n%s" (et--and cond-type (et Nil)))
+    (et-warn-narrows "nil:\\n%s" (et--supersect cond-type (et Nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (et--or-return-type cond-type (lambda () (et-check-tail 2)))))
 
@@ -208,18 +208,18 @@
  (et-assert-error (et-root-resolve 'String '''"hi"))
  (et-assert-error (et-root-resolve 'Symbol '''a))
 
- (et-assert-success (et-root-resolve 'Cons<Any~Any> ''(1 2 3)))
- (et-assert-success (et-root-resolve 'List<Symbol> ''(a b c)))
- (et-assert-success (et-root-resolve 'List<Integer> ''()))
- (et-assert-error (et-root-resolve 'List<Integer> ''(1 2 '3)))
- (et-assert-error (et-root-resolve 'List<Integer> ''(1 2 3.3)))
- (et-assert-error (et-root-resolve 'List<Integer> '''(1 2 3)))
- (et-assert-error (et-root-resolve 'List<Integer> '''()))
+ (et-assert-success (et-root-resolve 'Cons:RR<Any~Any> ''(1 2 3)))
+ (et-assert-success (et-root-resolve 'List:R<Symbol> ''(a b c)))
+ (et-assert-success (et-root-resolve 'List:R<Integer> ''()))
+ (et-assert-error (et-root-resolve 'List:R<Integer> ''(1 2 '3)))
+ (et-assert-error (et-root-resolve 'List:R<Integer> ''(1 2 3.3)))
+ (et-assert-error (et-root-resolve 'List:R<Integer> '''(1 2 3)))
+ (et-assert-error (et-root-resolve 'List:R<Integer> '''()))
 
- (et-assert-success (et-root-resolve 'Cons<Integer~Integer> ''(1 . 2)))
- (et-assert-error (et-root-resolve 'Cons<Integer~Integer> ''(1 . 2.2)))
- (et-assert-error (et-root-resolve 'Cons<Integer~Integer> ''(1.1 . 2)))
- (et-assert-success (et-root-resolve 'Cons<Symbol~List<String>> ''(a "2" "3"))))
+ (et-assert-success (et-root-resolve 'Cons:RR<Integer~Integer> ''(1 . 2)))
+ (et-assert-error (et-root-resolve 'Cons:RR<Integer~Integer> ''(1 . 2.2)))
+ (et-assert-error (et-root-resolve 'Cons:RR<Integer~Integer> ''(1.1 . 2)))
+ (et-assert-success (et-root-resolve 'Cons:RR<Symbol~List:R<String>> ''(a "2" "3"))))
 
 
 ;;;; Arithmetic
@@ -256,7 +256,7 @@
 ;;;; Sequences
 ;;;;; cons
 
-(et-define-type-checker cons [L R] (Args L R) Cons<L~R>)
+(et-define-type-checker cons [L R] (Args L R) Cons:AA<L~R>)
 
 (et-test
  (et-assert-success (et-root-resolve 'Cons:RR<Integer~String> '(cons 1 "2")))
@@ -341,21 +341,21 @@
  (et-assert-error (et-root-resolve 'Boolean '(cdr (cdr (list 1 2 3)))))
 
  (et-assert-equal (et List:R<Integer>) (et-root-check-call cdr List:R<Integer>))
- (et-assert-equal (et List<Integer>|String) (et-root-check-call cdr List<Integer>|Cons<Nil~String>))
- (et-assert-error (et-root-check-call car List<Integer>|Cons<String~nil>|String)))
+ (et-assert-equal (et List:R<Integer>|String) (et-root-check-call cdr List:R<Integer>|Cons:RR<Nil~String>))
+ (et-assert-error (et-root-check-call car List:R<Integer>|Cons:RR<String~nil>|String)))
 
 
 ;;;;; nth/nthcdr
 
 (et-define-type-checker nth [T] (Args Integer List:R<T>) T|Nil)
 
-(et-define-type-checker nthcdr [T] (Args Integer List:R<T>) List<T>)
+(et-define-type-checker nthcdr [T] (Args Integer List:R<T>) List:R<T>)
 
 (et-test
- (et-assert-equal (et Number|String|Nil) (et-root-check-call nth Integer Cons<Number~List<String>>))
+ (et-assert-equal (et Number|String|Nil) (et-root-check-call nth Integer Cons:RR<Number~List:R<String>>))
 
- (et-assert-equal (et List<Number|String>) (et-root-check-call nthcdr Integer Cons<Number~List<String>>))
- (et-assert-equal (et List<:never>) (et-root-check-call nthcdr Integer Nil)))
+ (et-assert-equal (et List:R<Number|String>) (et-root-check-call nthcdr Integer Cons:RR<Number~List:R<String>>))
+ (et-assert-equal (et List:R<:never>) (et-root-check-call nthcdr Integer Nil)))
 
 
 ;;;;; length
@@ -363,8 +363,8 @@
 (et-define-type-checker length [] (Args String|List:R<Any>|Vector:R<Any>) Integer)
 
 (et-test
- (et-assert-equal (et Integer) (et-root-check-call length Vector<Number>|List<String>))
- (et-assert-error (et-root-check-call length Vector<Number>|List<String>|Number)))
+ (et-assert-equal (et Integer) (et-root-check-call length Vector:R<Number>|List:R<String>))
+ (et-assert-error (et-root-check-call length Vector:R<Number>|List:R<String>|Number)))
 
 
 ;;;;; aref
@@ -373,8 +373,8 @@
 
 (et-test
  (et-assert-equal (et Integer) (et-root-check-call aref String Integer))
- (et-assert-equal (et Symbol|Integer) (et-root-check-call aref (:or Vector<Symbol> String) Integer))
- (et-assert-error (et-root-check-call aref (:or Vector<Symbol> String List:R<Any>) Integer)))
+ (et-assert-equal (et Symbol|Integer) (et-root-check-call aref (:or Vector:R<Symbol> String) Integer))
+ (et-assert-error (et-root-check-call aref (:or Vector:R<Symbol> String List:R<Any>) Integer)))
 
 
 ;;;; Predicates
@@ -388,10 +388,19 @@
 (et-define-predicate numberp Number)
 (et-define-predicate integerp Integer)
 ;; Todo: We need a Cons:-- type which all cons types extend
-(et-define-predicate consp Cons:RR<Any~Any>|Cons:WW<Any~Any>|Cons:RW<Any~Any>|Cons:WR<Any~Any>)
-(et-define-predicate listp Nil|Cons:RR<Any~Any>)
+(et-define-predicate consp Cons:--<Any~Any>)
+(et-define-predicate listp Nil|Cons:--<Any~Any>)
 (et-define-predicate null Nil)
 (et-define-predicate not Nil)
+
+(et-test
+ (et-assert-equal (et True&{$a::Cons:--<Any~Any>}|Nil) (et-root-check-call consp Cons:--<Any~Any>&{::$a}))
+
+ ;; This tests whether et--supersect works correctly when it cannot determine a definite subtype.
+ ;; There is no defined intersection of Positive and Integer, so it must make an approximation.
+ ;; Approximating to never would incorrectly determine that this call will always determine nil.
+ ;; So, in order to ensure correctness, it must assume a SUPERSET of the real intersection (by picking either Positive or Integer.)
+ (et-assert-nil (et-subtype? (et-root-check-call integerp Positive&{::$a}) (et Nil))))
 
 
 ;;; ============================================================

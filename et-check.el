@@ -225,7 +225,7 @@ substituted.
 
       (let ((var (or (et--get-symbol-variable sym)
                      (error "Free variable: %s" sym))))
-        (et--and
+        (et--supersect
          (et--get-variable-type var)
          (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
                                      :typeofs (list var))))))
