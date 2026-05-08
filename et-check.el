@@ -362,6 +362,7 @@ substituted.
 (et-define-checker :typeof (_expr)
   (let ((type (et-check-path 1)))
     (et-warn '(0) "%s" (et-pp type))
+    (setq et--current-expr (cadr et--current-expr))
     type))
 
 (et-define-checker :narrows ()

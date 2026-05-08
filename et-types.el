@@ -379,7 +379,7 @@
   `(et-define-type-checker ,name [T]
      (Tuple:R T)
      (:or (:and True (:bindsof (:and T ,type)))
-          (:and Nil))))
+          (:and Nil (:bindsof (:subtract T ,type))))))
 
 (et-define-predicate stringp String)
 (et-define-predicate numberp Number)
@@ -392,6 +392,9 @@
 (et-test
  (et-assert-equal (et True&{$a::Cons:--<Any~Any>}|Nil)
    (et-root-check-call consp Cons:--<Any~Any>&{::$a}))
+
+ (et-assert-equal (et :or True&{$a::String} Nil&{$a::Number})
+   (et-root-check-call stringp {::$a}&{String|Number}))
 
  ;; This tests whether et--supersect works correctly when it cannot determine a definite subtype.
  ;; There is no defined intersection of Positive and Integer, so it must make an approximation.

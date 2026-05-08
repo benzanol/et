@@ -42,7 +42,7 @@
      ,@body))
 
 (defun et-error (path string &rest args)
-  (signal 'error (list (apply #'format (concat string (et--error-message-suffix path)) args))))
+  (byte-compile-warn "%s" (apply #'format (concat string (et--error-message-suffix path)) args)))
 
 (defun et--error-message-suffix (path)
   (format "\0;;flycheck-path:%s" (append et--error-path path)))
@@ -818,6 +818,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
 ;; \(`S:BIND' VAR TYPE)
 ;; \(`S:TYPEOF' VAR)
 ;; \(`S:BINDS-OF' TYPE)
+;; \(`S:SUBTRACT' TYPE1 TYPE2)
 ;; \(`S:TYPE' TYPE) - used for type alias expansion
 
 ;; Matchers only:
@@ -855,6 +856,9 @@ ARGS is a mix of constant args (where the corresponding arg role is
       (`(:literal ,val) (et-q (((S:DT Literal ,val)))))
 
       (`(:bindsof ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
+      (`(:subtract ,type1 ,type2)
+       (et-q (((S:SUBTRACT ,(et-parse-structure type1 generics)
+                           ,(et-parse-structure type2 generics))))))
 
       (`(:set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
@@ -1042,6 +1046,9 @@ which are invalid for types."
                        (list (make-et-type-case
                               :value (make-et-datatype :name 'Any)
                               :binds (et--type-binds (et-structure-to-type struct)))))
+                      (`(S:SUBTRACT ,type1 ,type2)
+                       (et-type-cases (et--subtract (et-structure-to-type type1)
+                                                    (et-structure-to-type type2))))
                       (_ (error "Invalid structure factor for type: %s" factor)))
                     into and-case-lists
                     finally return
@@ -1352,7 +1359,7 @@ which are invalid for types."
               finally return
               (let ((result (make-et-type :cases all-cases)))
                 ;; This assertion should pass if there are no bugs
-                (when et-debug
+                (when (and et-debug subsect?)
                   (or (and (et-subtype? result a) (et-subtype? result b))
                       (error "`et--subsect' determined incorrect intersection")))
                 result)))))
@@ -1430,6 +1437,63 @@ which are invalid for types."
           (make-et-datatype :name sub-name :args arg-intersection))))
 
      ((null sub-name) 'INVALID))))
+
+
+;;;; Subtrace
+
+(defun et--subtract (a b)
+  "Subtract type A from B.
+
+This function errs on the side of subtracting less. In other words,
+returning A itself is a valid approximation."
+  (et--verify-type a)
+  (et--verify-type b)
+
+  (cl-loop for a-case in (et-type-cases a)
+           nconc
+           (cl-loop for b-case in (et-type-cases b)
+                    nconc (et--subtract-cases a-case b-case))
+           into all-cases
+           finally return
+           (let ((result (make-et-type :cases all-cases)))
+             result)))
+
+(defun et--subtract-binds (a-binds b-binds)
+  (cl-loop for (var . a-type) in a-binds
+           for b-type = (alist-get var b-binds)
+           collect (cons var (if b-type (et--subtract a-type b-type) a-type))))
+
+(defun et--subtract-cases (a-case b-case)
+  (cl-assert (et-type-case-p a-case))
+  (cl-assert (et-type-case-p b-case))
+
+  (let* ((a (et-type-case-value a-case))
+         (b (et-type-case-value b-case))
+         (a-case-raw (make-et-type-case :value a))
+         (b-case-raw (make-et-type-case :value b))
+         (make-case
+          (lambda (val)
+            (make-et-type-case
+             :value val
+             :binds (et--subtract-binds (et-type-case-binds a-case) (et-type-case-binds b-case))
+             :typeofs (et-type-case-typeofs a-case)))))
+
+    (cond
+     ;; Subtracting gives never
+     ((et-subtype? (et-type a-case-raw) (et-type b-case-raw)) nil)
+
+     ((et-alias-p a) (cl-loop for exp-case in (et-type-cases (et-alias-expand a))
+                              nconc (et--subtract-cases exp-case b-case)))
+     ((et-alias-p b) (cl-loop for exp-case in (et-type-cases (et-alias-expand b))
+                              nconc (et--subtract-cases a-case exp-case)))
+
+     ;; Todo: Handle more complex cases
+     (t (list (funcall make-case a))))))
+
+(et-test
+ (et-assert-equal (et 1|3) (et--subtract (et 1|2|3) (et 2)))
+ (et-assert-equal (et-never) (et--subtract (et Integer) (et Number)))
+ (et-assert-equal (et Number) (et--subtract (et Number) (et Integer))))
 
 
 ;;;; Satisfy constraints
