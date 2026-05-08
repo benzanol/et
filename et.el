@@ -815,16 +815,17 @@ ARGS is a mix of constant args (where the corresponding arg role is
 ;; \(`S:ALIAS' NAME ARGS...)
 
 ;; Types only:
+;; \(`S:TYPE' TYPE) - an already compiled type
 ;; \(`S:BIND' VAR TYPE)
 ;; \(`S:TYPEOF' VAR)
 ;; \(`S:BINDS-OF' TYPE)
 ;; \(`S:SUBTRACT' TYPE1 TYPE2)
-;; \(`S:TYPE' TYPE) - used for type alias expansion
+;; \(`S:INFER' GENERICS MATCHER TYPE Y-RESULT N-RESULT)
 
 ;; Matchers only:
+;; \(`S:MATCHER-DNF' DNF) - an already compiled matcher dnf
 ;; \(`S:GENERIC' VAR)
 ;; \(`S:SET' VAR DNF)
-;; \(`S:MATCHER-DNF' DNF) - used for matcher alias expansion
 
 ;; Variables used for testing
 (defvar et--test-variables
@@ -846,6 +847,17 @@ ARGS is a mix of constant args (where the corresponding arg role is
 
       (`(:bind ,var ,type) (et-q (((S:BIND ,var ,(et-parse-structure type generics))))))
       (`(:typeof ,var) (et-q (((S:TYPEOF ,var)))))
+      (`(:bindsof ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
+      (`(:subtract ,type1 ,type2)
+       (et-q (((S:SUBTRACT ,(et-parse-structure type1 generics)
+                           ,(et-parse-structure type2 generics))))))
+      (`(:infer ,type ,gens ,matcher ,yes ,no)
+       (setq type (et-parse-structure type generics))
+       (if (vectorp gens) (setq gens (append gens nil)) (error "Generics must be a vector: %s" gens))
+       (setq matcher (et-parse-structure matcher gens))
+       (setq yes (et-parse-structure yes (append gens generics)))
+       (setq no (et-parse-structure no generics))
+       (et-q (((S:INFER ,type ,gens ,matcher ,yes ,no)))))
 
       (`(:never . ,args) nil)
       (`(:or . ,args) (mapcan parse args))
@@ -854,11 +866,6 @@ ARGS is a mix of constant args (where the corresponding arg role is
        (cl-reduce #'et--dnf-and (mapcar parse args)))
 
       (`(:literal ,val) (et-q (((S:DT Literal ,val)))))
-
-      (`(:bindsof ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
-      (`(:subtract ,type1 ,type2)
-       (et-q (((S:SUBTRACT ,(et-parse-structure type1 generics)
-                           ,(et-parse-structure type2 generics))))))
 
       (`(:set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
@@ -908,6 +915,9 @@ ARGS is a mix of constant args (where the corresponding arg role is
    ;; @symbol  ->  Literal symbol
    ((string-match "^@\\(.*\\)$" s)
     (et-parse-structure (list :literal (intern (match-string 1 s))) generics))
+   ;; %string  ->  Literal string
+   ((string-match "^%\\(.*\\)$" s)
+    (et-parse-structure (list :literal (match-string 1 s)) generics))
 
    ;; $TestVar=Type  ->  Bind to TestVar
    ((string-match "^\\(\\$[a-z]\\)::\\(.*\\)$" s)
@@ -1015,8 +1025,12 @@ Depth tracks < > and { } nesting."
 
 ;;;; To/from type
 
-(defun et-structure-to-type (structure)
-  "Convert a structure to an `et-type'.
+(defun et-structure-to-type (structure &optional gen-repls)
+  "Convert STRUCTURE to an `et-type'.
+
+GEN-REPLS is an alist of symbols to `et-type's. Each time S:GENERIC
+appears in STRUCTURE, it will be replaced with the corresponding value
+in GEN-REPLS, if it exists.
 
 This function will not succeed for all structures. Structures can
 represent multiple types in a single case, but types do not support
@@ -1025,40 +1039,62 @@ this, so it will fail in this case.
 Also, there are certain structure types that are designed for matchers,
 which are invalid for types."
 
-  (cl-loop for factors in structure
-           collect
-           (cl-loop for factor in factors
-                    collect
-                    (pcase factor
-                      (`(S:TYPE ,type) (apply #'list (et-type-cases type)))
-                      (`(S:DT ,name . ,args)
-                       (let ((new-args (et--datatype-map-type-args name args #'et-structure-to-type)))
-                         (list (make-et-type-case :value (make-et-datatype :name name :args new-args)))))
-                      (`(S:ALIAS ,name . ,args)
-                       (list (make-et-type-case :value (make-et-alias :name name :args (mapcar #'et-structure-to-type args)))))
-                      (`(S:BIND ,var ,struct)
-                       (list (make-et-type-case
-                              :value (make-et-datatype :name 'Any)
-                              :binds (list (cons var (et-structure-to-type struct))))))
-                      (`(S:TYPEOF ,var)
-                       (list (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var))))
-                      (`(S:BINDS-OF ,struct)
-                       (let* ((type (et-structure-to-type struct)))
-                         (if (et-never-p type) nil
-                           (list (make-et-type-case
-                                  :value (make-et-datatype :name 'Any)
-                                  :binds (et--type-binds type))))))
-                      (`(S:SUBTRACT ,type1 ,type2)
-                       (et-type-cases (et--subtract (et-structure-to-type type1)
-                                                    (et-structure-to-type type2))))
-                      (_ (error "Invalid structure factor for type: %s" factor)))
-                    into and-case-lists
-                    finally return
-                    (apply #'et--supersect
-                           (cl-loop for cs in and-case-lists
-                                    collect (make-et-type :cases cs))))
-           into or-types
-           finally return (apply #'et--or or-types)))
+  (let* ((to-type (lambda (sub) (et-structure-to-type sub gen-repls))))
+    (cl-loop for factors in structure
+             collect
+             (cl-loop for factor in factors
+                      collect
+                      ;; Return a list of cases
+                      (pcase factor
+                        (`(S:TYPE ,type) (apply #'list (et-type-cases type)))
+                        (`(S:GENERIC ,name)
+                         (et-type-cases
+                          (or (alist-get name gen-repls)
+                              (error "Replacement not provided for generic %s" gen-repls))))
+                        (`(S:DT ,name . ,args)
+                         (let ((new-args (et--datatype-map-type-args name args to-type)))
+                           (list (make-et-type-case :value (make-et-datatype :name name :args new-args)))))
+                        (`(S:ALIAS ,name . ,args)
+                         (list (make-et-type-case
+                                :value (make-et-alias
+                                        :name name
+                                        :args (mapcar to-type args)))))
+                        (`(S:BIND ,var ,struct)
+                         (list (make-et-type-case
+                                :value (make-et-datatype :name 'Any)
+                                :binds (list (cons var (funcall to-type struct))))))
+                        (`(S:TYPEOF ,var)
+                         (list (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var))))
+                        (`(S:BINDS-OF ,struct)
+                         (let* ((type (funcall to-type struct)))
+                           (if (et-never-p type) nil
+                             (list (make-et-type-case
+                                    :value (make-et-datatype :name 'Any)
+                                    :binds (et--type-binds type))))))
+                        (`(S:SUBTRACT ,type1 ,type2)
+                         (et-type-cases (et--subtract (funcall to-type type1)
+                                                      (funcall to-type type2))))
+                        (`(S:INFER ,type ,gens ,matcher ,yes ,no)
+                         (setq type (funcall to-type type))
+                         (setq matcher (make-et-matcher
+                                        :generics gens
+                                        :dnf (et-structure-to-matcher-dnf matcher gens)))
+                         (let* ((result (et--sub-match matcher type)))
+                           (et-type-cases
+                            (if (eq result 'INVALID) (et-structure-to-type no gen-repls)
+                              (let* ((new-repls (cl-loop for gen in gens
+                                                         for gen-type in result
+                                                         collect (cons gen gen-type))))
+                                (et-structure-to-type yes (append new-repls gen-repls)))))))
+                        (_ (error "Invalid structure factor for type: %s" factor)))
+                      into and-case-lists
+                      finally return
+                      (apply #'et--supersect
+                             (cl-loop for cs in and-case-lists
+                                      collect (make-et-type :cases cs))))
+             into or-types
+             finally return (apply #'et--or or-types))))
+
 
 (defun et-type-to-structure (type)
   "Convert an `et-type' to a structure DNF."
@@ -1135,7 +1171,27 @@ which are invalid for types."
                          (et Nil)))
  (et-assert (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} Number)))
                              (:and Nil (:bindsof (:subtract Integer&{::$a} Number))))
-                         (et True))))
+                         (et True)))
+
+ ;; Test :infer
+ (et-assert-equal (et :never)
+   (et :infer Cons:RR<%hi~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (et-assert-equal (et Vector:R<12>)
+   (et :infer Cons:RR<12~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (et-assert-equal (et Vector:R<Integer>)
+   (et :infer Cons:RR<Integer~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (et-assert-equal (et :never)
+   (et :infer Cons:RR<Number~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (et-assert-equal (et Vector:R<12>)
+   (et :infer List:R<12> [T] List:R<T&Integer> Vector:R<T> :never))
+ (et-assert-equal (et Vector:R<1|2>)
+   (et :infer Cons:RR<1~Cons:RR<2~Nil>> [T] List:R<T&Integer> Vector:R<T> :never))
+ (et-assert-equal (et Vector:R<1|2|3>)
+   (et :infer Cons:RR<1~Cons:RR<2~List:R<3>>> [T] List:R<T&Integer> Vector:R<T> :never))
+ (et-assert-equal (et :never)
+   (et :infer List:R<Number> [T] List:R<T&Integer> Vector:R<T> :never))
+ (et-assert-equal (et Vector:R<:never>)
+   (et :infer Nil [T] List:R<T&Integer> Vector:R<T> :never)))
 
 
 ;;;; To/from matcher
