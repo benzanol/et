@@ -36,13 +36,15 @@
 
 (defvar et--error-path nil)
 
-(defmacro et--with-error-path (path &rest body)
+(defmacro et-with-error-path (path &rest body)
   (declare (indent 1))
-  `(let ((et--error-path (append et--error-path ,path)))
-     ,@body))
+  `(let* ((et--error-path (append et--error-path ,path)))
+     (condition-case err (progn ,@body)
+       (error (et-error nil (error-message-string err)) nil))))
 
 (defun et-error (path string &rest args)
-  (byte-compile-warn "%s" (apply #'format (concat string (et--error-message-suffix path)) args)))
+  (setq string (concat string (et--error-message-suffix path)))
+  (byte-compile-warn "%s" (if args (apply #'format string args) string)))
 
 (defun et--error-message-suffix (path)
   (format "\0;;flycheck-path:%s" (append et--error-path path)))
@@ -115,8 +117,8 @@
             (lambda (body start-idx)
               (cl-loop for expr in body
                        for idx upfrom 0
-                       do (et--with-error-path (list (+ idx start-idx))
-                            (eval expr)))))
+                       do (et-with-error-path (list (+ idx start-idx))
+                            (or (eval expr) (error "Returned nil"))))))
            repeat-var repeat-forms)
 
       (when (symbolp (car body))
@@ -128,42 +130,12 @@
                    do (funcall evaller (cl-subst form repeat-var body) 3))
         (funcall evaller body 1)))))
 
-
-;;;; Assert macros
-
-(defmacro et-assert-equal (expr1 expr2)
-  (declare (indent 1))
-  `(let* ((val1 (condition-case err ,expr1
-                  (error (et-error '(1) "%s" err))))
-          (val2 (condition-case err ,expr2
-                  (error (et-error '(2) "%s" err)))))
-     (or (equal val1 val2)
-         (et-error '(0) "=> %s" (cl-prin1-to-string val2)))))
-
-(defmacro et-assert-equal-reverse (expr2 expr1)
-  (declare (indent 1))
-  `(et-assert-equal ,expr1 ,expr2))
-
-(defmacro et-assert-string= (str1 expr2)
-  (declare (indent 1))
-  `(let* ((val2 (condition-case err ,expr2
-                  (error (et-error '(2) "%s" err))))
-          (str2 (cl-prin1-to-string val2)))
-     (or (equal ,str1 str2) (et-error '(0) "=> %s" str2))))
-
 (defmacro et-assert-error (expr)
   (declare (indent 1))
-  `(condition-case val ,expr
-     (error nil)
-     (:success (et-error '(0) "=> %s" val))))
-
-(defmacro et-assert-success (expr)
-  (declare (indent 1))
-  `(condition-case err ,expr
-     (error (et-error '(0) "%s" err))))
-
-(defmacro et-assert (expr) `(et-assert-equal t ,expr))
-(defmacro et-assert-nil (expr) `(et-assert-equal nil ,expr))
+  `(et-with-error-path (list 1)
+     (condition-case val ,expr
+       (error t)
+       (:success (error "=> %s" val)))))
 
 
 ;;; ============================================================
@@ -177,8 +149,8 @@
           (t expr))))
 
 (et-test
- (et-assert-equal '(a (copy-tree '(b)) c (copy-tree ''(((1 2 'hi)))))
-   (et--copy-quotes '(a '(b) c ''(((1 2 'hi)))))))
+ (equal '(a (copy-tree '(b)) c (copy-tree ''(((1 2 'hi)))))
+        (et--copy-quotes '(a '(b) c ''(((1 2 'hi)))))))
 
 
 (defmacro et-q (expr)
@@ -1137,61 +1109,61 @@ which are invalid for types."
 
 
 (et-test
- (et-assert-equal (et Cons:RR<1~@abc>)
-   (et-type (make-et-datatype :name 'Cons:RR :args (list (et-literal 1) (et-literal 'abc)))))
+ (equal (et Cons:RR<1~@abc>)
+        (et-type (make-et-datatype :name 'Cons:RR :args (list (et-literal 1) (et-literal 'abc)))))
 
- (et-assert-equal (et Number)
-   (et-type (make-et-datatype :name 'Number)))
+ (equal (et Number)
+        (et-type (make-et-datatype :name 'Number)))
 
- (et-assert-equal (et (:structure (((S:TYPE ,(et :or Abc Xyz))))))
-   (et-type (make-et-alias :name 'Abc) (make-et-alias :name 'Xyz)))
+ (equal (et (:structure (((S:TYPE ,(et :or Abc Xyz))))))
+        (et-type (make-et-alias :name 'Abc) (make-et-alias :name 'Xyz)))
 
- (et-assert-equal (et {$a::5}&4)
-   (et-type (make-et-type-case
-             :value (make-et-datatype :name 'Literal :args (list 4))
-             :binds (list (cons (alist-get '$a et--test-variables) (et-literal 5))))))
+ (equal (et {$a::5}&4)
+        (et-type (make-et-type-case
+                  :value (make-et-datatype :name 'Literal :args (list 4))
+                  :binds (list (cons (alist-get '$a et--test-variables) (et-literal 5))))))
 
- (et-assert-equal (et {::$a}&{$b::6}&Integer)
-   (et-type (make-et-type-case
-             :value (make-et-datatype :name 'Integer)
-             :binds (list (cons (alist-get '$b et--test-variables) (et-literal 6)))
-             :typeofs (list (alist-get '$a et--test-variables)))))
+ (equal (et {::$a}&{$b::6}&Integer)
+        (et-type (make-et-type-case
+                  :value (make-et-datatype :name 'Integer)
+                  :binds (list (cons (alist-get '$b et--test-variables) (et-literal 6)))
+                  :typeofs (list (alist-get '$a et--test-variables)))))
 
- (et-assert-equal (et :bindsof<{::$a}&{$a::2|3}&{1|2}>)
-   (et-type (make-et-type-case
-             :value (make-et-datatype :name 'Any)
-             :binds (list (cons (alist-get '$a et--test-variables) (et-literal 2))))))
+ (equal (et :bindsof<{::$a}&{$a::2|3}&{1|2}>)
+        (et-type (make-et-type-case
+                  :value (make-et-datatype :name 'Any)
+                  :binds (list (cons (alist-get '$a et--test-variables) (et-literal 2))))))
 
  ;; Test that bindsof never is never
- (et-assert-equal (et :never) (et :bindsof (:and Integer&{::$a} String)))
+ (equal (et :never) (et :bindsof (:and Integer&{::$a} String)))
 
  ;; Test when a predicate is redundant (both directions)
- (et-assert (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} String)))
-                             (:and Nil (:bindsof (:subtract Integer&{::$a} String))))
-                         (et Nil)))
- (et-assert (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} Number)))
-                             (:and Nil (:bindsof (:subtract Integer&{::$a} Number))))
-                         (et True)))
+ (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} String)))
+                  (:and Nil (:bindsof (:subtract Integer&{::$a} String))))
+              (et Nil))
+ (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} Number)))
+                  (:and Nil (:bindsof (:subtract Integer&{::$a} Number))))
+              (et True))
 
  ;; Test :infer
- (et-assert-equal (et :never)
-   (et :infer Cons:RR<%hi~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
- (et-assert-equal (et Vector:R<12>)
-   (et :infer Cons:RR<12~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
- (et-assert-equal (et Vector:R<Integer>)
-   (et :infer Cons:RR<Integer~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
- (et-assert-equal (et :never)
-   (et :infer Cons:RR<Number~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
- (et-assert-equal (et Vector:R<12>)
-   (et :infer List:R<12> [T] List:R<T&Integer> Vector:R<T> :never))
- (et-assert-equal (et Vector:R<1|2>)
-   (et :infer Cons:RR<1~Cons:RR<2~Nil>> [T] List:R<T&Integer> Vector:R<T> :never))
- (et-assert-equal (et Vector:R<1|2|3>)
-   (et :infer Cons:RR<1~Cons:RR<2~List:R<3>>> [T] List:R<T&Integer> Vector:R<T> :never))
- (et-assert-equal (et :never)
-   (et :infer List:R<Number> [T] List:R<T&Integer> Vector:R<T> :never))
- (et-assert-equal (et Vector:R<:never>)
-   (et :infer Nil [T] List:R<T&Integer> Vector:R<T> :never)))
+ (equal (et :never)
+        (et :infer Cons:RR<%hi~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (equal (et Vector:R<12>)
+        (et :infer Cons:RR<12~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (equal (et Vector:R<Integer>)
+        (et :infer Cons:RR<Integer~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (equal (et :never)
+        (et :infer Cons:RR<Number~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ (equal (et Vector:R<12>)
+        (et :infer List:R<12> [T] List:R<T&Integer> Vector:R<T> :never))
+ (equal (et Vector:R<1|2>)
+        (et :infer Cons:RR<1~Cons:RR<2~Nil>> [T] List:R<T&Integer> Vector:R<T> :never))
+ (equal (et Vector:R<1|2|3>)
+        (et :infer Cons:RR<1~Cons:RR<2~List:R<3>>> [T] List:R<T&Integer> Vector:R<T> :never))
+ (equal (et :never)
+        (et :infer List:R<Number> [T] List:R<T&Integer> Vector:R<T> :never))
+ (equal (et Vector:R<:never>)
+        (et :infer Nil [T] List:R<T&Integer> Vector:R<T> :never)))
 
 
 ;;;; To/from matcher
@@ -1333,31 +1305,30 @@ which are invalid for types."
                       (et--case-subtype? sub-case super-case)))))
 
 (et-test
- (et-assert (et-subtype? (et Integer) (et Number)))
- (et-assert (et-subtype? (et Integer) (et Any)))
+ (et-subtype? (et Integer) (et Number))
+ (et-subtype? (et Integer) (et Any))
 
- (et-assert (et-subtype? (et Cons:RR<Integer~Integer>) (et Cons:RR<Number~Number>)))
- (et-assert-nil (et-subtype? (et Cons:RR<Number~Number>) (et Cons:RR<Integer~Integer>)))
+ (et-subtype? (et Cons:RR<Integer~Integer>) (et Cons:RR<Number~Number>))
+ (not (et-subtype? (et Cons:RR<Number~Number>) (et Cons:RR<Integer~Integer>)))
 
- (et-assert (et-subtype? (et Cons:WW<Number~Number>) (et Cons:WW<Integer~Integer>)))
- (et-assert-nil (et-subtype? (et Cons:WW<Integer~Integer>) (et Cons:WW<Number~Number>)))
+ (et-subtype? (et Cons:WW<Number~Number>) (et Cons:WW<Integer~Integer>))
+ (not (et-subtype? (et Cons:WW<Integer~Integer>) (et Cons:WW<Number~Number>)))
 
- (et-assert (et-subtype? (et Cons:WR<Number~Integer>) (et Cons:WR<Integer~Number>)))
- (et-assert (et-subtype? (et Cons:RW<Integer~Number>) (et Cons:RW<Number~Integer>)))
+ (et-subtype? (et Cons:WR<Number~Integer>) (et Cons:WR<Integer~Number>))
+ (et-subtype? (et Cons:RW<Integer~Number>) (et Cons:RW<Number~Integer>))
 
- (et-assert (et-subtype? (et Literal (4 . 5)) (et Cons:RR<Integer~Integer>)))
- (et-assert-nil (et-subtype? (et Literal (4 . 5)) (et Cons:AA<Integer~Integer>)))
- (et-assert-nil (et-subtype? (et Literal (4 . 5.5)) (et Cons:RR<Integer~Integer>)))
- (et-assert (et-subtype? (et Literal (4 . 5)) (et Cons:--<String~String>)))
+ (et-subtype? (et Literal (4 . 5)) (et Cons:RR<Integer~Integer>))
+ (not (et-subtype? (et Literal (4 . 5)) (et Cons:AA<Integer~Integer>)))
+ (not (et-subtype? (et Literal (4 . 5.5)) (et Cons:RR<Integer~Integer>)))
+ (et-subtype? (et Literal (4 . 5)) (et Cons:--<String~String>))
 
- (et-assert (et-subtype? (et Literal [4 5 6]) (et Vector:R<Integer>)))
- (et-assert-nil (et-subtype? (et Literal [4 5 6]) (et Vector:A<Integer>)))
- (et-assert-nil (et-subtype? (et Literal [4 5 6.6]) (et Vector:R<Integer>)))
- (et-assert (et-subtype? (et Literal [4 5 6]) (et Vector:-<String>)))
+ (et-subtype? (et Literal [4 5 6]) (et Vector:R<Integer>))
+ (not (et-subtype? (et Literal [4 5 6]) (et Vector:A<Integer>)))
+ (not (et-subtype? (et Literal [4 5 6.6]) (et Vector:R<Integer>)))
+ (et-subtype? (et Literal [4 5 6]) (et Vector:-<String>))
 
- (et-assert
-  (et-subtype? (et List:R<Integer>)
-               (et Nil|Cons:RR<Number~List:R<Integer>>))))
+ (et-subtype? (et List:R<Integer>)
+              (et Nil|Cons:RR<Number~List:R<Integer>>)))
 
 
 ;;;; Simplify
@@ -1408,8 +1379,8 @@ which are invalid for types."
 (defun et--non-nil (type) (et--supersect type (et NonNil)))
 
 (et-test
- (et-assert-equal (et-never) (et--subsect (et Integer) (et Positive)))
- (et-assert-equal (et Integer) (et--supersect (et Integer) (et Positive))))
+ (equal (et-never) (et--subsect (et Integer) (et Positive)))
+ (equal (et Integer) (et--supersect (et Integer) (et Positive))))
 
 (defun et--intersect (subsect? &rest types)
   "Return the type intersection of TYPES."
@@ -1560,11 +1531,11 @@ returning A itself is a valid approximation."
      (t (list (funcall make-case a))))))
 
 (et-test
- (et-assert-equal (et 1|3) (et--subtract (et 1|2|3) (et 2)))
- (et-assert-equal (et-never) (et--subtract (et Integer) (et Number)))
- (et-assert-equal (et Number) (et--subtract (et Number) (et Integer)))
- (et-assert-equal (et String|Number) (et--subtract (et String|Number) (et Integer)))
- (et-assert-equal (et NonNil) (et--subtract (et NonNil) (et Integer))))
+ (equal (et 1|3) (et--subtract (et 1|2|3) (et 2)))
+ (equal (et-never) (et--subtract (et Integer) (et Number)))
+ (equal (et Number) (et--subtract (et Number) (et Integer)))
+ (equal (et String|Number) (et--subtract (et String|Number) (et Integer)))
+ (equal (et NonNil) (et--subtract (et NonNil) (et Integer))))
 
 
 ;;;; Satisfy constraints
@@ -1668,12 +1639,12 @@ values to be the never type."
              collect (cons var (et-simplify-type (apply #'et--or (nreverse types)))))))
 
 (et-test
- (et-assert-equal (list (cons (alist-get '$a et--test-variables) (et 2|3)))
-   (et--type-binds (et $a::{2|3}&{1|2})))
- (et-assert-equal (list (cons (alist-get '$a et--test-variables) (et 1|2)))
-   (et--type-binds (et {::$a}&{1|2})))
- (et-assert-equal (list (cons (alist-get '$a et--test-variables) (et 2)))
-   (et--type-binds (et {::$a}&{$a::{2|3}}&{1|2}))))
+ (equal (list (cons (alist-get '$a et--test-variables) (et 2|3)))
+        (et--type-binds (et $a::{2|3}&{1|2})))
+ (equal (list (cons (alist-get '$a et--test-variables) (et 1|2)))
+        (et--type-binds (et {::$a}&{1|2})))
+ (equal (list (cons (alist-get '$a et--test-variables) (et 2)))
+        (et--type-binds (et {::$a}&{$a::{2|3}}&{1|2}))))
 
 
 (defun et--replace-type-binds (type binds)

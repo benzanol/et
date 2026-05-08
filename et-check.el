@@ -76,84 +76,36 @@
 (defvar et-display-narrows t
   "Whether to display narrowed types on if/when/etc blocks.")
 
-(defun et-warn-narrows (&rest types)
+(defun et-checker-hint-narrows (&rest types)
   "Display a list of binds to the user at path=(0).
 
 TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (when et-display-narrows
     (cl-loop for (fmt type) on types by #'cddr
              for binds = (et--type-binds type) ; TODO: display just binds instead of whole type
-             when binds
-             collect (format fmt (et-pp-narrows binds)) into strs
-             finally do
-             (when strs
-               (et-warn '(0) "%s" (string-join strs "\\n"))))))
+             when binds do (et-checker-hint fmt (et-pp-narrows binds)))))
 
 
 ;;; ============================================================
 ;;; Checking
-;;;; Path
-
-(defvar et--current-expr nil)
-(defvar et--current-path nil)
-
-(defmacro et-with-path (path &rest body)
-  (declare (indent 1))
-  (let ((path-var (make-symbol "path"))
-        (parent-var (make-symbol "parent")))
-    `(let* ((,path-var ,path)
-            (et--current-path (append et--current-path ,path-var))
-            (,parent-var (when ,path-var (et--traverse-tree (butlast ,path-var) et--current-expr)))
-            (et--current-expr (if ,path-var (nth (car (last ,path-var)) ,parent-var)
-                                et--current-expr)))
-       (unwind-protect (progn ,@body)
-         (when ,path-var
-           (setf (nth (car (last ,path-var)) ,parent-var)
-                 et--current-expr))))))
-
-(defun et--traverse-tree (path tree)
-  (if (null path) tree
-    (when (>= (car path) (length tree))
-      (error "Index out of bounds: %s %s" (car path) tree))
-    (et--traverse-tree (cdr path) (nth (car path) tree))))
-
-
-(defun et-warn (path msg &rest args)
-  (setq msg (concat msg (et--error-message-suffix (append et--current-path path))))
-  (apply #'byte-compile-warn msg args))
-
-(defun et-err (path msg &rest args)
-  (setq msg (concat msg (et--error-message-suffix (append et--current-path path))))
-  (signal 'error (list (apply #'format msg args))))
-
-
-;;;; Checker return value
-
-(cl-defstruct et-result
-  "Result of parsing an expression.
-
-TYPE is an `et-type'.
-
-PROBLEMS is a list (PATH . STRING)[] of errors resulting from type
-checking the expression. If this value is non-nil, then TYPE is not
-guaranteed to be non-nil (but it might be), and the entire call tree
-should propagate these errors."
-  type problems)
-
-
 ;;;; Define checker
 
-(defmacro et-define-checker (funcs arglist &rest body)
-  (declare (indent 2))
+(defmacro et-define-checker (funcs &rest body)
+  "A checker should return a type, or nil if the expression is invalid."
+  (declare (indent 1))
   (cl-assert (or (symbolp funcs) (seq-every-p #'symbolp funcs)))
-  (cl-assert (listp arglist))
 
   `(let* ((checker (lambda . ,(cl--transform-lambda
-                               (cons arglist body)
+                               (cons () body)
                                (format "et--checker:%s" funcs)))))
      ,@(cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
                 collect `(setf (get ',func 'et-checker) checker))
      ',funcs))
+
+(defmacro et-define-pcase-checker (funcs &rest cases)
+  "A checker should return a type, or nil if the expression is invalid."
+  (declare (indent 1))
+  `(et-define-checker ,funcs (pcase (cdr et--checker-expr) ,@cases)))
 
 
 ;;;; Type checker
@@ -220,131 +172,223 @@ substituted.
                          exprs))))
 
 
+;;;; Checker return type
+
+(cl-defstruct et-result
+  "Result of parsing an expression.
+
+TYPE is an `et-type'.
+
+DIAGNOSTICS is a list (PATH SEVERITY STRING)[] of diagnostics resulting
+from type checking the expression. If this value is non-nil, then TYPE
+is not guaranteed to be non-nil (but it might be), and the entire call
+tree should propagate these errors.
+
+COMPILED is the compiled version of the expression that was being
+checked."
+  type diagnostics compiled)
+
+
 ;;;; Check
 
-(defun et-check ()
+(defvar et--checker-diagnostics nil
+  "Diagnostics signalled on the current call to this checker.")
+
+(defvar et--checker-expr nil
+  "The current expr.")
+
+(defun et--check (expr)
   "Returns the type of the current expr, if typechecking did not error."
-  (et--verify-type
-   (pcase et--current-expr
-     (`(,func . ,args)
-      (or (apply (or (get func 'et-checker) (error "No checker for function: %s" func))
-                 args)
-          (error "Checker for %s returned nil" func)))
+  (let* ((et--checker-diagnostics nil)
+         (et--checker-expr expr)
+         (return-type nil))
 
-     ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
+    (pcase expr
+      (`(,func . ,_args)
+       (if-let* ((checker (get func 'et-checker)))
+           (condition-case result (funcall checker)
+             (et-checker-fatal (et-never))
+             (error (et-checker-diagnostic () "Checker for `%s' threw error: %s" result)
+                    (et-never))
+             (:success
+              (if (et-type-p result) (setq return-type result)
+                (et-checker-diagnostic () "Checker for `%s' had invalid return: %s" result))))
 
-      (let ((var (or (et--get-symbol-variable sym)
-                     (error "Free variable: %s" sym))))
-        (et--supersect
-         (et--get-variable-type var)
-         (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
-                                     :typeofs (list var))))))
+         (et-checker-diagnostic '(0) "No checker for `%s'" func)))
 
-     (expr (et-literal expr)))))
+      ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
+
+       (if-let* ((var (et--get-symbol-variable sym)))
+           (setq return-type
+                 (et--supersect
+                  (et--get-variable-type var)
+                  (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
+                                              :typeofs (list var)))))
+
+         (et-checker-diagnostic () "Free variable: %s" var)))
+
+      (expr (setq return-type (et-literal expr))))
+
+    (cl-assert (or et--checker-diagnostics return-type))
+    (make-et-result :type return-type
+                    :diagnostics (nreverse et--checker-diagnostics)
+                    :compiled et--checker-expr)))
 
 
-;;;; Check position helpers
+(defun et-checker-diagnostic (path severity fmt &rest args)
+  (push (list path severity (if args (apply #'format fmt args) fmt))
+        et--checker-diagnostics))
+
+(defun et-checker-err (fmt &rest args) (apply #'et-checker-diagnostic nil 'error fmt args))
+(defun et-checker-warn (fmt &rest args) (apply #'et-checker-diagnostic nil 'warning fmt args))
+(defun et-checker-hint (fmt &rest args) (apply #'et-checker-diagnostic nil 'hint fmt args))
+
+(define-error 'et-checker-fatal "Signalled by a checker which has a fatal problem.")
+(defun et-checker-fatal (path fmt &rest args)
+  (apply #'et-checker-diagnostic 'fatal path fmt args)
+  (signal 'et-checker-fatal nil))
+
+
+;;;; Check wrappers
+
+(defun et--traverse-tree (path tree)
+  (if (null path) tree
+    (when (>= (car path) (length tree))
+      (error "Index out of bounds: %s %s" (car path) tree))
+    (et--traverse-tree (cdr path) (nth (car path) tree))))
 
 (defun et-check-path (&rest path)
-  (et-with-path path (et-check)))
+  (cl-assert et--checker-expr)
+  (setq path (flatten-tree path))
 
-(defun et-check-tail (start)
-  (cl-loop for idx upfrom start below (length et--current-expr)
-           for type = (et-with-path (list idx) (et-check))
-           finally return (or type (et-literal nil))))
+  (let* ((root-expr et--checker-expr)
+         (sub-expr (et--traverse-tree path root-expr))
+         (sub-result (et--check sub-expr)))
+    (cl-assert (et-result-p sub-result))
+    ;; Diagnostics in the result have paths relative to sub-expr
+    ;; Rebase them to be relative to et--checker-expr
+    (cl-loop for (p severity message) in (et-result-diagnostics sub-result)
+             do (et-checker-diagnostic (append path p) severity message))
+    ;; Return just the inner type
+    (et-result-type sub-result)))
+
+(defun et-check-tail (&rest first-path)
+  (cl-assert et--checker-expr)
+  (cl-assert first-path)
+  (setq first-path (flatten-tree first-path))
+
+  (let* ((parent-path (butlast first-path 1))
+         (parent-expr (et--traverse-tree parent-path et--checker-expr))
+         (start (car (last first-path)))
+         ;; The type for an empty tail is nil
+         (last-type (et-literal nil)))
+
+    (cl-loop for idx upfrom start below (length parent-expr)
+             do (setq last-type (et-check-path (append parent-path (list idx))))
+             finally return last-type)))
 
 
 ;;;; Root level functions
 
-(defmacro et--root (expr &rest body)
+(defun et--typecheck (body &optional noemit)
+  (let* ((results (mapcar #'et--check body))
+         (types (mapcar #'et-result-type results))
+         (compiled (mapcar #'et-result-compiled results))
+         (blackbox (lambda (x) x)))
+
+    ;; Display diagnostics
+    (unless noemit
+      (cl-loop for result in results
+               for pos upfrom 1
+               do (cl-loop for (path _severity message) in (et-result-diagnostics result)
+                           do (et-error (cons pos path) message))))
+
+    ;; Return the (type . compiled)
+    (progn
+      (cons
+       (funcall blackbox (car (last types)))
+       (if (eq (length compiled) 1) (funcall blackbox (car compiled))
+         (cons #'progn compiled))))))
+
+(defmacro et-typecheck (&rest body)
+  `(et--typecheck ',body))
+
+(defmacro et-typecheck-func (func &rest arg-types)
+  (cl-loop for type in arg-types
+           collect (list :type type) into arg-exprs
+           finally return (cons #'et-typecheck (cons func arg-exprs))))
+
+(defmacro et-assert-resolve (type expr)
   (declare (indent 1))
-  `(progn
-     (cl-assert (null et--current-expr))
-     (cl-assert (null et--current-path))
-     (cl-assert (null et--binds))
-     (let ((et--current-expr ,expr))
-       ,@body)))
+  `(let* ((t-type (et-with-error-path (list 1) (et ,type)))
+          (expr-type (et-with-error-path (list 2) (car (et--typecheck '(,expr) t)))))
+     (or (et-subtype? expr-type t-type)
+         (error "Expr=%s" (cl-prin1-to-string expr-type)))))
 
-(defmacro et-root-block (&rest body)
-  (et--root (cons #'progn body)
-            (et-check-tail 1)
-            et--current-expr))
-
-(defun et-root-check (expr)
-  (et--with-error-path (list 1)
-                       (et--root expr (et-check))))
-
-(defmacro et-root-check-call (func &rest arg-types)
-  `(et--root ',(cons func (cl-loop for type in arg-types collect (list :type type)))
-             (et-check)))
-
-(defun et-resolve (type)
-  (let ((expr-type (et-check)))
-    (unless (et-subtype? expr-type type)
-      (error "Type %s is not assignable to type %s"
-             (et-pp expr-type) (et-pp type)))))
-
-(defun et-root-resolve (type expr)
-  (et--root expr (et-resolve (et-parse-type type))))
+(defmacro et-assert-no-resolve (type expr)
+  (declare (indent 1))
+  `(condition-case val (et-assert-resolve ,type ,expr)
+     (error t)
+     (:success (error "=> %s" val))))
 
 
 ;;;; Tests
 
 (et-test
- (et-assert-success (et-root-resolve 'Number 1))
- (et-assert-success (et-root-resolve 'Positive 1))
- (et-assert-success (et-root-resolve 'Negative -1))
- (et-assert-success (et-root-resolve 'Number 1.1))
- (et-assert-error (et-root-resolve 'Number "1"))
- (et-assert-error (et-root-resolve 'Integer 1.1))
- (et-assert-error (et-root-resolve 'Positive -1))
- (et-assert-error (et-root-resolve 'Positive 0))
- (et-assert-error (et-root-resolve 'Negative 1))
- (et-assert-error (et-root-resolve 'Negative 0))
+ (et-assert-resolve Number 1)
+ (et-assert-resolve Positive 1)
+ (et-assert-resolve Negative -1)
+ (et-assert-resolve Number 1.1)
+ (et-assert-no-resolve Number "1")
+ (et-assert-no-resolve Integer 1.1)
+ (et-assert-no-resolve Positive -1)
+ (et-assert-no-resolve Positive 0)
+ (et-assert-no-resolve Negative 1)
+ (et-assert-no-resolve Negative 0)
 
- (et-assert-success (et-root-resolve 'String "1"))
- (et-assert-error (et-root-resolve 'String 1))
+ (et-assert-resolve String "1")
+ (et-assert-no-resolve String 1)
 
- (et-assert-success (et-root-resolve 'Symbol nil))
- (et-assert-success (et-root-resolve 'Symbol t))
- (et-assert-error (et-root-resolve 'Symbol 'a)) ; Not self-quoting
- (et-assert-error (et-root-resolve 'Symbol 1))
- (et-assert-error (et-root-resolve 'Symbol "1"))
+ (et-assert-resolve Symbol nil)
+ (et-assert-resolve Symbol t)
+ (et-assert-no-resolve Symbol a) ; Not self-quoting
+ (et-assert-no-resolve Symbol 1)
+ (et-assert-no-resolve Symbol "1")
 
- (et-assert-success (et-root-resolve 'Boolean t))
- (et-assert-success (et-root-resolve 'Boolean nil))
- (et-assert-error (et-root-resolve 'Boolean 'a))
- (et-assert-error (et-root-resolve 'Boolean 1))
- (et-assert-error (et-root-resolve 'Boolean "1")))
+ (et-assert-resolve Boolean t)
+ (et-assert-resolve Boolean nil)
+ (et-assert-no-resolve Boolean a)
+ (et-assert-no-resolve Boolean 1)
+ (et-assert-no-resolve Boolean "1"))
 
 (et-test
  ;; and - value must satisfy all constituent types
- (et-assert-success (et-root-resolve 'Boolean&Symbol&True&@t t))
+ (et-assert-resolve Boolean&Symbol&True&@t t)
  (et-assert-error   (et-root-resolve 'Boolean&Integer t))
  (et-assert-error   (et-root-resolve 'Boolean&Integer 1))
  (et-assert-error   (et-root-resolve 'Boolean&Integer nil))
 
  ;; Two or types
- (et-assert-success (et-root-resolve 'Boolean|Integer t))
- (et-assert-success (et-root-resolve 'Boolean|Integer nil))
- (et-assert-success (et-root-resolve 'Boolean|Integer 1))
+ (et-assert-resolve Boolean|Integer t)
+ (et-assert-resolve Boolean|Integer nil)
+ (et-assert-resolve Boolean|Integer 1)
  (et-assert-error   (et-root-resolve 'Boolean|Integer "1"))
  (et-assert-error   (et-root-resolve 'Boolean|Integer 'a))
 
  ;; Three or types
- (et-assert-success (et-root-resolve 'Boolean|Integer|String t))
- (et-assert-success (et-root-resolve 'Boolean|Integer|String 1))
- (et-assert-success (et-root-resolve 'Boolean|Integer|String "1"))
+ (et-assert-resolve Boolean|Integer|String t)
+ (et-assert-resolve Boolean|Integer|String 1)
+ (et-assert-resolve Boolean|Integer|String "1")
  (et-assert-error   (et-root-resolve 'Boolean|Integer|String 'a))
 
  ;; Nested - and inside or
- (et-assert-success (et-root-resolve 'Integer|Boolean&Symbol t))
- (et-assert-success (et-root-resolve 'Integer|Boolean&Symbol 1))
+ (et-assert-resolve Integer|Boolean&Symbol t)
+ (et-assert-resolve Integer|Boolean&Symbol 1)
  (et-assert-error   (et-root-resolve 'Integer|Boolean&Symbol 'a))
 
  ;; Nested - or inside and
- (et-assert-success (et-root-resolve 'Boolean&{Symbol|Integer} t))
- (et-assert-success (et-root-resolve 'Boolean&{Symbol|Integer} nil))
+ (et-assert-resolve Boolean&{Symbol|Integer} t)
+ (et-assert-resolve Boolean&{Symbol|Integer} nil)
  (et-assert-error   (et-root-resolve 'Boolean&{Symbol|Integer} 1)))
 
 
@@ -352,39 +396,78 @@ substituted.
 ;;; Utils
 ;;;; Testing checkers
 
-(et-define-checker :type (spec)
-                   (et-parse-type spec))
+(et-define-pcase-checker :type
+  (`(,spec) (setq et--checker-expr "dummy") (et-parse-type spec)))
 
-(et-define-checker :assert-subtype (_expr type-spec)
-                   (let ((expr-type (et-check-path 1)))
-                     (or (et-subtype? expr-type (et-parse-type type-spec))
-                         (et-err '(0) "Not subtype: %s" (et-pp expr-type)))
-                     (setq et--current-expr "dummy")
-                     (et Nil)))
+(et-define-pcase-checker :assert-subtype
+  (`(,_expr ,type-spec)
+   (let ((expr-type (et-check-path 1)))
+     (or (et-subtype? expr-type (et-parse-type type-spec))
+         (et-checker-err "Not subtype: %s" (et-pp expr-type)))
+     (setq et--checker-expr "dummy")
+     (et Nil))))
 
-(et-define-checker :assert-error (_expr)
-                   (condition-case _err (et-check-path 1)
-                     (error (setq et--current-expr nil) (et-literal nil))
-                     (:success (et-err '(0) "Didn't error"))))
+(et-define-pcase-checker :assert-error
+  (`(,_expr)
+   (condition-case _err (et-check-path 1)
+     (error (setq et--checker-expr nil) (et-literal nil))
+     (:success (et-checker-err "Didn't error")))))
 
-(et-define-checker :typeof (_expr)
-                   (let ((type (et-check-path 1)))
-                     (et-warn '(0) "%s" (et-pp type))
-                     (setq et--current-expr (cadr et--current-expr))
-                     type))
+(et-define-pcase-checker :typeof
+  (`(,_expr)
+   (let ((type (et-check-path 1)))
+     (et-checker-warn (et-pp type))
+     (setq et--checker-expr (cadr et--checker-expr))
+     type)))
 
-(et-define-checker :narrows ()
-                   (cl-loop for (var . type) in (reverse et--narrow-binds)
-                            collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
-                            finally do
-                            (et-warn '(0) "%s" (string-join strs "\\n")))
-                   (setq et--current-expr nil)
-                   (et Nil))
+(et-define-pcase-checker :narrows
+  (`()
+   (cl-loop for (var . type) in (reverse et--narrow-binds)
+            collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
+            finally do
+            (et-checker-warn (string-join strs "\\n")))
+   (setq et--checker-expr nil)
+   (et Nil)))
 
-(et-define-checker :eval (expr)
-                   (et-warn '(0) "%s" (cl-prin1-to-string (eval expr)))
-                   (setq et--current-expr nil)
-                   (et Nil))
+(et-define-pcase-checker :eval
+  (`(,expr)
+   (et-checker-warn (cl-prin1-to-string (eval expr)))
+   (setq et--checker-expr nil)
+   (et Nil)))
+
+
+;;;; Pcase et-*
+
+(pcase-defmacro et-* (vars pattern)
+  "Match a list where each element matches PATTERN, collecting bindings.
+VARS is a list of symbols that PATTERN binds.
+Each variable is bound to the list of values it took across all elements.
+
+Example:
+  (pcase \\='((a 1) (b 2))
+    ((et-* (name val) `(,name ,val))
+     (list name val)))
+  => ((a b) (1 2))"
+
+  (let ((lst (gensym "lst"))
+        (elt (gensym "elt"))
+        (accumulators (mapcar (lambda (v) (cons v (gensym (symbol-name v))))
+                              (append vars nil))))
+    `(and (pred listp)
+          (app (lambda (,lst)
+                 (let ,(mapcar (lambda (a) (list (cdr a) nil)) accumulators)
+                   (when (cl-every (lambda (,elt)
+                                     (pcase ,elt
+                                       (,pattern
+                                        ,@(mapcar (lambda (a)
+                                                    `(push ,(car a) ,(cdr a)))
+                                                  accumulators)
+                                        t)
+                                       (_ nil)))
+                                   ,lst)
+                     (list ,@(mapcar (lambda (a) `(reverse ,(cdr a)))
+                                     accumulators)))))
+               (,'\` (,@(mapcar (lambda (v) (list '\, v)) (append vars nil))))))))
 
 
 ;;; ============================================================
