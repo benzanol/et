@@ -27,15 +27,6 @@
 
 
 ;;; ============================================================
-;;; Utils
-;;;; Error/warn
-
-(defun et-warn (path msg &rest args)
-  (setq msg (concat msg (et--error-message-suffix path)))
-  (apply #'byte-compile-warn msg args))
-
-
-;;; ============================================================
 ;;; Bindings
 ;;;; Symbol bindings
 
@@ -49,13 +40,19 @@
 (defmacro et-with-bind (sym type &rest body)
   (declare (indent 2))
   `(let* ((sym ,sym)
+          (_ (cl-assert (symbolp sym)))
+          (_ (cl-assert (et-type-p sym)))
           (var (make-et-var :name sym :type ,type))
           (et--binds (cons (cons sym var) et--binds)))
      ,@body))
 
 (defmacro et-with-binds (binds &rest body)
   (declare (indent 2))
-  `(let* ((et--binds (append ,binds et--binds)))
+  `(let* ((vs (cl-loop for (sym . type) in ,binds
+                       do (cl-assert (symbolp sym))
+                       do (cl-assert (et-type-p type))
+                       collect (cons sym (make-et-var :name sym :type type))))
+          (et--binds (append vs et--binds)))
      ,@body))
 
 
@@ -86,7 +83,7 @@
            collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
            finally return (string-join strs (or sep "\\n"))))
 
-(defvar et-display-narrows nil
+(defvar et-display-narrows t
   "Whether to display narrowed types on if/when/etc blocks.")
 
 (defun et-warn-narrows (&rest types)
@@ -129,6 +126,11 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
     (when (>= (car path) (length tree))
       (error "Index out of bounds: %s %s" (car path) tree))
     (et--traverse-tree (cdr path) (nth (car path) tree))))
+
+
+(defun et-warn (path msg &rest args)
+  (setq msg (concat msg (et--error-message-suffix (append et--current-path path))))
+  (apply #'byte-compile-warn msg args))
 
 
 ;;;; Define checker
@@ -349,7 +351,7 @@ substituted.
   (let ((expr-type (et-check-path 1)))
     (or (et-subtype? expr-type (et-parse-type type-spec))
         (error "Not subtype: %s" (et-pp expr-type)))
-    (setq et--current-expr "dummy") ; To put into the compiled code in place of the (:assert-subtype) expr
+    (setq et--current-expr "dummy")
     (et-literal nil)))
 
 (et-define-checker :assert-error (_expr)
@@ -358,9 +360,9 @@ substituted.
     (:success (error "Didn't error"))))
 
 (et-define-checker :typeof (_expr)
-  (et-warn '(0) "%s" (et-pp (et-check-path 1)))
-  (setq et--current-expr nil)
-  (et-literal nil))
+  (let ((type (et-check-path 1)))
+    (et-warn '(0) "%s" (et-pp type))
+    type))
 
 (et-define-checker :narrows ()
   (cl-loop for ((var . _) . type) in (reverse et--narrow-binds)

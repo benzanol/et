@@ -56,9 +56,7 @@
                  (path (car (read-from-string (match-string 1 msg))))
                  (prev-start t))
 
-       ;; Strip the path from the displayed message
-       (setf (flycheck-error-message err)
-             (replace-regexp-in-string "\\\\n" "\n" (substring msg 0 match)))
+       ;; Set the level of warnings to info
        (if (eq (flycheck-error-level err) 'warning)
            (setf (flycheck-error-level err) 'info))
 
@@ -78,7 +76,11 @@
            (setf (flycheck-error-column err) (1+ (current-column)))
            (forward-sexp)
            (setf (flycheck-error-end-line err) (line-number-at-pos))
-           (setf (flycheck-error-end-column err) (1+ (current-column)))))))))
+           (setf (flycheck-error-end-column err) (1+ (current-column)))
+
+           ;; Strip the path from the displayed message
+           (setf (flycheck-error-message err)
+                 (replace-regexp-in-string "\\\\n" "\n" (substring msg 0 match)))))))))
 
 (add-hook 'flycheck-process-error-functions #'et--flycheck-reposition-error)
 
@@ -235,9 +237,9 @@ An list of (NAME PLIST), where PLIST has the following properties:
   ;; Positive and Negative do not serve much practical purpose, but
   ;; exist primarily to give an example of datatypes without a well
   ;; defined intersection (Positive ∩ Integer).
-  (not (not (memq name '(Any Literal
+  (not (not (memq name '(Any Literal NonNil
                              Number Integer Positive Negative
-                             String Symbol
+                             String Symbol NonNilSymbol
                              Vector:A Vector:- Vector:R Vector:W
                              Cons:AA Cons:-- Cons:RR Cons:WW Cons:RW Cons:WR)))))
 
@@ -268,7 +270,7 @@ this argument does not contribute to whether one type extends another."
      (cl-loop for (prop _val) on args by #'cddr
               do (or (keywordp prop) (error "Expected keyword, found %s" prop))
               nconc (et-ql CONST CO)))
-    (`(,(or Integer Number String Symbol Any)) nil)
+    (`(,(or Integer Number String Symbol Any NonNil NonNilSymbol)) nil)
     (_ (error "Invalid datatype: %s %s" dt-name dt-args))))
 
 (defun et--datatype-parents (dt-name)
@@ -286,27 +288,41 @@ and CDR are, so Cons:RR is a parent type of Cons:AA."
     ((or 'Vector:R 'Vector:W) (et-ql Vector:-))
     ('Integer (et-ql Number))
     ('Positive (et-ql Number))
-    ('Negative (et-ql Number))))
+    ('Negative (et-ql Number))
+    ('NonNilSymbol (et-ql NonNil Symbol))))
 
-(defun et--datatype-disjoint? (a b)
-  "Return whether datatypes A and B are guaranteed to be disjoint."
+(defun et--datatype-might-overlap-nontrivial? (a b)
+  "Return whether datatypes A and B might overlap.
+
+This function is designed for `nontrivial' cases, in that it assumes
+that A and B are not subtypes of each other."
   (let* ((a-name (et-datatype-name a))
          (b-name (et-datatype-name b))
          (cons-types '(PList Cons:AA Cons:-- Cons:RR Cons:WW Cons:RW Cons:WR))
          (pos-types '(Integer Positive))
-         (neg-types '(Integer Negative)))
-    (if (and (eq a-name 'Literal) (eq b-name 'Literal))
-        (not (eq (car (et-datatype-args a)) (car (et-datatype-args b))))
-      (not
-       ;; Check if non-disjoint
-       (or (eq a-name b-name)
-           (memq a-name (et--datatype-parents b-name))
-           (memq b-name (et--datatype-parents a-name))
+         (neg-types '(Integer Negative))
+         (symbol-types '(Symbol NonNilSymbol))
+         (nil-dt (make-et-datatype :name 'Literal :args (list nil))))
 
-           (and (memq a-name cons-types) (memq b-name cons-types))
+    (cond
+     ;; One is a NonNil
+     ((or (and (eq a-name 'NonNil) (not (equal b nil-dt)))
+          (and (eq b-name 'NonNil) (not (equal a nil-dt))))
+      t)
 
-           (and (memq a-name pos-types) (memq b-name pos-types))
-           (and (memq a-name neg-types) (memq b-name neg-types)))))))
+     ;; Two literals
+     ((and (eq a-name 'Literal) (eq b-name 'Literal))
+      (eq (car (et-datatype-args a)) (car (et-datatype-args b))))
+
+     ;; Two elements of the same group
+     ((or (eq a-name b-name)
+          (memq a-name (et--datatype-parents b-name))
+          (memq b-name (et--datatype-parents a-name))
+
+          (and (memq a-name symbol-types) (memq b-name symbol-types))
+          (and (memq a-name cons-types) (memq b-name cons-types))
+          (and (memq a-name pos-types) (memq b-name pos-types))
+          (and (memq a-name neg-types) (memq b-name neg-types)))))))
 
 (defun et--datatype-intersect-args-nontrivial (name args1 args2 intersect union)
   "Return a list of arguments intersecting ARGS1 and ARGS2.
@@ -317,10 +333,11 @@ both (NAME ARGS1) and (NAME ARGS2).
 
 If no such list is found, then return the symbol `INVALID'.
 
-This function is `nontrivial' in that it assumes that neither datatype
-is already a subset of the other, in which case the subset args would be
-a trivial solution to this function. This is so that this function can
-focus on the non-trivial cases where neither is a subset of the other.
+This function is designed for `nontrivial' cases in that it assumes that
+neither datatype is already a subset of the other, in which case the
+subset args would be a trivial solution to this function. This is so
+that this function can focus on the non-trivial cases where neither is a
+subset of the other.
 
 INTERSECT and UNION are functions which each take 2 elements from
 ARGS1/ARGS2 and return a new arg, either the intersection or union of
@@ -1312,6 +1329,7 @@ which are invalid for types."
 
 (defun et--subsect (&rest types) (apply #'et--intersect t types))
 (defun et--supersect (&rest types) (apply #'et--intersect nil types))
+(defun et--non-nil (type) (et--supersect type (et NonNil)))
 
 (et-test
  (et-assert-equal (et-never) (et--subsect (et Integer) (et Positive)))
@@ -1379,8 +1397,9 @@ which are invalid for types."
         (if (not (eq dt 'INVALID)) (list (funcall make-case dt))
           ;; This is where subsect and supersect differ
           (if subsect? nil
-            (if (et--datatype-disjoint? a b) nil
-              (list (funcall make-case a)))))))
+            (if (et--datatype-might-overlap-nontrivial? a b)
+                (list (funcall make-case a))
+              nil)))))
 
      (t (error "Invalid type values")))))
 

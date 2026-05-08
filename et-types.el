@@ -112,11 +112,6 @@
 
 ;;;; and/or
 
-(defun et--non-nil (type)
-  ;; TODO: Should be
-  ;; (et-subtract cond-type (et Nil))
-  (et--supersect type (et True)))
-
 (defun et--and-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were non-nil
   (let* ((non-nil-binds (et--type-binds (et--non-nil cond-type)))
@@ -125,12 +120,16 @@
          (output-non-nil (et--non-nil output-type))
          ;; If `and' returns non-nil, then both non-nil binds will be true (intersect them)
          (merged-non-nil-binds
-          (et--intersect-binds non-nil-binds (et--type-binds output-non-nil))))
+          (et--intersect-binds nil non-nil-binds (et--type-binds output-non-nil))))
 
     (et--or (et--replace-type-binds output-non-nil merged-non-nil-binds)
             ;; If `and' returns nil, it could be from either `cond-type' OR `output-type' being nil
             (et--supersect cond-type (et Nil))
             (et--supersect output-type (et Nil)))))
+
+(et-test
+ (et-assert-equal (et $a::2&True)
+   (et--and-return-type (et $a::{1|2}&True) (lambda () (et $a::{2|3}&True)))))
 
 (defun et--or-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were nil
@@ -140,7 +139,7 @@
          (output-nil (et--supersect output-type (et Nil)))
          ;; If `or' returns nil, then both nil binds will be true (intersect them)
          (merged-nil-binds
-          (et--intersect-binds nil-binds (et--type-binds output-nil))))
+          (et--intersect-binds nil nil-binds (et--type-binds output-nil))))
 
     (et--or (et--replace-type-binds output-nil merged-nil-binds)
             ;; If `or' returns non-nil, it could be from either `cond-type' OR `output-type'
@@ -167,25 +166,22 @@
 (et-define-checker if (_cond _then &rest _else)
   (let* ((cond-type (et-check-path 1)))
 
-    (et-warn-narrows "non-nil:\\n%s" (et Nil) ; (et-subtract cond-type (et Nil))
+    (et-warn-narrows "non-nil:\\n%s" (et--supersect cond-type (et NonNil))
                      "nil:\\n%s" (et--supersect cond-type (et Nil)))
 
     (et--or (et--and-return-type cond-type (lambda () (et-check-path 2)))
             (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
 
-;; (et-assert-equal (et $a::2&True)
-;;   (et--and-return-type (et $a::{1|2}&True) (lambda () (et $a::{2|3}&True))))
-
 (et-define-checker when (_cond &rest then)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "non-nil:\\n%s" (et--non-nil cond-type))
+    (et-warn-narrows "%s" (et--non-nil cond-type))
     ;; Special case for empty then block because (when cond) always returns nil
     (if (null then) (et Nil)
       (et--and-return-type cond-type (lambda () (et-check-tail 2))))))
 
 (et-define-checker unless (_cond &rest _else)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "nil:\\n%s" (et--supersect cond-type (et Nil)))
+    (et-warn-narrows "%s" (et--supersect cond-type (et Nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (et--or-return-type cond-type (lambda () (et-check-tail 2)))))
 
@@ -382,19 +378,20 @@
 (defmacro et-define-predicate (name type)
   `(et-define-type-checker ,name [T]
      (Tuple:R T)
-     (:or (:and True (:bindsof (:and T ,type))) Nil)))
+     (:or (:and True (:bindsof (:and T ,type)))
+          (:and Nil))))
 
 (et-define-predicate stringp String)
 (et-define-predicate numberp Number)
 (et-define-predicate integerp Integer)
-;; Todo: We need a Cons:-- type which all cons types extend
 (et-define-predicate consp Cons:--<Any~Any>)
 (et-define-predicate listp Nil|Cons:--<Any~Any>)
 (et-define-predicate null Nil)
 (et-define-predicate not Nil)
 
 (et-test
- (et-assert-equal (et True&{$a::Cons:--<Any~Any>}|Nil) (et-root-check-call consp Cons:--<Any~Any>&{::$a}))
+ (et-assert-equal (et True&{$a::Cons:--<Any~Any>}|Nil)
+   (et-root-check-call consp Cons:--<Any~Any>&{::$a}))
 
  ;; This tests whether et--supersect works correctly when it cannot determine a definite subtype.
  ;; There is no defined intersection of Positive and Integer, so it must make an approximation.
