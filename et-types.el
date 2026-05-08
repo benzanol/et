@@ -27,37 +27,37 @@
 
 ;;; ============================================================
 ;;; Control flow
-;;;; let
+;;;; let*
 
 (et-define-checker let* (varlist &rest _body)
   ;; Process let forms
   (cl-loop
-   with let-binds-rev = nil
+   with let-vars-rev = nil
    for form in varlist
    for idx upfrom 0
    do
    (et-with-path (list 1 idx)
      (pcase form
        ;; Binding with a type annotation
-       (`(,var ,type ,val)
+       (`(,name ,type ,val)
         ;; Parse the type
         (et-with-path (list 1) (setq type (et-parse-type type)))
         ;; Ensure the value fits the type
-        (et-with-binds let-binds-rev (et-with-path (list 2) (et-resolve type)))
+        (et-with-vars let-vars-rev (et-with-path (list 2) (et-resolve type)))
         ;; Push the binding
-        (setq et--current-expr (list var val))
-        (push (cons var type) let-binds-rev))
+        (setq et--current-expr (list name val))
+        (push (make-et-var :name name :type type) let-vars-rev))
 
        ;; Binding with no type annotation
-       (`(,var ,_val)
-        (let ((type (et-with-binds let-binds-rev (et-with-path (list 1) (et-check)))))
-          (push (cons var type) let-binds-rev)
-          (et-warn (list 0) "%s: %s" var (et-pp type))))
+       (`(,name ,_val)
+        (let* ((type (et-with-vars let-vars-rev (et-with-path (list 1) (et-check)))))
+          (push (make-et-var :name name :type type) let-vars-rev)
+          (et-warn (list 0) "%s: %s" name (et-pp type))))
 
        (wrong (error "Invalid let binding: %s" wrong))))
 
    finally return
-   (et-with-binds let-binds-rev
+   (et-with-vars let-vars-rev
        (et-check-tail 2))))
 
 
@@ -86,7 +86,7 @@
       (_ (error "Invalid dolist variable spec")))
 
     ;; Check the body
-    (et-with-binds (list (cons variable type))
+    (et-with-vars (list (cons variable type))
         (et-check-tail 2))
 
     (et Nil)))
@@ -166,22 +166,22 @@
 (et-define-checker if (_cond _then &rest _else)
   (let* ((cond-type (et-check-path 1)))
 
-    (et-warn-narrows "non-nil:\\n%s" (et--supersect cond-type (et NonNil))
-                     "nil:\\n%s" (et--supersect cond-type (et Nil)))
+    (et-warn-narrows "IF:\\n%s" (et--supersect cond-type (et NonNil))
+                     "ELSE:\\n%s" (et--supersect cond-type (et Nil)))
 
     (et--or (et--and-return-type cond-type (lambda () (et-check-path 2)))
             (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
 
 (et-define-checker when (_cond &rest then)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "%s" (et--non-nil cond-type))
+    (et-warn-narrows "WHEN:\\n%s" (et--non-nil cond-type))
     ;; Special case for empty then block because (when cond) always returns nil
     (if (null then) (et Nil)
       (et--and-return-type cond-type (lambda () (et-check-tail 2))))))
 
 (et-define-checker unless (_cond &rest _else)
   (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "%s" (et--supersect cond-type (et Nil)))
+    (et-warn-narrows "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (et--or-return-type cond-type (lambda () (et-check-tail 2)))))
 

@@ -37,21 +37,11 @@
   (cl-assert (symbolp sym))
   (alist-get sym et--binds))
 
-(defmacro et-with-bind (sym type &rest body)
+(defmacro et-with-vars (vars &rest body)
   (declare (indent 2))
-  `(let* ((sym ,sym)
-          (_ (cl-assert (symbolp sym)))
-          (_ (cl-assert (et-type-p sym)))
-          (var (make-et-var :name sym :type ,type))
-          (et--binds (cons (cons sym var) et--binds)))
-     ,@body))
-
-(defmacro et-with-binds (binds &rest body)
-  (declare (indent 2))
-  `(let* ((vs (cl-loop for (sym . type) in ,binds
-                       do (cl-assert (symbolp sym))
-                       do (cl-assert (et-type-p type))
-                       collect (cons sym (make-et-var :name sym :type type))))
+  `(let* ((vs (cl-loop for var in ,vars
+                       do (cl-assert (et-var-p var))
+                       collect (cons (et-var-name var) var)))
           (et--binds (append vs et--binds)))
      ,@body))
 
@@ -137,6 +127,20 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (signal 'error (list (apply #'format msg args))))
 
 
+;;;; Checker return value
+
+(cl-defstruct et-result
+  "Result of parsing an expression.
+
+TYPE is an `et-type'.
+
+PROBLEMS is a list (PATH . STRING)[] of errors resulting from type
+checking the expression. If this value is non-nil, then TYPE is not
+guaranteed to be non-nil (but it might be), and the entire call tree
+should propagate these errors."
+  type problems)
+
+
 ;;;; Define checker
 
 (defmacro et-define-checker (funcs arglist &rest body)
@@ -210,10 +214,10 @@ substituted.
       (error "Incorrect number of arguments"))
 
     `(et-define-checker ,funcs (&rest exprs)
-       (et--type-checker-body
-        ,(et-parse-matcher (car arguments) generics)
-        (copy-tree ',(et-parse-structure (cadr arguments) nil))
-        exprs))))
+                        (et--type-checker-body
+                         ,(et-parse-matcher (car arguments) generics)
+                         (copy-tree ',(et-parse-structure (cadr arguments) nil))
+                         exprs))))
 
 
 ;;;; Check
@@ -263,16 +267,16 @@ substituted.
 
 (defmacro et-root-block (&rest body)
   (et--root (cons #'progn body)
-    (et-check-tail 1)
-    et--current-expr))
+            (et-check-tail 1)
+            et--current-expr))
 
 (defun et-root-check (expr)
   (et--with-error-path (list 1)
-    (et--root expr (et-check))))
+                       (et--root expr (et-check))))
 
 (defmacro et-root-check-call (func &rest arg-types)
   `(et--root ',(cons func (cl-loop for type in arg-types collect (list :type type)))
-     (et-check)))
+             (et-check)))
 
 (defun et-resolve (type)
   (let ((expr-type (et-check)))
@@ -349,33 +353,38 @@ substituted.
 ;;;; Testing checkers
 
 (et-define-checker :type (spec)
-  (et-parse-type spec))
+                   (et-parse-type spec))
 
 (et-define-checker :assert-subtype (_expr type-spec)
-  (let ((expr-type (et-check-path 1)))
-    (or (et-subtype? expr-type (et-parse-type type-spec))
-        (et-err '(0) "Not subtype: %s" (et-pp expr-type)))
-    (setq et--current-expr "dummy")
-    (et Nil)))
+                   (let ((expr-type (et-check-path 1)))
+                     (or (et-subtype? expr-type (et-parse-type type-spec))
+                         (et-err '(0) "Not subtype: %s" (et-pp expr-type)))
+                     (setq et--current-expr "dummy")
+                     (et Nil)))
 
 (et-define-checker :assert-error (_expr)
-  (condition-case _err (et-check-path 1)
-    (error (setq et--current-expr nil) (et-literal nil))
-    (:success (error "Didn't error"))))
+                   (condition-case _err (et-check-path 1)
+                     (error (setq et--current-expr nil) (et-literal nil))
+                     (:success (et-err '(0) "Didn't error"))))
 
 (et-define-checker :typeof (_expr)
-  (let ((type (et-check-path 1)))
-    (et-warn '(0) "%s" (et-pp type))
-    (setq et--current-expr (cadr et--current-expr))
-    type))
+                   (let ((type (et-check-path 1)))
+                     (et-warn '(0) "%s" (et-pp type))
+                     (setq et--current-expr (cadr et--current-expr))
+                     type))
 
 (et-define-checker :narrows ()
-  (cl-loop for ((var . _) . type) in (reverse et--narrow-binds)
-           collect (format "%s: %s" var (et-pp type)) into strs
-           finally do
-           (et-warn '(0) "%s" (string-join strs "\\n")))
-  (setq et--current-expr nil)
-  (et Nil))
+                   (cl-loop for (var . type) in (reverse et--narrow-binds)
+                            collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
+                            finally do
+                            (et-warn '(0) "%s" (string-join strs "\\n")))
+                   (setq et--current-expr nil)
+                   (et Nil))
+
+(et-define-checker :eval (expr)
+                   (et-warn '(0) "%s" (cl-prin1-to-string (eval expr)))
+                   (setq et--current-expr nil)
+                   (et Nil))
 
 
 ;;; ============================================================
