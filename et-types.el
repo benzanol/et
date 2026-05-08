@@ -390,7 +390,7 @@
 (et-define-predicate not Nil)
 
 (et-test
- (et-assert-equal (et True&{$a::Cons:--<Any~Any>}|Nil)
+ (et-assert-equal (et True&{$a::Cons:--<Any~Any>})
    (et-root-check-call consp Cons:--<Any~Any>&{::$a}))
 
  (et-assert-equal (et :or True&{$a::String} Nil&{$a::Number})

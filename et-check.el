@@ -132,6 +132,10 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (setq msg (concat msg (et--error-message-suffix (append et--current-path path))))
   (apply #'byte-compile-warn msg args))
 
+(defun et-err (path msg &rest args)
+  (setq msg (concat msg (et--error-message-suffix (append et--current-path path))))
+  (signal 'error (list (apply #'format msg args))))
+
 
 ;;;; Define checker
 
@@ -350,9 +354,9 @@ substituted.
 (et-define-checker :assert-subtype (_expr type-spec)
   (let ((expr-type (et-check-path 1)))
     (or (et-subtype? expr-type (et-parse-type type-spec))
-        (error "Not subtype: %s" (et-pp expr-type)))
+        (et-err '(0) "Not subtype: %s" (et-pp expr-type)))
     (setq et--current-expr "dummy")
-    (et-literal nil)))
+    (et Nil)))
 
 (et-define-checker :assert-error (_expr)
   (condition-case _err (et-check-path 1)
@@ -371,7 +375,7 @@ substituted.
            finally do
            (et-warn '(0) "%s" (string-join strs "\\n")))
   (setq et--current-expr nil)
-  (et-literal nil))
+  (et Nil))
 
 
 ;;; ============================================================

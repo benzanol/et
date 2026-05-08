@@ -1043,9 +1043,11 @@ which are invalid for types."
                       (`(S:TYPEOF ,var)
                        (list (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var))))
                       (`(S:BINDS-OF ,struct)
-                       (list (make-et-type-case
-                              :value (make-et-datatype :name 'Any)
-                              :binds (et--type-binds (et-structure-to-type struct)))))
+                       (let* ((type (et-structure-to-type struct)))
+                         (if (et-never-p type) nil
+                           (list (make-et-type-case
+                                  :value (make-et-datatype :name 'Any)
+                                  :binds (et--type-binds type))))))
                       (`(S:SUBTRACT ,type1 ,type2)
                        (et-type-cases (et--subtract (et-structure-to-type type1)
                                                     (et-structure-to-type type2))))
@@ -1122,7 +1124,18 @@ which are invalid for types."
  (et-assert-equal (et :bindsof<{::$a}&{$a::2|3}&{1|2}>)
    (et-type (make-et-type-case
              :value (make-et-datatype :name 'Any)
-             :binds (list (cons (alist-get '$a et--test-variables) (et-literal 2)))))))
+             :binds (list (cons (alist-get '$a et--test-variables) (et-literal 2))))))
+
+ ;; Test that bindsof never is never
+ (et-assert-equal (et :never) (et :bindsof (:and Integer&{::$a} String)))
+
+ ;; Test when a predicate is redundant (both directions)
+ (et-assert (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} String)))
+                             (:and Nil (:bindsof (:subtract Integer&{::$a} String))))
+                         (et Nil)))
+ (et-assert (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} Number)))
+                             (:and Nil (:bindsof (:subtract Integer&{::$a} Number))))
+                         (et True))))
 
 
 ;;;; To/from matcher
@@ -1439,7 +1452,7 @@ which are invalid for types."
      ((null sub-name) 'INVALID))))
 
 
-;;;; Subtrace
+;;;; Subtract
 
 (defun et--subtract (a b)
   "Subtract type A from B.
@@ -1493,7 +1506,9 @@ returning A itself is a valid approximation."
 (et-test
  (et-assert-equal (et 1|3) (et--subtract (et 1|2|3) (et 2)))
  (et-assert-equal (et-never) (et--subtract (et Integer) (et Number)))
- (et-assert-equal (et Number) (et--subtract (et Number) (et Integer))))
+ (et-assert-equal (et Number) (et--subtract (et Number) (et Integer)))
+ (et-assert-equal (et String|Number) (et--subtract (et String|Number) (et Integer)))
+ (et-assert-equal (et NonNil) (et--subtract (et NonNil) (et Integer))))
 
 
 ;;;; Satisfy constraints
