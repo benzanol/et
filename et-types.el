@@ -29,84 +29,50 @@
 ;;; Control flow
 ;;;; let*
 
-(et-define-checker let* (varlist &rest _body)
-  ;; Process let forms
-  (cl-loop
-   with let-vars-rev = nil
-   for form in varlist
-   for idx upfrom 0
-   do
-   (et-with-path (list 1 idx)
-     (pcase form
-       ;; Binding with a type annotation
-       (`(,name ,type ,val)
-        ;; Parse the type
-        (et-with-path (list 1) (setq type (et-parse-type type)))
-        ;; Ensure the value fits the type
-        (et-with-vars let-vars-rev (et-with-path (list 2) (et-resolve type)))
-        ;; Push the binding
-        (setq et--current-expr (list name val))
-        (push (make-et-var :name name :type type) let-vars-rev))
+(et-define-pcase-checker let*
+    `(,(et-* [(var vars)]
+             (and
+              (or
+               ;; Explicit type annotation
+               (and form `(,name ,(app et-parse-type type) ,_val)
+                    (let _1 (setcdr form (cddr form)))
+                    (let _2 (et-with-vars vars (et-checker-resolve type 1 (length vars) 1))))
+               ;; Implicit type
+               (and `(,name ,_val)
+                    (let type (et-with-vars vars (et-checker-sub 1 (length vars) 1))))
+               ;; No value (nil variable)
+               (and name (pred symbolp)
+                    (let type (et Nil))))
+              ;; Add the var to the list
+              (let var (make-et-var :name name :type (or type (et-never))))))
+      . ,_body)
 
-       ;; Binding with no type annotation
-       (`(,name ,_val)
-        (let* ((type (et-with-vars let-vars-rev (et-with-path (list 1) (et-check)))))
-          (push (make-et-var :name name :type type) let-vars-rev)
-          (et-warn (list 0) "%s: %s" name (et-pp type))))
-
-       (wrong (error "Invalid let binding: %s" wrong))))
-
-   finally return
-   (et-with-vars let-vars-rev
-       (et-check-tail 2))))
+  (et-with-vars vars
+    (et-checker-sub 2)))
 
 
 ;;;; dolist
 
-(et-define-checker dolist (spec &rest)
-  (let (variable type)
-    (pcase spec
-      ;; With explicit type
-      (`(,var ,etype ,_val)
-       (et-with-path (list 1 1) (setq type (et-parse-type etype)))
-       (setq variable var)
-       ;; Ensure the value fits the type
-       (et-with-path (list 1 2) (et-resolve (et-alias 'List:R type))))
+(et-define-pcase-checker dolist
+    `(,(or (and form `(,name ,(app et-parse-type elem-type) ,_lst)
+                (let _1 (setcdr form (cddr form)))
+                (let _2 (et-checker-resolve (et-alias 'List:R elem-type) 1 1)))
+           (and `(,name ,_lst)
+                (let elem-type (et-checker-infer (et-checker-sub 1 1) [T] List:R<T> T))))
+      . ,_body)
 
-      ;; With implicit type
-      (`(,var ,_val)
-       (setq variable var)
-       (et-with-path (list 1 1)
-         (let* ((list-type (et-check))
-                (infer (et--sub-match (et-matcher [T] List:R<T>) list-type)))
-           (when (eq infer 'INVALID) (error "Expected list, found %s" (et-pp list-type)))
-           (setq type (car infer))))
-       (et-warn (list 1 0) "%s: %s" var (et-pp type)))
-
-      (_ (error "Invalid dolist variable spec")))
-
-    ;; Check the body
-    (et-with-vars (list (cons variable type))
-        (et-check-tail 2))
-
-    (et Nil)))
+  (et-with-vars (list (make-et-var :name name :type elem-type))
+    (et-checker-sub 1)))
 
 
 ;;;; setq
 
-(et-define-checker setq (&rest args)
-  (unless (eq (mod (length args) 2) 0)
-    (et-with-path (list (length args))
-      (error "Unmatched variable")))
-
+(et-define-pcase-checker setq (and args (guard (eq 0 (mod (length args) 2))))
   (cl-loop for (var _val) on args by #'cddr
-           for idx upfrom 0 by 2
+           for var-pos upfrom 1 by 2
            for type = (or (et--get-symbol-type var)
-                          (et-with-path (list (1+ idx))
-                            (error "Assignment to free variable")))
-           do (et-with-path (list (+ idx 2))
-                (et-resolve type))
-
+                          (et-checker-err var-pos "Assignment to free variable"))
+           do (et-checker-resolve type (1+ var-pos))
            finally return type))
 
 
@@ -128,8 +94,8 @@
             (et--supersect output-type (et Nil)))))
 
 (et-test
- (et-assert-equal (et $a::2&True)
-   (et--and-return-type (et $a::{1|2}&True) (lambda () (et $a::{2|3}&True)))))
+ (equal (et $a::2&True)
+        (et--and-return-type (et $a::{1|2}&True) (lambda () (et $a::{2|3}&True)))))
 
 (defun et--or-return-type (cond-type checker)
   ;; The next case will only get evaluated if all previous were nil
@@ -146,76 +112,75 @@
             (et--non-nil cond-type)
             (et--non-nil output-type))))
 
-(et-define-checker and (&rest args)
+(et-define-pcase-checker and args
   (cl-loop with acc-type = (et-literal t)
            for pos upfrom 1 to (length args)
-           do (cl-callf et--and-return-type acc-type
-                (lambda () (et-with-path (list pos) (et-check))))
+           do (cl-callf et--and-return-type acc-type (lambda () (et-checker-sub pos)))
            finally return acc-type))
 
-(et-define-checker or (&rest args)
+(et-define-pcase-checker or args
   (cl-loop with acc-type = (et Nil)
            for pos upfrom 1 to (length args)
-           do (cl-callf et--or-return-type acc-type
-                (lambda () (et-with-path (list pos) (et-check))))
+           do (cl-callf et--or-return-type acc-type (lambda () (et-checker-sub pos)))
            finally return acc-type))
 
 
 ;;;; if
 
-(et-define-checker if (_cond _then &rest _else)
-  (let* ((cond-type (et-check-path 1)))
+(et-define-pcase-checker if `(,_cond ,_then . ,_else)
+  (let* ((cond-type (et-checker-sub 1)))
 
-    (et-warn-narrows "IF:\\n%s" (et--supersect cond-type (et NonNil))
-                     "ELSE:\\n%s" (et--supersect cond-type (et Nil)))
+    (et-checker-hint-narrows
+     "IF:\\n%s" (et--supersect cond-type (et NonNil))
+     "ELSE:\\n%s" (et--supersect cond-type (et Nil)))
 
-    (et--or (et--and-return-type cond-type (lambda () (et-check-path 2)))
-            (et--or-return-type cond-type (lambda () (et-check-tail 3))))))
+    (et--or (et--and-return-type cond-type (lambda () (et-checker-sub 2)))
+            (et--or-return-type cond-type (lambda () (et-checker-tail 3))))))
 
-(et-define-checker when (_cond &rest then)
-  (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "WHEN:\\n%s" (et--non-nil cond-type))
+(et-define-pcase-checker when `(,_cond . ,then)
+  (let* ((cond-type (et-checker-sub 1)))
+    (et-checker-hint-narrows "WHEN:\\n%s" (et--non-nil cond-type))
     ;; Special case for empty then block because (when cond) always returns nil
     (if (null then) (et Nil)
-      (et--and-return-type cond-type (lambda () (et-check-tail 2))))))
+      (et--and-return-type cond-type (lambda () (et-checker-tail 2))))))
 
-(et-define-checker unless (_cond &rest _else)
-  (let* ((cond-type (et-check-path 1)))
-    (et-warn-narrows "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
+(et-define-pcase-checker unless `(,_cond . ,_else)
+  (let* ((cond-type (et-checker-sub 1)))
+    (et-checker-hint-narrows "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
     ;; Special case for empty then block because (when cond) always returns nil
-    (et--or-return-type cond-type (lambda () (et-check-tail 2)))))
+    (et--or-return-type cond-type (lambda () (et-checker-tail 2)))))
 
 
 ;;; ============================================================
 ;;; Function types
 ;;;; Quoted
 
-(et-define-checker quote (expr)
+(et-define-pcase-checker quote `(,expr)
   (et-literal expr))
 
 (et-test
- (et-assert-success (et-root-resolve 'Integer ''1))
- (et-assert-success (et-root-resolve 'Number ''1.1))
- (et-assert-success (et-root-resolve 'String ''"hi"))
- (et-assert-success (et-root-resolve 'Symbol ''a))
+ (et-assert-resolve Integer '1)
+ (et-assert-resolve Number '1.1)
+ (et-assert-resolve String '"hi")
+ (et-assert-resolve Symbol 'a)
  (et-assert-error (et-root-resolve 'Integer ''1.1))
  (et-assert-error (et-root-resolve 'Integer '''1))
  (et-assert-error (et-root-resolve 'Number '''1.1))
  (et-assert-error (et-root-resolve 'String '''"hi"))
  (et-assert-error (et-root-resolve 'Symbol '''a))
 
- (et-assert-success (et-root-resolve 'Cons:RR<Any~Any> ''(1 2 3)))
- (et-assert-success (et-root-resolve 'List:R<Symbol> ''(a b c)))
- (et-assert-success (et-root-resolve 'List:R<Integer> ''()))
+ (et-assert-resolve Cons:RR<Any~Any> '(1 2 3))
+ (et-assert-resolve List:R<Symbol> '(a b c))
+ (et-assert-resolve List:R<Integer> '())
  (et-assert-error (et-root-resolve 'List:R<Integer> ''(1 2 '3)))
  (et-assert-error (et-root-resolve 'List:R<Integer> ''(1 2 3.3)))
  (et-assert-error (et-root-resolve 'List:R<Integer> '''(1 2 3)))
  (et-assert-error (et-root-resolve 'List:R<Integer> '''()))
 
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~Integer> ''(1 . 2)))
+ (et-assert-resolve Cons:RR<Integer~Integer> '(1 . 2))
  (et-assert-error (et-root-resolve 'Cons:RR<Integer~Integer> ''(1 . 2.2)))
  (et-assert-error (et-root-resolve 'Cons:RR<Integer~Integer> ''(1.1 . 2)))
- (et-assert-success (et-root-resolve 'Cons:RR<Symbol~List:R<String>> ''(a "2" "3"))))
+ (et-assert-resolve Cons:RR<Symbol~List:R<String>> '(a "2" "3")))
 
 
 ;;;; Arithmetic
@@ -237,16 +202,17 @@
 
 (et-test
  op [+ - * /]
- (et-assert-equal (et Integer) (et-root-check-call op Integer Integer 1 2 3))
- (et-assert-equal (et Integer) (et-root-check-call op Integer Integer 1 2 3))
- (et-assert-equal (et Number) (et-root-check-call op Integer Integer 1 2.1 3))
- (et-assert-equal (et Integer) (et-root-check-call op 1)))
+ (et-assert-call Integer op Integer Integer 1 2 3)
+ (et-assert-call Integer op Integer Integer 1 2 3)
+ (et-assert-call Integer op Integer Integer 1 2 3)
+ (et-assert-call Number op Integer Integer 1 2.1 3)
+ (et-assert-call Integer op 1))
 
 (et-test
- (et-assert-equal (et 0) (et-root-check-call +))
- (et-assert-equal (et 0) (et-root-check-call -))
- (et-assert-equal (et 1) (et-root-check-call *))
- (et-assert-error (et-root-check-call /)))
+ (et-assert-call 0 +)
+ (et-assert-call 0 -)
+ (et-assert-call 1 *)
+ (et-assert-call-errors /))
 
 
 ;;;; Sequences
@@ -255,12 +221,12 @@
 (et-define-type-checker cons [L R] (Args L R) Cons:AA<L~R>)
 
 (et-test
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~String> '(cons 1 "2")))
+ (et-assert-resolve Cons:RR<Integer~String> (cons 1 "2"))
  (et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(cons "1" 2)))
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(cons 1 nil)))
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(cons 1 (cons "2" nil))))
+ (et-assert-resolve Cons:RR<Integer~List:R<String>> (cons 1 nil))
+ (et-assert-resolve Cons:RR<Integer~List:R<String>> (cons 1 (cons "2" nil)))
 
- (et-assert-success (et-root-resolve 'List:R<Integer> '(cons 1 (cons 2 nil))))
+ (et-assert-resolve List:R<Integer> (cons 1 (cons 2 nil)))
  (et-assert-error (et-root-resolve 'List:R<Integer> '(cons 1 (cons "2" nil))))
  (et-assert-error (et-root-resolve 'List:R<Integer> '(cons "1" (cons 2 nil))))
  (et-assert-error (et-root-resolve 'List:R<Integer> '(cons 1 (cons 2 t)))))
@@ -271,12 +237,12 @@
 (et-define-type-checker list [T] T T)
 
 (et-test
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~List:R<String>> '(list 1 "2")))
+ (et-assert-resolve Cons:RR<Integer~List:R<String>> (list 1 "2"))
  (et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(list "1" 2)))
  (et-assert-error (et-root-resolve 'Cons:RR<Integer~String> '(list)))
 
- (et-assert-success (et-root-resolve 'List:R<Integer> '(list 1 2 3)))
- (et-assert-success (et-root-resolve 'List:R<Integer> '(list 1)))
+ (et-assert-resolve List:R<Integer> (list 1 2 3))
+ (et-assert-resolve List:R<Integer> (list 1))
  (et-assert-error (et-root-resolve 'List:R<Integer> '(list 1 "2" 3))))
 
 
@@ -285,31 +251,29 @@
 (et-define-type-checker car [L] (Args (:or Nil&L=Nil Cons:RR<L~Any>)) L)
 
 (et-test
- (et-assert-success (et-root-resolve 'Integer '(car (list 1 2.2 3))))
+ (et-assert-resolve Integer (car (list 1 2.2 3)))
  (et-assert-error (et-root-resolve 'Integer '(car (list 1.1 2 3))))
- (et-assert-success (et-root-resolve 'Integer '(car (cons 1 "3"))))
- (et-assert-success (et-root-resolve 'List:R<Integer> '(car (cons (list 1) "3"))))
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~Any> '(car (cons (list 1) "3"))))
- (et-assert-success (et-root-resolve 'Integer '(car (car (cons (list 1) "3")))))
+ (et-assert-resolve Integer (car (cons 1 "3")))
+ (et-assert-resolve List:R<Integer> (car (cons (list 1) "3")))
+ (et-assert-resolve Cons:RR<Integer~Any> (car (cons (list 1) "3")))
+ (et-assert-resolve Integer (car (car (cons (list 1) "3"))))
  (et-assert-error (et-root-resolve 'Integer '(car (car (cons (list 1.1) "3")))))
 
- (et-assert-success (et-root-check-call cdr :never))
- (et-assert-success (et-root-check-call cdr Nil))
- (et-assert-success (et-root-check-call cdr Nil|Cons:RR<Integer~String>))
- (et-assert-error (et-root-check-call cdr Nil|Cons:RR<Integer~String>|String))
- (et-assert-error (et-root-check-call cdr :any))
+ (et-assert-call :never cdr :never)
+ (et-assert-call Nil cdr Nil)
+ (et-assert-call Nil|String cdr Nil|Cons:RR<Integer~String>)
+ (et-assert-call-errors cdr Nil|Cons:RR<Integer~String>|String)
+ (et-assert-call-errors cdr :any)
 
- (et-assert-success (et-root-check-call car :never))
- (et-assert-success (et-root-check-call car Nil))
- (et-assert-success (et-root-check-call car Nil|Cons:RR<Integer~String>))
- (et-assert-error (et-root-check-call car Nil|Cons:RR<Integer~String>|String))
- (et-assert-error (et-root-check-call car Any))
+ (et-assert-call :never car :never)
+ (et-assert-call Nil car Nil)
+ (et-assert-call Nil|Integer car Nil|Cons:RR<Integer~String>)
+ (et-assert-call-errors car Nil|Cons:RR<Integer~String>|String)
+ (et-assert-call-errors car Any)
 
- (et-assert-equal (et Nil|Integer)
-   (et-root-check-call car List:R<Integer>))
+ (et-assert-call Nil|Integer car List:R<Integer>)
 
- (et-assert-equal (et Nil|Integer|String)
-   (et-root-check-call car List:R<Integer>|Cons:RR<String~Nil>))
+ (et-assert-call Nil|Integer|String car List:R<Integer>|Cons:RR<String~Nil>)
 
  (et-assert-error
      (et-root-check-call car List:R<Integer>|Cons:RR<String~Nil>|String)))
@@ -320,25 +284,25 @@
 (et-define-type-checker cdr [R] (Args (:or Nil&R=Nil Cons:RR<Any~R>)) R)
 
 (et-test
- (et-assert-success (et-root-resolve 'List:R<Number> '(cdr (list 1 2.2 3))))
- (et-assert-success (et-root-resolve 'List:R<Integer> '(cdr (list 1.1 2 3))))
+ (et-assert-resolve List:R<Number> (cdr (list 1 2.2 3)))
+ (et-assert-resolve List:R<Integer> (cdr (list 1.1 2 3)))
  (et-assert-error (et-root-resolve 'List:R<Integer> '(car (list 1 2.2 3))))
 
- (et-assert-success (et-root-resolve 'Integer '(cdr (cons "1" 2))))
+ (et-assert-resolve Integer (cdr (cons "1" 2)))
  (et-assert-error (et-root-resolve 'Integer '(cdr (cons 1 "2"))))
 
- (et-assert-success (et-root-resolve 'List:R<Integer> '(cdr (cons "1" (list 2)))))
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~Any> '(cdr (cons "1" (list 2)))))
- (et-assert-success (et-root-resolve 'Cons:RR<Integer~Boolean> '(cdr (cons "1" (list 2)))))
+ (et-assert-resolve List:R<Integer> (cdr (cons "1" (list 2))))
+ (et-assert-resolve Cons:RR<Integer~Any> (cdr (cons "1" (list 2))))
+ (et-assert-resolve Cons:RR<Integer~Boolean> (cdr (cons "1" (list 2))))
  (et-assert-error (et-root-resolve 'Cons:RR<Integer~Boolean> '(cdr (cons "1" (list 2 3)))))
- (et-assert-success (et-root-resolve 'Integer '(car (cdr (cons "1" (list 2))))))
+ (et-assert-resolve Integer (car (cdr (cons "1" (list 2)))))
 
- (et-assert-success (et-root-resolve 'Boolean '(cdr (cdr (cdr (list 1 2 3))))))
+ (et-assert-resolve Boolean (cdr (cdr (cdr (list 1 2 3)))))
  (et-assert-error (et-root-resolve 'Boolean '(cdr (cdr (list 1 2 3)))))
 
- (et-assert-equal (et List:R<Integer>) (et-root-check-call cdr List:R<Integer>))
- (et-assert-equal (et List:R<Integer>|String) (et-root-check-call cdr List:R<Integer>|Cons:RR<Nil~String>))
- (et-assert-error (et-root-check-call car List:R<Integer>|Cons:RR<String~nil>|String)))
+ (et-assert-call List:R<Integer> cdr List:R<Integer>)
+ (et-assert-call List:R<Integer>|String cdr List:R<Integer>|Cons:RR<Nil~String>)
+ (et-assert-call-errors car List:R<Integer>|Cons:RR<String~nil>|String))
 
 
 ;;;;; nth/nthcdr
@@ -348,10 +312,10 @@
 (et-define-type-checker nthcdr [T] (Args Integer List:R<T>) List:R<T>)
 
 (et-test
- (et-assert-equal (et Number|String|Nil) (et-root-check-call nth Integer Cons:RR<Number~List:R<String>>))
+ (et-assert-call Number|String|Nil nth Integer Cons:RR<Number~List:R<String>>)
 
- (et-assert-equal (et List:R<Number|String>) (et-root-check-call nthcdr Integer Cons:RR<Number~List:R<String>>))
- (et-assert-equal (et List:R<:never>) (et-root-check-call nthcdr Integer Nil)))
+ (et-assert-call List:R<Number|String> nthcdr Integer Cons:RR<Number~List:R<String>>)
+ (et-assert-call List:R<:never> nthcdr Integer Nil))
 
 
 ;;;;; length
@@ -359,8 +323,8 @@
 (et-define-type-checker length [] (Args String|List:R<Any>|Vector:R<Any>) Integer)
 
 (et-test
- (et-assert-equal (et Integer) (et-root-check-call length Vector:R<Number>|List:R<String>))
- (et-assert-error (et-root-check-call length Vector:R<Number>|List:R<String>|Number)))
+ (et-assert-call Integer length Vector:R<Number>|List:R<String>)
+ (et-assert-call-errors length Vector:R<Number>|List:R<String>|Number))
 
 
 ;;;;; aref
@@ -368,9 +332,9 @@
 (et-define-type-checker aref [T] (Args Vector:R<T>|{String&T=Integer} Integer) T)
 
 (et-test
- (et-assert-equal (et Integer) (et-root-check-call aref String Integer))
- (et-assert-equal (et Symbol|Integer) (et-root-check-call aref (:or Vector:R<Symbol> String) Integer))
- (et-assert-error (et-root-check-call aref (:or Vector:R<Symbol> String List:R<Any>) Integer)))
+ (et-assert-call Integer aref String Integer)
+ (et-assert-call Symbol|Integer aref (:or Vector:R<Symbol> String) Integer)
+ (et-assert-call-errors aref (:or Vector:R<Symbol> String List:R<Any>) Integer))
 
 
 ;;;; Predicates
@@ -390,17 +354,17 @@
 (et-define-predicate not Nil)
 
 (et-test
- (et-assert-equal (et True&{$a::Cons:--<Any~Any>})
-   (et-root-check-call consp Cons:--<Any~Any>&{::$a}))
+ (et-assert-call True&{$a::Cons:--<Any~Any>}
+                 consp Cons:--<Any~Any>&{::$a})
 
- (et-assert-equal (et :or True&{$a::String} Nil&{$a::Number})
-   (et-root-check-call stringp {::$a}&{String|Number}))
+ (et-assert-call (:or True&{$a::String} Nil&{$a::Number})
+                 stringp {::$a}&{String|Number})
 
  ;; This tests whether et--supersect works correctly when it cannot determine a definite subtype.
  ;; There is no defined intersection of Positive and Integer, so it must make an approximation.
  ;; Approximating to never would incorrectly determine that this call will always determine nil.
  ;; So, in order to ensure correctness, it must assume a SUPERSET of the real intersection (by picking either Positive or Integer.)
- (et-assert-nil (et-subtype? (et-root-check-call integerp Positive&{::$a}) (et Nil))))
+ (not (et-subtype? (et-typecheck-call integerp Positive&{::$a}) (et Nil))))
 
 
 ;;; ============================================================

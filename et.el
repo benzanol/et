@@ -38,7 +38,7 @@
 
 (defmacro et-with-error-path (path &rest body)
   (declare (indent 1))
-  `(let* ((et--error-path (append et--error-path ,path)))
+  `(let* ((et--error-path (append et--error-path ,path nil)))
      (condition-case err (progn ,@body)
        (error (et-error nil (error-message-string err)) nil))))
 
@@ -48,6 +48,22 @@
 
 (defun et--error-message-suffix (path)
   (format "\0;;flycheck-path:%s" (append et--error-path path)))
+
+(defun et--traverse-buffer-expr (path)
+  (dolist (idx path)
+    (cond
+     ((looking-at-p "[`']")
+      (if (eq idx 1)
+          (forward-char 1)
+        (error "Only valid subexpr of quote is 1")))
+
+     ((looking-at-p "[([]")
+      (forward-char 1)
+      (dotimes (_ idx) (forward-sexp))
+      (forward-sexp)
+      (backward-sexp))
+
+     (t (error "Invalid expression container: %s" (thing-at-point 'char))))))
 
 (defun et--flycheck-reposition-error (err)
   "If ERR has a ;;flycheck-path: sentinel, reposition it."
@@ -68,11 +84,7 @@
            (goto-char (flycheck-error-pos err)) ; start near the error
            (beginning-of-defun)
 
-           (dolist (idx path)
-             (search-forward-regexp "\\=['`]?[[(]")
-             (forward-char 1)
-             (dotimes (_ idx) (forward-sexp))
-             (forward-sexp) (backward-sexp))
+           (et--traverse-buffer-expr path)
 
            (setf (flycheck-error-line err) (line-number-at-pos))
            (setf (flycheck-error-column err) (1+ (current-column)))
