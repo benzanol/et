@@ -33,7 +33,10 @@
 (defvar et--binds nil
   "Stack of (SYMBOL . `et-var').")
 
-(defun et--get-symbol-variable (sym)
+(defun et-new-var (name type)
+  (make-et-var :name name :type type))
+
+(defun et-get-symbol-var (sym)
   (cl-assert (symbolp sym))
   (alist-get sym et--binds))
 
@@ -52,14 +55,14 @@
 (defvar et--narrow-binds nil
   "Stack of (`et-var' . `et-type').")
 
-(defun et--get-variable-type (variable)
+(defun et-var-type (variable)
   (or (alist-get variable et--narrow-binds)
       (et-var-type variable)))
 
-(defun et--get-symbol-type (sym)
+(defun et-get-symbol-type (sym)
   (cl-assert (symbolp sym))
-  (when-let ((var (et--get-symbol-variable sym)))
-    (et--get-variable-type var)))
+  (when-let ((var (et-get-symbol-var sym)))
+    (et-var-type var)))
 
 (defmacro et-with-narrow-binds (binds &rest body)
   (declare (indent 1))
@@ -118,10 +121,10 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
       ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
 
-       (if-let* ((var (et--get-symbol-variable sym)))
+       (if-let* ((var (et-get-symbol-var sym)))
            (setq return-type
                  (et--supersect
-                  (et--get-variable-type var)
+                  (et-var-type var)
                   (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
                                               :typeofs (list var)))))
 

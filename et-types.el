@@ -44,7 +44,7 @@
                (and name (pred symbolp)
                     (let type (et Nil))))
               ;; Add the var to the list
-              (let var (make-et-var :name name :type (or type (et-never))))))
+              (let var (et-new-var name (or type (et-never))))))
       . ,_body)
 
   (et-with-vars vars
@@ -61,7 +61,7 @@
                 (let elem-type (et-checker-infer (et-checker-sub 1 1) [T] List:R<T> T))))
       . ,_body)
 
-  (et-with-vars (list (make-et-var :name name :type elem-type))
+  (et-with-vars (list (et-new-var name elem-type))
     (et-checker-sub 1)))
 
 
@@ -70,7 +70,7 @@
 (et-define-pcase-checker setq (and args (guard (eq 0 (mod (length args) 2))))
   (cl-loop for (var _val) on args by #'cddr
            for var-pos upfrom 1 by 2
-           for type = (or (et--get-symbol-type var)
+           for type = (or (et-get-symbol-type var)
                           (et-checker-err var-pos "Assignment to free variable"))
            do (et-checker-resolve type (1+ var-pos))
            finally return type))
