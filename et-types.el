@@ -186,15 +186,15 @@
 ;;;; Arithmetic
 
 (et-define-type-checker (+ -) [N]
-  (:or Nil&{N=0} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
+  (or Nil&{N=0} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
   N)
 
 (et-define-type-checker * [N]
-  (:or Nil&{N=1} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
+  (or Nil&{N=1} List:R<Integer>&{N=Integer} List:R<Number>&{N=Number})
   N)
 
 (et-define-type-checker / [N]
-  (:or NonNilList:R<Integer>&{N=Integer} NonNilList:R<Number>&{N=Number})
+  (or NonNilList:R<Integer>&{N=Integer} NonNilList:R<Number>&{N=Number})
   N)
 
 (et-define-type-checker (1+ 1-) [N] (Args Integer&{N=Integer} Number&{N=Number}) N)
@@ -248,7 +248,7 @@
 
 ;;;;; car
 
-(et-define-type-checker car [L] (Args (:or Nil&L=Nil Cons:RR<L~Any>)) L)
+(et-define-type-checker car [L] (Args (or Nil&L=Nil Cons:RR<L~Any>)) L)
 
 (et-test
  (et-assert-resolve Integer (car (list 1 2.2 3)))
@@ -259,13 +259,13 @@
  (et-assert-resolve Integer (car (car (cons (list 1) "3"))))
  (et-assert-error (et-root-resolve 'Integer '(car (car (cons (list 1.1) "3")))))
 
- (et-assert-call :never cdr :never)
+ (et-assert-call Never cdr Never)
  (et-assert-call Nil cdr Nil)
  (et-assert-call Nil|String cdr Nil|Cons:RR<Integer~String>)
  (et-assert-call-errors cdr Nil|Cons:RR<Integer~String>|String)
  (et-assert-call-errors cdr :any)
 
- (et-assert-call :never car :never)
+ (et-assert-call Never car Never)
  (et-assert-call Nil car Nil)
  (et-assert-call Nil|Integer car Nil|Cons:RR<Integer~String>)
  (et-assert-call-errors car Nil|Cons:RR<Integer~String>|String)
@@ -281,7 +281,7 @@
 
 ;;;;; cdr
 
-(et-define-type-checker cdr [R] (Args (:or Nil&R=Nil Cons:RR<Any~R>)) R)
+(et-define-type-checker cdr [R] (Args (or Nil&R=Nil Cons:RR<Any~R>)) R)
 
 (et-test
  (et-assert-resolve List:R<Number> (cdr (list 1 2.2 3)))
@@ -315,7 +315,7 @@
  (et-assert-call Number|String|Nil nth Integer Cons:RR<Number~List:R<String>>)
 
  (et-assert-call List:R<Number|String> nthcdr Integer Cons:RR<Number~List:R<String>>)
- (et-assert-call List:R<:never> nthcdr Integer Nil))
+ (et-assert-call List:R<Never> nthcdr Integer Nil))
 
 
 ;;;;; length
@@ -333,8 +333,8 @@
 
 (et-test
  (et-assert-call Integer aref String Integer)
- (et-assert-call Symbol|Integer aref (:or Vector:R<Symbol> String) Integer)
- (et-assert-call-errors aref (:or Vector:R<Symbol> String List:R<Any>) Integer))
+ (et-assert-call Symbol|Integer aref (or Vector:R<Symbol> String) Integer)
+ (et-assert-call-errors aref (or Vector:R<Symbol> String List:R<Any>) Integer))
 
 
 ;;;; Predicates
@@ -342,8 +342,8 @@
 (defmacro et-define-predicate (name type)
   `(et-define-type-checker ,name [T]
      (Tuple:R T)
-     (:or (:and True (:bindsof (:and T ,type)))
-          (:and Nil (:bindsof (:subtract T ,type))))))
+     (or (and True (bindsof (and T ,type)))
+         (and Nil (bindsof (subtract T ,type))))))
 
 (et-define-predicate stringp String)
 (et-define-predicate numberp Number)
@@ -357,7 +357,7 @@
  (et-assert-call True&{$a::Cons:--<Any~Any>}
                  consp Cons:--<Any~Any>&{::$a})
 
- (et-assert-call (:or True&{$a::String} Nil&{$a::Number})
+ (et-assert-call (or True&{$a::String} Nil&{$a::Number})
                  stringp {::$a}&{String|Number})
 
  ;; This tests whether et--supersect works correctly when it cannot determine a definite subtype.

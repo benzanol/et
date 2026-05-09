@@ -490,12 +490,12 @@ structure which can be parsed by `et-parse-type'.")
 
 (et-defalias Nil () (Literal nil))
 (et-defalias True () (Literal t))
-(et-defalias Boolean () (:or True Nil))
+(et-defalias Boolean () (or True Nil))
 
-(et-defalias List:R (elem) (:or Nil (Cons:RR ,elem (List:R ,elem))))
+(et-defalias List:R (elem) (or Nil (Cons:RR ,elem (List:R ,elem))))
 (et-defalias NonNilList:R (elem) (Cons:RR ,elem (List:R ,elem)))
 
-(et-defalias Tree:R (elem) (:or ,elem (:List:R (:Tree:R ,elem))))
+(et-defalias Tree:R (elem) (or ,elem (:List:R (:Tree:R ,elem))))
 
 (et-defalias Alist:R (key val) (List:R (Cons:RR ,key ,val)))
 
@@ -822,20 +822,36 @@ ARGS is a mix of constant args (where the corresponding arg role is
         (parse (lambda (arg) (et-parse-structure arg generics))))
 
     (pcase spec
+      ;; Parse a symbol
       ((pred symbolp) (et--parse-string (symbol-name spec) generics))
+
+      ;; Parse a string
       (`(:parse ,(and str (pred stringp))) (et--parse-string str generics))
-
-      ((or (pred stringp) (pred numberp)) (et-q (((S:DT Literal ,spec)))))
-
+      ;; Insert a literal structure
       (`(:structure ,structure) structure)
 
-      (`(:bind ,var ,type) (et-q (((S:BIND ,var ,(et-parse-structure type generics))))))
-      (`(:typeof ,var) (et-q (((S:TYPEOF ,var)))))
-      (`(:bindsof ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
-      (`(:subtract ,type1 ,type2)
+      ;; Literal number or string
+      ((or (pred stringp) (pred numberp)) (et-q (((S:DT Literal ,spec)))))
+
+      ;; Type shortcuts
+      ('(Nil) (et-q (((S:DT Literal nil)))))
+      ('(True) (et-q (((S:DT Literal t)))))
+      (`(Never) nil)
+      (`(Any) (et-q (((S:DT Any)))))
+      (`(or . ,args) (mapcan parse args))
+      (`(and . ,args)
+       (or args (error "`and' cannot be empty"))
+       (cl-reduce #'et--dnf-and (mapcar parse args)))
+      (`(literal ,val) (et-q (((S:DT Literal ,val)))))
+
+      ;; Type utilities
+      (`(bind ,var ,type) (et-q (((S:BIND ,var ,(et-parse-structure type generics))))))
+      (`(typeof ,var) (et-q (((S:TYPEOF ,var)))))
+      (`(bindsof ,inner) (et-q (((S:BINDS-OF ,(et-parse-structure inner generics))))))
+      (`(subtract ,type1 ,type2)
        (et-q (((S:SUBTRACT ,(et-parse-structure type1 generics)
                            ,(et-parse-structure type2 generics))))))
-      (`(:infer ,type ,gens ,matcher ,yes ,no)
+      (`(infer ,type ,gens ,matcher ,yes ,no)
        (setq type (et-parse-structure type generics))
        (if (vectorp gens) (setq gens (append gens nil)) (error "Generics must be a vector: %s" gens))
        (setq matcher (et-parse-structure matcher gens))
@@ -843,20 +859,9 @@ ARGS is a mix of constant args (where the corresponding arg role is
        (setq no (et-parse-structure no generics))
        (et-q (((S:INFER ,type ,gens ,matcher ,yes ,no)))))
 
-      (`(:never . ,args) nil)
-      (`(:or . ,args) (mapcan parse args))
-      (`(:and . ,args)
-       (or args (error "`and' cannot be empty"))
-       (cl-reduce #'et--dnf-and (mapcar parse args)))
-
-      (`(:literal ,val) (et-q (((S:DT Literal ,val)))))
-
-      (`(:set ,var ,type)
+      (`(set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
        (et-q (((S:SET ,var ,(funcall parse type))))))
-
-      ('(Nil) (et-q (((S:DT Literal nil)))))
-      ('(True) (et-q (((S:DT Literal t)))))
 
       (`(,(and name (pred symbolp) (pred (not keywordp))) . ,args)
        (cond
@@ -891,29 +896,29 @@ ARGS is a mix of constant args (where the corresponding arg role is
   (cond
    ;; Literal number
    ((string-match "^[0-9]+\\(\\.[0-9]+\\)?$" s)
-    (et-parse-structure (list :literal (string-to-number s)) nil))
+    (et-parse-structure (list 'literal (string-to-number s)) nil))
 
    ;; Parenthesized expression
    ((string-match "^{\\(.*\\)}$" s) (et--parse-string (substring s 1 -1) generics))
 
    ;; @symbol  ->  Literal symbol
    ((string-match "^@\\(.*\\)$" s)
-    (et-parse-structure (list :literal (intern (match-string 1 s))) generics))
+    (et-parse-structure (list 'literal (intern (match-string 1 s))) generics))
    ;; %string  ->  Literal string
    ((string-match "^%\\(.*\\)$" s)
-    (et-parse-structure (list :literal (match-string 1 s)) generics))
+    (et-parse-structure (list 'literal (match-string 1 s)) generics))
 
    ;; $TestVar=Type  ->  Bind to TestVar
    ((string-match "^\\(\\$[a-z]\\)::\\(.*\\)$" s)
     (et-parse-structure
-     (list :bind (or (alist-get (intern (match-string 1 s)) et--test-variables)
+     (list 'bind (or (alist-get (intern (match-string 1 s)) et--test-variables)
                      (error "Invalid test variable: %s" (match-string 1 s)))
            (list :parse (match-string 2 s)))
      generics))
    ;; ::$TestVar  ->  Typeof TestVar
    ((string-match "^::\\(\\$[a-z]\\)$" s)
     (et-parse-structure
-     (list :typeof (or (alist-get (intern (match-string 1 s)) et--test-variables)
+     (list 'typeof (or (alist-get (intern (match-string 1 s)) et--test-variables)
                        (error "Invalid test variable: %s" (match-string 1 s))))
      generics))
 
@@ -921,7 +926,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
    ((string-match "^\\([-a-zA-Z0-9]*\\)=\\(.*\\)$" s)
     (let ((var (intern (match-string 1 s)))
           (expr (match-string 2 s)))
-      (et-parse-structure (list :set var (list :parse expr)) generics)))
+      (et-parse-structure (list 'set var (list :parse expr)) generics)))
 
    ;; Name or Name<...>
    ((string-match "^\\([-a-zA-Z0-9:]+\\)\\(?:<\\(.*\\)>\\)?$" s)
@@ -953,11 +958,11 @@ Depth tracks < > and { } nesting."
 
 (defun et--format-structure (structure)
   "Format a structure DNF to a human-readable string."
-  (if (null structure) "never"
+  (if (null structure) "Never"
     (mapconcat #'et--format-structure-case structure " | ")))
 
 (defun et--format-structure-case (case)
-  (if (null case) "any"
+  (if (null case) "Any"
     (mapconcat #'et--format-structure-factor case " & ")))
 
 (defun et--format-structure-factor (factor)
@@ -1127,7 +1132,7 @@ which are invalid for types."
  (equal (et Number)
         (et-type (make-et-datatype :name 'Number)))
 
- (equal (et (:structure (((S:TYPE ,(et :or Abc Xyz))))))
+ (equal (et (:structure (((S:TYPE ,(et or Abc Xyz))))))
         (et-type (make-et-alias :name 'Abc) (make-et-alias :name 'Xyz)))
 
  (equal (et {$a::5}&4)
@@ -1141,41 +1146,41 @@ which are invalid for types."
                   :binds (list (cons (alist-get '$b et--test-variables) (et-literal 6)))
                   :typeofs (list (alist-get '$a et--test-variables)))))
 
- (equal (et :bindsof<{::$a}&{$a::2|3}&{1|2}>)
+ (equal (et bindsof<{::$a}&{$a::2|3}&{1|2}>)
         (et-type (make-et-type-case
                   :value (make-et-datatype :name 'Any)
                   :binds (list (cons (alist-get '$a et--test-variables) (et-literal 2))))))
 
  ;; Test that bindsof never is never
- (equal (et :never) (et :bindsof (:and Integer&{::$a} String)))
+ (equal (et Never) (et bindsof (and Integer&{::$a} String)))
 
  ;; Test when a predicate is redundant (both directions)
- (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} String)))
-                  (:and Nil (:bindsof (:subtract Integer&{::$a} String))))
+ (et-subtype? (et or (and True (bindsof (and Integer&{::$a} String)))
+                  (and Nil (bindsof (subtract Integer&{::$a} String))))
               (et Nil))
- (et-subtype? (et :or (:and True (:bindsof (:and Integer&{::$a} Number)))
-                  (:and Nil (:bindsof (:subtract Integer&{::$a} Number))))
+ (et-subtype? (et or (and True (bindsof (and Integer&{::$a} Number)))
+                  (and Nil (bindsof (subtract Integer&{::$a} Number))))
               (et True))
 
- ;; Test :infer
- (equal (et :never)
-        (et :infer Cons:RR<%hi~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+ ;; Test infer
+ (equal (et Never)
+        (et infer Cons:RR<%hi~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
  (equal (et Vector:R<12>)
-        (et :infer Cons:RR<12~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+        (et infer Cons:RR<12~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
  (equal (et Vector:R<Integer>)
-        (et :infer Cons:RR<Integer~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
- (equal (et :never)
-        (et :infer Cons:RR<Number~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> :never))
+        (et infer Cons:RR<Integer~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
+ (equal (et Never)
+        (et infer Cons:RR<Number~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
  (equal (et Vector:R<12>)
-        (et :infer List:R<12> [T] List:R<T&Integer> Vector:R<T> :never))
+        (et infer List:R<12> [T] List:R<T&Integer> Vector:R<T> Never))
  (equal (et Vector:R<1|2>)
-        (et :infer Cons:RR<1~Cons:RR<2~Nil>> [T] List:R<T&Integer> Vector:R<T> :never))
+        (et infer Cons:RR<1~Cons:RR<2~Nil>> [T] List:R<T&Integer> Vector:R<T> Never))
  (equal (et Vector:R<1|2|3>)
-        (et :infer Cons:RR<1~Cons:RR<2~List:R<3>>> [T] List:R<T&Integer> Vector:R<T> :never))
- (equal (et :never)
-        (et :infer List:R<Number> [T] List:R<T&Integer> Vector:R<T> :never))
- (equal (et Vector:R<:never>)
-        (et :infer Nil [T] List:R<T&Integer> Vector:R<T> :never)))
+        (et infer Cons:RR<1~Cons:RR<2~List:R<3>>> [T] List:R<T&Integer> Vector:R<T> Never))
+ (equal (et Never)
+        (et infer List:R<Number> [T] List:R<T&Integer> Vector:R<T> Never))
+ (equal (et Vector:R<Never>)
+        (et infer Nil [T] List:R<T&Integer> Vector:R<T> Never)))
 
 
 ;;;; To/from matcher

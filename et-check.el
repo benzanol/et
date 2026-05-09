@@ -107,7 +107,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
       (`(,func . ,_args)
        (if-let ((checker (get func 'et-checker)))
            (condition-case out (or (funcall checker) (et-never))
-             (et-checker-fatal (et-never))
+             (et-checker-fatal)
              (error
               (et-checker-err "Checker for `%s' threw error: %s" func (error-message-string out)))
              (:success
