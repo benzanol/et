@@ -154,6 +154,10 @@ checked."
                     :diagnostics (nreverse et--checker-diagnostics)
                     :compiled et--checker-expr)))
 
+(defmacro et-check-call (func &rest args)
+  `(let ((result (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a))))))
+     (or (mapcar #'caddr (et-result-diagnostics result)) (et-result-type result))))
+
 
 ;;;; Diagnostic helpers
 
@@ -224,7 +228,7 @@ checked."
           (result (et--check (cons ',func params))))
      (et-with-error-path '(2) (et-show-result-errors result))
      (or (equal type (et-result-type result))
-         (et-error '(0) "Expected %s, got %s" type (et-result-type result)))))
+         (et-error '(0) "Expected %s, got %s" (et-pp type) (et-pp (et-result-type result))))))
 
 (defmacro et-assert-call-errors (func &rest arg-types)
   `(let* ((params (cl-loop for a in ',arg-types collect (list :type a)))
@@ -324,7 +328,7 @@ checked."
                              collect (et-checker-sub idx)))
          (args-type (cl-loop with acc = (et-literal nil)
                              for arg-type in (nreverse arg-types)
-                             do (setq acc (et-dt 'Cons:RR arg-type acc))
+                             do (setq acc (et-alias 'ConsR arg-type acc))
                              finally return acc)))
     (or (et--infer arglist-matcher args-type return-struct)
         (et-checker-err "Expected %s, got %s"
@@ -626,7 +630,7 @@ See `et--parse-param-types' for how parameter types are determined."
          (args-type
           (cl-loop with type = (or (car vars) (et Nil))
                    for var in (reverse (cdr vars))
-                   do (setq type (et-dt 'Cons:RR (et-var-type var) type))
+                   do (setq type (et-alias 'ConsR (et-var-type var) type))
                    finally return type)))
     (list args-type body-type)))
 

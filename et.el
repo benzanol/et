@@ -47,7 +47,7 @@
   (byte-compile-warn "%s" (if args (apply #'format string args) string)))
 
 (defun et--error-message-suffix (path)
-  (format "\0;;flycheck-path:%s" (append et--error-path path)))
+  (format "\0;;error-path:%s" (append et--error-path path)))
 
 (defun et--traverse-buffer-expr (path)
   (dolist (idx path)
@@ -66,11 +66,11 @@
      (t (error "Invalid expression container: %s" (thing-at-point 'char))))))
 
 (defun et--flycheck-reposition-error (err)
-  "If ERR has a ;;flycheck-path: sentinel, reposition it."
+  "If ERR has a ;;error-path: sentinel, reposition it."
   (ignore ; return nil so other handlers still run
    (ignore-errors
      (when-let* ((msg (flycheck-error-message err))
-                 (match (string-match "\0;;flycheck-path:\\((.*)\\)" msg))
+                 (match (string-match "\0;;error-path:\\((.*)\\)" msg))
                  (path (car (read-from-string (match-string 1 msg))))
                  (prev-start t))
 
@@ -217,15 +217,44 @@ An list of (NAME PLIST), where PLIST has the following properties:
   "A datatype factor of an `et-type'."
   name args)
 
+(defvar et--datatypes
+  '((Any :args nil :overlap t :predicate (lambda (v) t))
+    (Literal :args (CONST) :overlap nil :predicate (lambda (v me) (equal v me)))
+    (NonNil :args nil :overlap t :predicate (lambda (v) v))
+    (Symbol :args nil :overlap (Function DynFunction) :predicate symbolp)
+    (NonNilSymbol :args nil :overlap (Function DynFunction)
+                  :predicate (lambda (v) (and v (symbolp v))))
+    (Number :args nil :overlap nil :predicate numberp)
+    (Integer :args nil :overlap (Positive Negative) :predicate integerp)
+    (Positive :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (> v 0))))
+    (Negative :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (< v 0))))
+    (String :args nil :overlap nil :predicate stringp)
+    (ConsFull :args (CO CONTRA CO CONTRA) :overlap (Function DynFunction PList) :intersect t
+              :predicate (lambda (v l _1 r _2) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
+    (VectorFull :args (CO CONTRA) :overlap nil :intersect t
+                :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+    (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
+    (DynFunction :args (CONST CONST) :overlap nil)
+    (PList
+     :args (lambda (args)
+             (cl-loop for (prop _val) on args by #'cddr
+                      nconc (list 'CONST 'ISO)))
+     :overlap nil
+     :intersect
+     (lambda (args1 args2 intersect union)
+       (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
+         (cl-loop for prop in (delete-dups all-props)
+                  for val1 = (plist-get args1 prop)
+                  for val2 = (plist-get args2 prop)
+                  for intersection = (if val1 (if val2 (funcall intersect val1 val2) val1) val2)
+                  when (et-never-p intersection) return 'INVALID
+                  nconc (list prop intersection)))))))
+
+
+;;;; Datatype helpers
+
 (defun et--datatype-name? (name)
-  ;; Positive and Negative do not serve much practical purpose, but
-  ;; exist primarily to give an example of datatypes without a well
-  ;; defined intersection (Positive ∩ Integer).
-  (not (not (memq name '(Any Literal NonNil Function
-                             Number Integer Positive Negative
-                             String Symbol NonNilSymbol
-                             Vector:A Vector:- Vector:R Vector:W
-                             Cons:AA Cons:-- Cons:RR Cons:WW Cons:RW Cons:WR)))))
+  (not (not (assq name et--datatypes))))
 
 (defun et--datatype-arg-roles (dt-name dt-args)
   "Returns a list of `CONST' | `CO' | `CONTRA' | `ISO'.
@@ -234,80 +263,26 @@ The resulting list must be the exact length of DT-ARGS, and each element
 corresponds to the role of each argument in `dt-args'. `CONST' indicates
 an argument which is a literal Lisp value. `CO'/`CONTRA'/`ISO' indicate
 that the argument is a type argument, and whether the type argument is
-covariant, contravariant, or isovariant. The `IGNORE' role means that
-this argument does not contribute to whether one type extends another."
+covariant, contravariant, or isovariant."
+  (pcase (plist-get (or (alist-get dt-name et--datatypes)
+                        (error "Invalid datatype: %s %s" dt-name dt-args))
+                    :args)
+    ((and (pred functionp) func) (funcall func dt-args))
+    (other (copy-tree other))))
 
-  (pcase (cons dt-name dt-args)
-    (`(,(guard (alist-get dt-name et-scoped-datatypes))) nil)
-    (`(Literal ,_arg) (et-ql CONST))
-    (`(Function ,_args ,_ret) (et-ql CONTRA CO))
-    (`(Cons:AA ,_car ,_cdr) (et-ql ISO ISO))
-    (`(Cons:RR ,_car ,_cdr) (et-ql CO CO))
-    (`(Cons:WW ,_car ,_cdr) (et-ql CONTRA CONTRA))
-    (`(Cons:RW ,_car ,_cdr) (et-ql CO CONTRA))
-    (`(Cons:WR ,_car ,_cdr) (et-ql CONTRA CO))
-    (`(Cons:-- ,_car ,_cdr) (et-ql IGNORE IGNORE))
-    (`(Vector:A ,_elem) (et-ql ISO))
-    (`(Vector:R ,_elem) (et-ql CO))
-    (`(Vector:W ,_elem) (et-ql CONTRA))
-    (`(Vector:- ,_elem) (et-ql IGNORE))
-    (`(PList . ,args)
-     (cl-loop for (prop _val) on args by #'cddr
-              do (or (keywordp prop) (error "Expected keyword, found %s" prop))
-              nconc (et-ql CONST CO)))
-    (`(,(or Integer Number String Symbol Any NonNil NonNilSymbol)) nil)
-    (_ (error "Invalid datatype: %s %s" dt-name dt-args))))
-
-(defun et--datatype-parents (dt-name)
-  "Return a list of datatype names which are parents of `DT-NAME'.
-
-If B is a parent of A, then swapping the name A for B in any datatype
-creates a strictly larger type.
-
-For example, (Cons:AA CAR CDR) <= (Cons:RR CAR CDR) no matter what CAR
-and CDR are, so Cons:RR is a parent type of Cons:AA."
-  (pcase dt-name
-    ('Cons:AA (et-ql Cons:RR Cons:WW Cons:WR Cons:RW Cons:--))
-    ((or 'Cons:RR 'Cons:WW 'Cons:WR 'Cons:RW) (et-ql Cons:--))
-    ('Vector:A (et-ql Vector:R Vector:W Vector:-))
-    ((or 'Vector:R 'Vector:W) (et-ql Vector:-))
-    ('Integer (et-ql Number))
-    ('Positive (et-ql Number))
-    ('Negative (et-ql Number))
-    ('NonNilSymbol (et-ql NonNil Symbol))))
-
-(defun et--datatype-might-overlap-nontrivial? (a b)
+(defun et--datatype-might-overlap-nontrivial? (a-dt b-dt)
   "Return whether datatypes A and B might overlap.
 
 This function is designed for `nontrivial' cases, in that it assumes
 that A and B are not subtypes of each other."
-  (let* ((a-name (et-datatype-name a))
-         (b-name (et-datatype-name b))
-         (cons-types '(PList Function Cons:AA Cons:-- Cons:RR Cons:WW Cons:RW Cons:WR))
-         (pos-types '(Integer Positive))
-         (neg-types '(Integer Negative))
-         (symbol-types '(Symbol NonNilSymbol))
-         (nil-dt (make-et-datatype :name 'Literal :args (list nil))))
+  (let* ((a (et-datatype-name a-dt))
+         (b (et-datatype-name b-dt)))
 
-    (cond
-     ;; One is a NonNil
-     ((or (and (eq a-name 'NonNil) (not (equal b nil-dt)))
-          (and (eq b-name 'NonNil) (not (equal a nil-dt))))
-      t)
-
-     ;; Two literals
-     ((and (eq a-name 'Literal) (eq b-name 'Literal))
-      (eq (car (et-datatype-args a)) (car (et-datatype-args b))))
-
-     ;; Two elements of the same group
-     ((or (eq a-name b-name)
-          (memq a-name (et--datatype-parents b-name))
-          (memq b-name (et--datatype-parents a-name))
-
-          (and (memq a-name symbol-types) (memq b-name symbol-types))
-          (and (memq a-name cons-types) (memq b-name cons-types))
-          (and (memq a-name pos-types) (memq b-name pos-types))
-          (and (memq a-name neg-types) (memq b-name neg-types)))))))
+    (when (< (cl-position b et--datatypes :key #'car) (cl-position a et--datatypes :key #'car))
+      (cl-rotatef a b))
+    (pcase (plist-get (alist-get a et--datatypes) :overlap)
+      ('t t)
+      (overlap (not (not (memq b overlap)))))))
 
 (defun et--datatype-intersect-args-nontrivial (name args1 args2 intersect union)
   "Return a list of arguments intersecting ARGS1 and ARGS2.
@@ -328,72 +303,42 @@ INTERSECT and UNION are functions which each take 2 elements from
 ARGS1/ARGS2 and return a new arg, either the intersection or union of
 the two args respectively."
 
-  (cond
-   ;; Handling for normal datatypes, where arguments have a fixed order
-   ((memq name '(Function
-                 Cons:-- Cons:AA Cons:RR Cons:WW Cons:WR Cons:RW
-                 Vector:A Vector:- Vector:R Vector:W))
-    (cl-assert (eq (length args1) (length args2)))
-    (cl-loop for role in (et--datatype-arg-roles name args1)
-             for arg1 in args1
-             for arg2 in args2
-             for new-arg = (pcase role
-                             ('CO (funcall intersect arg1 arg2))
-                             ('CONTRA (funcall union arg1 arg2))
-                             ('ISO (if (equal arg1 arg2) arg1 'INVALID))
-                             ('IGNORE (et-any))
-                             (_ (error "Unexpected arg role: %s" role)))
-             when (or (eq new-arg 'INVALID) (et-never-p new-arg)) return 'INVALID
-             collect new-arg))
-
-   ((eq name 'PList)
-    (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
-      (cl-loop for prop in (delete-dups all-props)
-               for val1 = (plist-get args1 prop)
-               for val2 = (plist-get args2 prop)
-               for intersection = (if val1 (if val2 (funcall intersect val1 val2) val1) val2)
-               when (et-never-p intersection) return 'INVALID
-               nconc (list prop intersection))))
-
-   (t 'INVALID)))
+  (pcase (plist-get (alist-get name et--datatypes) :intersect)
+    ((and func (pred functionp)) (funcall func args1 args2 intersect union))
+    ('t (cl-loop for role in (et--datatype-arg-roles name args1)
+                 for arg1 in args1
+                 for arg2 in args2
+                 for new-arg = (pcase role
+                                 ('CO (funcall intersect arg1 arg2))
+                                 ('CONTRA (funcall union arg1 arg2))
+                                 ('ISO (if (equal arg1 arg2) arg1 'INVALID))
+                                 (_ (error "Unexpected arg role: %s" role)))
+                 when (or (eq new-arg 'INVALID) (et-never-p new-arg)) return 'INVALID
+                 collect new-arg))
+    (_ 'INVALID)))
 
 (defun et--datatype-constraints (sub-name sub-args super-name super-args co contra iso co-literal)
+  "Determine when one datatype to be a subtype of another.
+
+Returns the list of constraints required for (SUB-NAME SUB-ARGS) to be a
+subtype of (SUPER-NAME SUPER-ARGS), using provided functions provided
+for checking the sub-arguments.
+
+Specifically, (funcall CO/CONTRA/ISO sub-arg super-arg) will return the
+constraints necessary for sub-arg/super-arg to be a
+subtype/supertype/equal (respectively) of super-arg. The reason these
+must be provided as different functions is that the sub and super
+datatypes may have different arg types. For example one might be a
+matcher and another might be a type.
+
+Also, (funcall CO-LITERAL val super-arg) checks if the literal val is a
+subtype of super-arg."
+
   (cl-flet ((valid-if (valid) (if valid nil (et-ql (Q:NEVER)))))
 
     (pcase (list sub-name super-name)
-      (`(,_ Any) nil)
-
-      ('(Plist Plist)
-       (cl-loop for (prop super-val) on super-args by #'cddr
-                for sub-val = (plist-get sub-args prop)
-                unless sub-val return (et-ql (Q:NEVER))
-                nconc (funcall co sub-val super-val)))
-
-      (`(Literal ,_)
-       (let ((val (car sub-args)))
-         (pcase super-name
-           ('Literal (valid-if (eq val (car super-args))))
-           ('Function (valid-if (eq 'lambda (car-safe val))))
-           ('Integer (valid-if (integerp val)))
-           ('Positive (valid-if (and (numberp val) (> val 0))))
-           ('Negative (valid-if (and (numberp val) (< val 0))))
-           ('Number (valid-if (numberp val)))
-           ('String (valid-if (stringp val)))
-           ('Symbol (valid-if (symbolp val)))
-           ('Vector:- (valid-if (vectorp val)))
-           ('Vector:R (if (not (vectorp val)) (valid-if nil)
-                        (cl-loop for elem across val
-                                 nconc (funcall co-literal elem (car super-args)))))
-           ('Cons:-- (valid-if (consp val)))
-           ('Cons:RR
-            (if (not (consp val)) (valid-if nil)
-              (nconc (funcall co-literal (car val) (car super-args))
-                     (funcall co-literal (cdr val) (cadr super-args)))))
-           (_ (valid-if nil)))))
-
-      ((guard (or (eq sub-name super-name)
-                  (memq super-name (et--datatype-parents sub-name))))
-       ;; Datatypes of the same type should have the same number of arguments
+      ((guard (eq sub-name super-name))
+       ;; Datatypes of the same type (except PList) should have the same number of arguments
        (cl-assert (eq (length sub-args) (length super-args)))
        (cl-loop for sub-arg in sub-args
                 for super-arg in super-args
@@ -404,8 +349,36 @@ the two args respectively."
                         ('CO (funcall co sub-arg super-arg))
                         ('CONTRA (funcall contra sub-arg super-arg))
                         ('ISO (funcall iso sub-arg super-arg))
-                        ('IGNORE nil)
                         (_ (error "Unknown argument role: %s" role)))))
+
+      (`(Literal ,_)
+       (let* ((pred (plist-get (alist-get super-name et--datatypes) :predicate)))
+         (pcase (apply (or pred #'ignore) (car sub-args) super-args)
+           ('nil (valid-if nil))
+           ('t (valid-if t))
+           (sub (cl-loop for (sub-val . arg) in sub nconc (funcall co-literal sub-val arg))))))
+
+      (`(,_ Any) nil)
+
+      ('(Integer Number) nil)
+      ('(Positive Number) nil)
+      ('(Negative Number) nil)
+
+      ('(,_ NonNil)
+       (pcase super-name
+         ('Literal (valid-if (cadr super-args)))
+         ('Symbol (valid-if nil))
+         (_ (valid-if t))))
+      ('(,_ NonNilSymbol)
+       (pcase super-name
+         ('Literal (valid-if (cadr super-args)))
+         (_ (valid-if nil))))
+
+      ('(Plist Plist)
+       (cl-loop for (prop super-val) on super-args by #'cddr
+                for sub-val = (plist-get sub-args prop)
+                unless sub-val return (et-ql (Q:NEVER))
+                nconc (funcall co sub-val super-val)))
 
       (_ (valid-if nil)))))
 
@@ -416,7 +389,7 @@ the two args respectively."
   "Apply FUNC to each argument, returning the resulting list.
 
 FUNC is called with two arguments, ARG and ROLE, where role is one of
-`CONST', `CO', `CONTRA', `ISO', or `IGNORE'."
+`CONST', `CO', `CONTRA', or `ISO'."
   (cl-loop for arg in dt-args
            for role in (et--datatype-arg-roles dt-name dt-args)
            collect (funcall func arg role)))
@@ -491,23 +464,38 @@ structure which can be parsed by `et-parse-type'.")
 
 ;;;; Built-in aliases
 
+(et-defalias Cons (&optional a b)
+  ,(cond (b (et-ql ConsFull ,a ,a ,b ,b))
+         (a (et-ql ConsFull ,a ,a ,a ,a))
+         (t (et-ql ConsFull Any Never Any Never))))
+(et-defalias ConsR (a b) (ConsFull ,a Never ,b Never))
+(et-defalias ConsW (a b) (ConsFull Any ,a Any ,b))
+(et-defalias ConsRW (a b) (ConsFull ,a Never Any ,b))
+(et-defalias ConsWR (a b) (ConsFull Any ,a ,b Never))
+
+(et-defalias Vector (&optional a)
+  ,(if a (et-ql VectorFull ,a ,a) (et-ql VectorFull Any Never)))
+(et-defalias VectorR (a) (VectorFull ,a Never))
+(et-defalias VectorW (a) (VectorFull Any ,a))
+
 (et-defalias Nil () (Literal nil))
 (et-defalias True () (Literal t))
 (et-defalias Boolean () (or True Nil))
 
-(et-defalias List:R (elem) (or Nil (Cons:RR ,elem (List:R ,elem))))
-(et-defalias NonNilList:R (elem) (Cons:RR ,elem (List:R ,elem)))
+(et-defalias ListR (elem) (or Nil (ConsR ,elem (ListR ,elem))))
+(et-defalias List (elem) (or Nil (Cons ,elem (List ,elem))))
+(et-defalias NonNilListR (elem) (ConsR ,elem (ListR ,elem)))
 
-(et-defalias Tree:R (elem) (or ,elem (:List:R (:Tree:R ,elem))))
+(et-defalias TreeR (elem) (or ,elem (ListR (TreeR ,elem))))
 
-(et-defalias Alist:R (key val) (List:R (Cons:RR ,key ,val)))
+(et-defalias AlistR (key val) (ListR (ConsR ,key ,val)))
 
 (defun et--expand-tuple (cons args)
   (if (null args) 'Nil
     (et-q (,cons ,(car args) ,(et--expand-tuple cons (cdr args))))))
 
-(et-defalias Tuple:R (&rest args) ,(et--expand-tuple 'Cons:RR args))
-(et-defalias Args (&rest args) ,(et--expand-tuple 'Cons:RR args))
+(et-defalias TupleR (&rest args) ,(et--expand-tuple 'ConsR args))
+(et-defalias Args (&rest args) ,(et--expand-tuple 'ConsR args))
 
 
 ;;;; Type struct
@@ -577,8 +565,7 @@ a valid `et-type-case-value'."
            finally return (make-et-type :cases cases)))
 
 (defun et-dt (name &rest args)
-  (cl-assert (symbolp name))
-  (cl-assert (string-match-p "^[A-Z]" (symbol-name name)))
+  (cl-assert (et--datatype-name? name))
   (et-type (make-et-datatype :name name :args args)))
 
 (defun et-alias (name &rest args)
@@ -631,7 +618,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
                 (lambda (arg role)
                   (pcase role
                     ('CONST nil)
-                    ((or 'CO 'CONTRA 'ISO 'IGNORE) (make-et-matcher :generics generics :dnf arg))
+                    ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
                     (_ (error "Unknown role type: %s" role))))))
               (`(M:ALIAS ,(pred symbolp) . ,args)
                (dolist (arg args) (make-et-matcher :generics generics :dnf arg)))
@@ -688,7 +675,7 @@ ARGS is a mix of constant args (where the corresponding arg role is
 (defmacro et--stop-recursion (var elem default &rest body)
   (declare (indent 3))
   `(let ((elem ,elem))
-     (if (member elem et--sub-constraints-stack)
+     (if (member elem ,var)
          ,default
        (let ((,var (cons elem ,var)))
          ,@body))))
@@ -982,13 +969,13 @@ Depth tracks < > and { } nesting."
     (`(Literal ,val)
      (format "`%s'" (prin1-to-string val)))
 
-    ((and `(Cons:RR ,left-sub ,right-sub) (guard nil))
+    ((and `(ConsR ,left-sub ,right-sub) (guard nil))
      (let ((elems (list (et--format-structure left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
                  (when (and (= (length d) 1) (= (length (car d)) 1))
                    (pcase (car (car d))
-                     (`(S:DT Cons:RR ,car-sub ,cdr-sub)
+                     (`(S:DT ConsR ,car-sub ,cdr-sub)
                       (nconc elems (list (et--format-structure car-sub)))
                       (setq right-sub cdr-sub)
                       t))))))
@@ -1120,17 +1107,20 @@ which are invalid for types."
   `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
 
 
-(defun et-pp (type)
+(defun et-pp-type (type)
   (et--format-structure (et-type-to-structure type)))
 
 (cl-defmethod cl-print-object ((type et-type) stream)
-  (princ (format "#<%s>" (et-pp type)) stream))
+  (princ (format "#<%s>" (et-pp-type type)) stream))
+
+(defun et-pp (obj)
+  (cl-prin1-to-string obj))
 
 
 
 (et-test
- (equal (et Cons:RR<1~@abc>)
-        (et-type (make-et-datatype :name 'Cons:RR :args (list (et-literal 1) (et-literal 'abc)))))
+ (equal (et Cons<1~@abc>)
+        (et-type (make-et-alias :name 'Cons :args (list (et-literal 1) (et-literal 'abc)))))
 
  (equal (et Number)
         (et-type (make-et-datatype :name 'Number)))
@@ -1167,23 +1157,23 @@ which are invalid for types."
 
  ;; Test infer
  (equal (et Never)
-        (et infer Cons:RR<%hi~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
- (equal (et Vector:R<12>)
-        (et infer Cons:RR<12~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
- (equal (et Vector:R<Integer>)
-        (et infer Cons:RR<Integer~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
+        (et infer ConsR<%hi~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
+ (equal (et VectorR<12>)
+        (et infer ConsR<12~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
+ (equal (et VectorR<Integer>)
+        (et infer ConsR<Integer~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
  (equal (et Never)
-        (et infer Cons:RR<Number~%hi> [T] Cons:RR<T&Integer~String> Vector:R<T> Never))
- (equal (et Vector:R<12>)
-        (et infer List:R<12> [T] List:R<T&Integer> Vector:R<T> Never))
- (equal (et Vector:R<1|2>)
-        (et infer Cons:RR<1~Cons:RR<2~Nil>> [T] List:R<T&Integer> Vector:R<T> Never))
- (equal (et Vector:R<1|2|3>)
-        (et infer Cons:RR<1~Cons:RR<2~List:R<3>>> [T] List:R<T&Integer> Vector:R<T> Never))
+        (et infer ConsR<Number~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
+ (equal (et VectorR<12>)
+        (et infer ListR<12> [T] ListR<T&Integer> VectorR<T> Never))
+ (equal (et VectorR<1|2>)
+        (et infer ConsR<1~ConsR<2~Nil>> [T] ListR<T&Integer> VectorR<T> Never))
+ (equal (et VectorR<1|2|3>)
+        (et infer ConsR<1~ConsR<2~ListR<3>>> [T] ListR<T&Integer> VectorR<T> Never))
  (equal (et Never)
-        (et infer List:R<Number> [T] List:R<T&Integer> Vector:R<T> Never))
- (equal (et Vector:R<Never>)
-        (et infer Nil [T] List:R<T&Integer> Vector:R<T> Never)))
+        (et infer ListR<Number> [T] ListR<T&Integer> VectorR<T> Never))
+ (equal (et VectorR<Never>)
+        (et infer Nil [T] ListR<T&Integer> VectorR<T> Never)))
 
 
 ;;;; To/from matcher
@@ -1303,11 +1293,11 @@ which are invalid for types."
        (et-datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
        (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))))
 
-;; Techincally, this function is duplicated logic. In theory, it
-;; should convert one of the types to a matcher, perform matching, and
-;; then check if the resulting constraints are valid. Since there are
-;; no generics, the resulting constraints would be either nil, or just
-;; contain Q:NEVER, which would tell us if it is a subtype.
+;; This function could just use `et-sub-match', but it needs to take
+;; into account binds.
+
+(defvar et--subtype-stack nil
+  "Stack of calls to `et-subtype?' with the form (SUB-TYPE . SUPER-TYPE).")
 
 (defun et-subtype? (sub super)
   (et--verify-type sub)
@@ -1315,44 +1305,64 @@ which are invalid for types."
 
   (if (equal sub super) t ; Not strictly necessary, but improves efficiency
 
-    (setq sub (et-expand-all-aliases sub))
-    (setq super (et-expand-all-aliases super))
+    (et--stop-recursion et--subtype-stack (cons sub super) t
 
-    (cl-loop for sub-case in (et-type-cases sub)
-             always
-             (cl-loop for super-case in (et-type-cases super)
-                      thereis
-                      (et--case-subtype? sub-case super-case)))))
+      (setq sub (et-expand-all-aliases sub))
+      (setq super (et-expand-all-aliases super))
+
+      (cl-loop for sub-case in (et-type-cases sub)
+               always
+               (cl-loop for super-case in (et-type-cases super)
+                        thereis
+                        (et--case-subtype? sub-case super-case))))))
 
 (et-test
  (et-subtype? (et Integer) (et Number))
  (et-subtype? (et Integer) (et Any))
 
- (et-subtype? (et Cons:RR<Integer~Integer>) (et Cons:RR<Number~Number>))
- (not (et-subtype? (et Cons:RR<Number~Number>) (et Cons:RR<Integer~Integer>)))
+ ;; Check that ConsR has covariant arguments
+ (et-subtype? (et ConsR<Integer~Integer>) (et ConsR<Number~Number>))
+ (not (et-subtype? (et ConsR<Number~Number>) (et ConsR<Integer~Integer>)))
+ ;; Check that ConsW has contravariant arguments
+ (et-subtype? (et ConsW<Number~Number>) (et ConsW<Integer~Integer>))
+ (not (et-subtype? (et ConsW<Integer~Integer>) (et ConsW<Number~Number>)))
+ ;; Check that ConsWR/RW have alternating arguments
+ (et-subtype? (et ConsRW<Integer~Number>) (et ConsRW<Number~Integer>))
+ (not (et-subtype? (et ConsRW<Integer~Number>) (et ConsRW<1~Integer>)))
+ (et-subtype? (et ConsWR<Number~Integer>) (et ConsWR<Integer~Number>))
+ (not (et-subtype? (et ConsWR<Number~Integer>) (et ConsWR<Integer~1>)))
+ ;; Cons (no arguments) is a supertype of everything
+ (et-subtype? (et ConsR<1~2>) (et Cons))
+ (et-subtype? (et ConsW<1~2>) (et Cons))
+ (et-subtype? (et ConsRW<1~2>) (et Cons))
+ (et-subtype? (et ConsWR<1~2>) (et Cons))
+ ;; Cons with arguments is a subtype of all
+ (et-subtype? (et Cons<1~2>) (et ConsR<Integer~Integer>))
+ (not (et-subtype? (et Cons<Integer~Integer>) (et ConsR<1~2>)))
+ (et-subtype? (et Cons<Integer~Integer>) (et ConsW<1~2>))
+ (not (et-subtype? (et Cons<1~2>) (et ConsW<Integer~Integer>)))
 
- (et-subtype? (et Cons:WW<Number~Number>) (et Cons:WW<Integer~Integer>))
- (not (et-subtype? (et Cons:WW<Integer~Integer>) (et Cons:WW<Number~Number>)))
+ (et-subtype? (et Literal (4 . 5)) (et ConsR<Integer~Integer>))
+ (et-subtype? (et Literal (4 . 5)) (et Cons<Integer~Integer>))
+ (not (et-subtype? (et Literal (4 . 5.5)) (et ConsR<Integer~Integer>)))
+ (et-subtype? (et Literal (4 . 5)) (et Cons))
 
- (et-subtype? (et Cons:WR<Number~Integer>) (et Cons:WR<Integer~Number>))
- (et-subtype? (et Cons:RW<Integer~Number>) (et Cons:RW<Number~Integer>))
+ (et-subtype? (et Literal [4 5 6]) (et VectorR<Integer>))
+ (et-subtype? (et Literal [4 5 6]) (et Vector<Integer>))
+ (not (et-subtype? (et Literal [4 5 6.6]) (et VectorR<Integer>)))
+ (et-subtype? (et Literal [4 5 6]) (et Vector))
 
- (et-subtype? (et Literal (4 . 5)) (et Cons:RR<Integer~Integer>))
- (not (et-subtype? (et Literal (4 . 5)) (et Cons:AA<Integer~Integer>)))
- (not (et-subtype? (et Literal (4 . 5.5)) (et Cons:RR<Integer~Integer>)))
- (et-subtype? (et Literal (4 . 5)) (et Cons:--<String~String>))
-
- (et-subtype? (et Literal [4 5 6]) (et Vector:R<Integer>))
- (not (et-subtype? (et Literal [4 5 6]) (et Vector:A<Integer>)))
- (not (et-subtype? (et Literal [4 5 6.6]) (et Vector:R<Integer>)))
- (et-subtype? (et Literal [4 5 6]) (et Vector:-<String>))
-
- (et-subtype? (et List:R<Integer>)
-              (et Nil|Cons:RR<Number~List:R<Integer>>))
+ (et-subtype? (et ListR<Integer>)
+              (et Nil|ConsR<Number~ListR<Integer>>))
 
  ;; Check function subtypes
  (et-subtype? (et Function Integer Integer) (et Function Integer Integer))
- (et-subtype? (et Function Number Integer) (et Function Integer Number)))
+ (et-subtype? (et Function Number Integer) (et Function Integer Number))
+
+ ;; Check recursive subtypes
+ (et-subtype? (et ListR<Integer>) (et ListR<Number>))
+ (et-subtype? (et Cons<1~Cons<2~List<3>>>) (et ListR<Number>))
+ (not (et-subtype? (et ListR<Number>) (et ListR<Integer>))))
 
 
 ;;;; Simplify
@@ -1483,24 +1493,21 @@ which are invalid for types."
   (let* ((a-name (et-datatype-name a))
          (b-name (et-datatype-name b))
          (a-args (et-datatype-args a))
-         (b-args (et-datatype-args b))
-         (sub-name (cond ((eq a-name b-name) a-name)
-                         ((memq a-name (et--datatype-parents b-name)) b-name)
-                         ((memq b-name (et--datatype-parents a-name)) a-name))))
+         (b-args (et-datatype-args b)))
     (cond
      ((et-datatype-subtype? a b) a)
      ((et-datatype-subtype? b a) b)
 
-     (sub-name
+     ((eq a-name b-name)
       (let ((arg-intersection
              (et--datatype-intersect-args-nontrivial
-              sub-name a-args b-args
+              a-name a-args b-args
               (lambda (a b) (et--intersect subsect? a b)) #'et--or)))
 
         (if (eq arg-intersection 'INVALID) 'INVALID
-          (make-et-datatype :name sub-name :args arg-intersection))))
+          (make-et-datatype :name a-name :args arg-intersection))))
 
-     ((null sub-name) 'INVALID))))
+     (t 'INVALID))))
 
 
 ;;;; Subtract
