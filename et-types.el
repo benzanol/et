@@ -26,6 +26,40 @@
 
 
 ;;; ============================================================
+;;; Definitions
+
+(et-define-checker lambda
+  (pcase-let ((`(,input ,ret) (et-checker-funcdef 1)))
+    (et-dt 'Function input ret)))
+
+(et-define-pcase-checker defun
+    `(,_name . ,_body)
+  (pcase-let ((`(,input ,ret) (et-checker-funcdef 2)))
+    (et-dt 'Function input ret)))
+
+(et-test
+ ;; Body return type with typed args
+ (et-assert-resolve Function<Cons:RR<Integer~Nil>~Integer>
+   (lambda ([x Integer]) (+ x 1)))
+
+ ;; Untyped args default to Any, body uses them
+ (et-assert-resolve Function<Cons:RR<Any~Nil>~Any>
+   (lambda (x) x))
+
+ ;; &optional arg becomes Nil|Type
+ (et-assert-resolve Function<Cons:RR<Integer~Cons:RR<Nil|String~Nil>>~Integer>
+   (lambda ([x Integer] &optional [y String]) (+ x 1)))
+
+ ;; Multiple body forms, return type is last
+ (et-assert-resolve Function<Cons:RR<Integer~Cons:RR<String~Nil>>~String>
+   (lambda ([x Integer] [y String]) (+ x 1) y))
+
+ ;; Empty arglist
+ (et-assert-resolve Function<Nil~Integer>
+   (lambda () 1)))
+
+
+;;; ============================================================
 ;;; Control flow
 ;;;; let*
 

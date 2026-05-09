@@ -92,6 +92,23 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 ;;; ============================================================
 ;;; Checking
+;;;; Result struct
+
+(cl-defstruct et-result
+  "Result of parsing an expression.
+
+TYPE is an `et-type'.
+
+DIAGNOSTICS is a list (PATH SEVERITY STRING)[] of diagnostics resulting
+from type checking the expression. If this value is non-nil, then TYPE
+is not guaranteed to be non-nil (but it might be), and the entire call
+tree should propagate these errors.
+
+COMPILED is the compiled version of the expression that was being
+checked."
+  type diagnostics compiled)
+
+
 ;;;; Check
 
 (defvar et--checker-diagnostics nil
@@ -137,20 +154,6 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
                     :diagnostics (nreverse et--checker-diagnostics)
                     :compiled et--checker-expr)))
 
-(cl-defstruct et-result
-  "Result of parsing an expression.
-
-TYPE is an `et-type'.
-
-DIAGNOSTICS is a list (PATH SEVERITY STRING)[] of diagnostics resulting
-from type checking the expression. If this value is non-nil, then TYPE
-is not guaranteed to be non-nil (but it might be), and the entire call
-tree should propagate these errors.
-
-COMPILED is the compiled version of the expression that was being
-checked."
-  type diagnostics compiled)
-
 
 ;;;; Diagnostic helpers
 
@@ -176,77 +179,6 @@ checked."
 (defun et-checker-fatal (path fmt &rest args)
   (apply #'et--checker-diagnostic 'fatal path fmt args)
   (signal 'et-checker-fatal nil))
-
-
-;;;; Define checker
-
-(defmacro et-define-checker (funcs &rest body)
-  "A checker should return a type, or nil if the expression is invalid."
-  (declare (indent 1))
-  (cl-assert (or (symbolp funcs) (seq-every-p #'symbolp funcs)))
-
-  `(let* ((checker (lambda () ,@body)))
-     ,@(cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
-                collect `(setf (get ',func 'et-checker) checker))
-     ',funcs))
-
-(defmacro et-define-pcase-checker (funcs pattern &rest body)
-  "A checker should return a type, or nil if the expression is invalid."
-  (declare (indent 2))
-  `(et-define-checker ,funcs
-     (pcase (cdr et--checker-expr)
-       (,pattern . ,body)
-       ,@(unless (symbolp pattern) (et-ql (_ (error "Pcase checker didn't match")))))))
-
-
-;;;; Type checker
-
-(defun et--type-checker-body (arglist-matcher return-struct)
-  (let* ((arg-types (cl-loop for _expr in (cdr et--checker-expr)
-                             for idx upfrom 1
-                             collect (et-checker-sub idx)))
-         (args-type (cl-loop with acc = (et-literal nil)
-                             for arg-type in (nreverse arg-types)
-                             do (setq acc (et-dt 'Cons:RR arg-type acc))
-                             finally return acc)))
-    (or (et--infer arglist-matcher args-type return-struct)
-        (et-checker-err "Expected %s, got %s"
-                        (et-pp-matcher arglist-matcher) (et-pp args-type)))))
-
-(defmacro et-define-type-checker (funcs &rest arguments)
-  "Define a checker using argument and return types.
-
-FUNCS is the function to define the checker for, or a list of functions
-to define the checker for.
-
-GENERICS is a vector of symbols, representing generic variables. Each
-generic variable should be uppercase.
-
-ARGLIST is a parsable expression to use to match the arglist against.
-
-RETURN is a parsable expression to use for the return type. This can use
-the generic variable names as aliases, and they will be correctly
-substituted.
-
-\(fn FUNC [GENERICS] ARGLIST RETURN)"
-  (declare (indent 2))
-
-  (let ((generics
-         (when (vectorp (car arguments))
-           ;; Make sure the generics have the correct format
-           (cl-loop for var across (car arguments)
-                    do (or (symbolp var) (error "Generic vars must be symbols"))
-                    do (or (let ((case-fold-search nil))
-                             (string-match-p "^[A-Z]" (format "%s" var)))
-                           (error "Generic vars must start with an uppercase letter")))
-           (append (pop arguments) nil))))
-    (unless (eq (length arguments) 2)
-      (error "Incorrect number of arguments"))
-
-    `(et-define-checker ,funcs
-       (et--type-checker-body
-        ,(et-parse-matcher (car arguments) generics)
-        (copy-tree ',(et-parse-structure (cadr arguments) generics))))))
 
 
 ;;;; Root level functions
@@ -359,6 +291,82 @@ substituted.
 
 
 ;;; ============================================================
+;;; Defining checkers
+;;;; Define checker
+
+(defmacro et-define-checker (funcs &rest body)
+  "A checker should return a type, or nil if the expression is invalid."
+  (declare (indent 1))
+  (cl-assert (or (symbolp funcs) (seq-every-p #'symbolp funcs)))
+
+  `(let* ((checker (lambda () ,@body)))
+     ,@(cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
+                collect `(setf (get ',func 'et-checker) checker))
+     ',funcs))
+
+
+;;;; Pcase checker
+
+(defmacro et-define-pcase-checker (funcs pattern &rest body)
+  "A checker should return a type, or nil if the expression is invalid."
+  (declare (indent 2))
+  `(et-define-checker ,funcs
+     (pcase (cdr et--checker-expr)
+       (,pattern . ,body)
+       ,@(unless (symbolp pattern) (et-ql (_ (error "Pcase checker didn't match")))))))
+
+
+;;;; Type checker
+
+(defun et--type-checker-body (arglist-matcher return-struct)
+  (let* ((arg-types (cl-loop for _expr in (cdr et--checker-expr)
+                             for idx upfrom 1
+                             collect (et-checker-sub idx)))
+         (args-type (cl-loop with acc = (et-literal nil)
+                             for arg-type in (nreverse arg-types)
+                             do (setq acc (et-dt 'Cons:RR arg-type acc))
+                             finally return acc)))
+    (or (et--infer arglist-matcher args-type return-struct)
+        (et-checker-err "Expected %s, got %s"
+                        (et-pp-matcher arglist-matcher) (et-pp args-type)))))
+
+(defmacro et-define-type-checker (funcs &rest arguments)
+  "Define a checker using argument and return types.
+
+FUNCS is the function to define the checker for, or a list of functions
+to define the checker for.
+
+GENERICS is a vector of symbols, representing generic variables. Each
+generic variable should be uppercase.
+
+ARGLIST is a parsable expression to use to match the arglist against.
+
+RETURN is a parsable expression to use for the return type. This can use
+the generic variable names as aliases, and they will be correctly
+substituted.
+
+\(fn FUNC [GENERICS] ARGLIST RETURN)"
+  (declare (indent 2))
+
+  (let ((generics
+         (when (vectorp (car arguments))
+           ;; Make sure the generics have the correct format
+           (cl-loop for var across (car arguments)
+                    do (or (symbolp var) (error "Generic vars must be symbols"))
+                    do (or (let ((case-fold-search nil))
+                             (string-match-p "^[A-Z]" (format "%s" var)))
+                           (error "Generic vars must start with an uppercase letter")))
+           (append (pop arguments) nil))))
+    (unless (eq (length arguments) 2)
+      (error "Incorrect number of arguments"))
+
+    `(et-define-checker ,funcs
+       (et--type-checker-body
+        ,(et-parse-matcher (car arguments) generics)
+        (copy-tree ',(et-parse-structure (cadr arguments) generics))))))
+
+
+;;; ============================================================
 ;;; Checker helpers
 ;;;; Check subexpr
 
@@ -451,6 +459,176 @@ PATH is the path to the subexpression."
        (cl-loop for gen in (et-matcher-generics matcher)
                 for gen-type in gen-results
                 collect (cons gen gen-type))))))
+
+
+;;;; Check a function definition
+;;;;; Parse parameters
+
+(defun et--parse-param-types (arglist &optional docstring)
+  "Parse parameter names and types from ARGLIST and optional DOCSTRING.
+
+Types can be specified in two ways:
+
+1. Inline in the arglist, using the syntax [ARG TYPE-SPEC], where
+TYPE-SPEC is an expression parseable by `et-parse-type'. For example:
+
+(lambda ([arg MyType] [arg2 Number] arg3 [arg4 (or Number String)]))
+
+
+2. In a docstring, where each type annotation looks like
+
+ARGNAME : TYPE-SPEC
+
+ARGNAME is the name of the argument in all-caps, as is Emacs docstring
+convention, and must come at the start of a line. TYPE-SPEC is such
+that (et-parse-type (read TYPE-SPEC)) returns a valid type. There can be
+extra information (a description of the argument) following the type
+spec on the same line, as `read' will ignore anything following a valid
+expression.
+
+Inline annotations take precedence over docstring annotations. Arguments
+without any annotation get type Any. Arguments in an &optional group are
+automatically made a union with Nil.
+
+Returns a cons cell (REST-VAR . VARS). VARS is a list of normal
+positional argument variables, REST-VAR is a single variable
+representing the rest parameter, or nil if there is no rest parameter."
+
+  (let* ((case-fold-search nil)
+         ;; Parse docstring annotations
+         (doc-annotations
+          (when docstring
+            (let ((ann nil))
+              (with-temp-buffer
+                (insert docstring)
+                (goto-char (point-min))
+                (while (re-search-forward
+                        "^\\([A-Z][A-Z0-9_-]*\\)\s*:\s*" nil t)
+                  (let* ((argname (intern (downcase (match-string 1))))
+                         (type-str (buffer-substring (point) (line-end-position)))
+                         (type (ignore-errors
+                                 (et-parse-type (read type-str)))))
+                    (when type
+                      (push (cons argname type) ann)))))
+              (nreverse ann))))
+         (vars nil)
+         (rest-var nil)
+         (state 'required))
+
+    (dolist (entry arglist)
+      (pcase entry
+        ('&optional (setq state 'optional))
+        ('&rest (setq state 'rest))
+        ;; [arg Type] form
+        ((or `[,(and sym (pred symbolp)) ,type-spec]
+             (and sym (pred symbolp)))
+         (let* ((type (or (when type-spec (ignore-errors (et-parse-type type-spec)))
+                          (alist-get sym doc-annotations)
+                          (if (eq state 'rest) (et List:R<Any>) (et Any)))))
+
+           (when (eq state 'optional) (setq type (et--or (et Nil) type)))
+
+           (if (eq state 'rest) (setq rest-var (et-new-var sym type))
+             (push (et-new-var sym type) vars))))))
+
+    (cons rest-var (nreverse vars))))
+
+(et-test
+ ;; Plain arglist, no types
+ (equal (et--parse-param-types '(a b c))
+        (list nil
+              (et-new-var 'a (et Any))
+              (et-new-var 'b (et Any))
+              (et-new-var 'c (et Any))))
+
+ ;; Inline vector annotations
+ (equal (et--parse-param-types '([x Integer] [y String]))
+        (list nil
+              (et-new-var 'x (et Integer))
+              (et-new-var 'y (et String))))
+
+ ;; Mixed plain and annotated
+ (equal (et--parse-param-types '([x Integer] y [z String]))
+        (list nil
+              (et-new-var 'x (et Integer))
+              (et-new-var 'y (et Any))
+              (et-new-var 'z (et String))))
+
+ ;; Complex type expression in vector
+ (equal (et--parse-param-types '([x (or Number String)]))
+        (list nil
+              (et-new-var 'x (et (or Number String)))))
+
+ ;; &optional becomes nillable
+ (equal (et--parse-param-types '(a &optional b [c Integer] &rest d))
+        (list (et-new-var 'd (et List:R<Any>))
+              (et-new-var 'a (et Any))
+              (et-new-var 'b (et or Nil Any))
+              (et-new-var 'c (et or Nil Integer))))
+
+ ;; &rest does not become nillable
+ (equal (et--parse-param-types '(a &rest [b Integer]))
+        (list (et-new-var 'b (et Integer))
+              (et-new-var 'a (et Any))))
+
+ ;; Docstring annotations
+ (equal (et--parse-param-types '(x y) "X : Integer\nY : String")
+        (list nil
+              (et-new-var 'x (et Integer))
+              (et-new-var 'y (et String))))
+
+ ;; Inline takes precedence over docstring
+ (equal (et--parse-param-types '([x Integer] y) "X : String\nY : Number")
+        (list nil
+              (et-new-var 'x (et Integer))
+              (et-new-var 'y (et Number))))
+
+ ;; Docstring with extra description text after type
+ (equal (et--parse-param-types '(x) "A function\n\nX : Integer the count of items")
+        (list nil
+              (et-new-var 'x (et Integer))))
+
+ ;; Empty arglist
+ (equal (et--parse-param-types '()) (cons nil nil))
+
+ ;; Docstring with lowercase arg is ignored
+ (equal (et--parse-param-types '(x) "x : Integer")
+        (list nil (et-new-var 'x (et Any)))))
+
+
+;;;;; Parse funcdef
+
+(defun et-checker-funcdef (&rest arglist-path)
+  "Typecheck a function definition, returning the function type.
+
+ARGLIST-PATH is the path to the function arglist. It must be nonempty,
+as the remaining expressions in the arglist's parent comprise the body
+of the function.
+
+See `et--parse-param-types' for how parameter types are determined."
+  (setq arglist-path (flatten-tree arglist-path))
+  (cl-assert arglist-path)
+
+  (let* ((parent-path (butlast arglist-path))
+         (arglist-idx (car (last arglist-path)))
+         (parent-expr (et--traverse-tree parent-path et--checker-expr))
+         (arglist (nth arglist-idx parent-expr))
+         (body (nthcdr (1+ arglist-idx) parent-expr))
+         (docstring (and (stringp (car body)) (car body)))
+
+         ;; Parse parameters
+         (vars (et--parse-param-types arglist docstring))
+         ;; Typecheck body with argument bindings
+         (body-type
+          (et-with-vars (append (cdr vars) (list (car vars)))
+            (et-checker-tail (append parent-path (list (1+ arglist-idx))))))
+         ;; Collect arg types for function type
+         (args-type
+          (cl-loop with type = (or (car vars) (et Nil))
+                   for var in (reverse (cdr vars))
+                   do (setq type (et-dt 'Cons:RR (et-var-type var) type))
+                   finally return type)))
+    (list args-type body-type)))
 
 
 ;;; ============================================================

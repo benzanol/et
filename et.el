@@ -221,7 +221,7 @@ An list of (NAME PLIST), where PLIST has the following properties:
   ;; Positive and Negative do not serve much practical purpose, but
   ;; exist primarily to give an example of datatypes without a well
   ;; defined intersection (Positive ∩ Integer).
-  (not (not (memq name '(Any Literal NonNil
+  (not (not (memq name '(Any Literal NonNil Function
                              Number Integer Positive Negative
                              String Symbol NonNilSymbol
                              Vector:A Vector:- Vector:R Vector:W
@@ -240,6 +240,7 @@ this argument does not contribute to whether one type extends another."
   (pcase (cons dt-name dt-args)
     (`(,(guard (alist-get dt-name et-scoped-datatypes))) nil)
     (`(Literal ,_arg) (et-ql CONST))
+    (`(Function ,_args ,_ret) (et-ql CONTRA CO))
     (`(Cons:AA ,_car ,_cdr) (et-ql ISO ISO))
     (`(Cons:RR ,_car ,_cdr) (et-ql CO CO))
     (`(Cons:WW ,_car ,_cdr) (et-ql CONTRA CONTRA))
@@ -282,7 +283,7 @@ This function is designed for `nontrivial' cases, in that it assumes
 that A and B are not subtypes of each other."
   (let* ((a-name (et-datatype-name a))
          (b-name (et-datatype-name b))
-         (cons-types '(PList Cons:AA Cons:-- Cons:RR Cons:WW Cons:RW Cons:WR))
+         (cons-types '(PList Function Cons:AA Cons:-- Cons:RR Cons:WW Cons:RW Cons:WR))
          (pos-types '(Integer Positive))
          (neg-types '(Integer Negative))
          (symbol-types '(Symbol NonNilSymbol))
@@ -329,8 +330,9 @@ the two args respectively."
 
   (cond
    ;; Handling for normal datatypes, where arguments have a fixed order
-   ((memq name '(Cons:-- Cons:AA Cons:RR Cons:WW Cons:WR Cons:RW
-                         Vector:A Vector:- Vector:R Vector:W))
+   ((memq name '(Function
+                 Cons:-- Cons:AA Cons:RR Cons:WW Cons:WR Cons:RW
+                 Vector:A Vector:- Vector:R Vector:W))
     (cl-assert (eq (length args1) (length args2)))
     (cl-loop for role in (et--datatype-arg-roles name args1)
              for arg1 in args1
@@ -371,6 +373,7 @@ the two args respectively."
        (let ((val (car sub-args)))
          (pcase super-name
            ('Literal (valid-if (eq val (car super-args))))
+           ('Function (valid-if (eq 'lambda (car-safe val))))
            ('Integer (valid-if (integerp val)))
            ('Positive (valid-if (and (numberp val) (> val 0))))
            ('Negative (valid-if (and (numberp val) (< val 0))))
@@ -1345,7 +1348,11 @@ which are invalid for types."
  (et-subtype? (et Literal [4 5 6]) (et Vector:-<String>))
 
  (et-subtype? (et List:R<Integer>)
-              (et Nil|Cons:RR<Number~List:R<Integer>>)))
+              (et Nil|Cons:RR<Number~List:R<Integer>>))
+
+ ;; Check function subtypes
+ (et-subtype? (et Function Integer Integer) (et Function Integer Integer))
+ (et-subtype? (et Function Number Integer) (et Function Integer Number)))
 
 
 ;;;; Simplify
