@@ -118,12 +118,16 @@
 (defmacro et-test (&rest body)
   "BODY can start with a series of VAR VECTOR... forms."
 
-  (when (and et-run-tests (null load-file-name))
+  (when (and et-run-tests (null load-file-name)
+             (stringp (car command-line-args-left)))
     ;; Require the file without tests
-    (when (stringp (car command-line-args-left))
-      (let ((et-run-tests nil))
-        (load-file (car command-line-args-left))))
+    (condition-case _
+        (let ((et-run-tests nil))
+          (load-file (car command-line-args-left)))
+      (:success nil)
+      (t (setq et-run-tests nil))))
 
+  (when (and et-run-tests (null load-file-name))
     ;; Repeat var
     (let* ((evaller
             (lambda (body start-idx)
@@ -195,6 +199,54 @@ priority."
 
 ;;; ============================================================
 ;;; Types
+;;;; Type struct
+
+(cl-defstruct et-var
+  "A variable currently in scope."
+  name type)
+
+(cl-defstruct et-type-case
+  "Struct representing a case of an `et-type'.
+
+BINDS is a list of (`et-var' . `et-type').
+
+TYPEOFS is a list of `et-var'.
+
+VALUE is an instance of either `et-datatype' or `et-alias'."
+  value binds typeofs)
+
+(cl-defstruct et-type
+  "Struct representing a root-level et type.
+
+  CASES is a list of `et-type-case' instances being unioned."
+  cases)
+
+(defun et--verify-type (type)
+  "Check that a matcher is valid."
+  (unless (et-type-p type)
+    (error "Not a type: %s" type))
+
+  (when et-debug
+    (dolist (case (et-type-cases type))
+      (let ((val (et-type-case-value case)))
+        (cond
+         ((et-datatype-p val)
+          ;; Check that all of the arguments have the correct role
+          (et--datatype-map-type-args (et-datatype-name val) (et-datatype-args val) #'et--verify-type))
+         ((et-alias-p val) (mapc #'et--verify-type (et-alias-args val)))
+         (t (error "Expected datatype or alias, found %s" val))))
+
+      (dolist (x (et-type-case-binds case))
+        (or (and (consp x) (et-var-p (car x)) (et--verify-type (cdr x)))
+            (error "Expected bind, found %s" x)))
+      (dolist (x (et-type-case-typeofs case))
+        (or (et-var-p x) (error "Expected typeof var, found %s" x)))))
+
+  type)
+
+(advice-add #'make-et-type :filter-return #'et--verify-type)
+
+
 ;;;; Scoped datatypes
 
 (defvar et-scoped-datatypes nil
@@ -257,15 +309,16 @@ An list of (NAME PLIST), where PLIST has the following properties:
              (cl-loop for (_prop _val) on args by #'cddr
                       nconc (list 'CONST 'ISO)))
      :overlap nil
-     :intersect
-     (lambda (args1 args2 intersect union)
-       (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
-         (cl-loop for prop in (delete-dups all-props)
-                  for val1 = (plist-get args1 prop)
-                  for val2 = (plist-get args2 prop)
-                  for intersection = (if val1 (if val2 (funcall intersect val1 val2) val1) val2)
-                  when (et-never-p intersection) return 'INVALID
-                  nconc (list prop intersection)))))))
+     :intersect et--plist-intersect-args)))
+
+(defun et--plist-intersect-args (args1 args2 intersect _union)
+  (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
+    (cl-loop for prop in (delete-dups all-props)
+             for val1 = (plist-get args1 prop)
+             for val2 = (plist-get args2 prop)
+             for intersection = (if val1 (if val2 (funcall intersect val1 val2) val1) val2)
+             when (et-never-p intersection) return 'INVALID
+             nconc (list prop intersection))))
 
 
 ;;;; Datatype helpers
@@ -391,6 +444,9 @@ subtype of super-arg."
          ('Literal (valid-if (cadr super-args)))
          (_ (valid-if nil))))
 
+      ('(ConsFull PList)
+       (et--cons-is-plist sub-args super-args co iso))
+
       ('(Plist Plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
                 for sub-val = (plist-get sub-args prop)
@@ -398,6 +454,28 @@ subtype of super-arg."
                 nconc (funcall co sub-val super-val)))
 
       (_ (valid-if nil)))))
+
+(defun et--cons-is-plist (cons-args plist-args co _co-literal)
+  "Constraints for ConsFull (a plist cons) to be a subtype of PList.
+A plist is structured as (PROP VAL PROP VAL ...), so a ConsFull whose
+car is the property name must have a cdr that is itself a ConsFull
+whose car is the value and whose cdr covers the remaining plist."
+  (let ((car-read (et-expand-all-aliases (nth 0 cons-args)))
+        (cdr-read (nth 2 cons-args)))
+    (pcase (et-type-cases car-read)
+      (`(,(cl-struct et-type-case
+                     (value (cl-struct et-datatype (name 'Literal) (args `(,prop))))))
+       (let ((pval (plist-get plist-args prop)))
+         (if (null pval) (et-ql (Q:NEVER))
+           (let ((rest-plist (copy-tree plist-args)))
+             (cl-remf rest-plist prop)
+             ;; cdr-read must be a cons of (VAL . remaining-plist)
+             (funcall co cdr-read
+                      (et-alias 'ConsR pval
+                                (if rest-plist
+                                    (apply #'et-dt 'PList rest-plist)
+                                  (et-literal nil))))))))
+      (_ (et-ql (Q:NEVER))))))
 
 
 ;;;; Datatype mappers
@@ -514,54 +592,6 @@ structure which can be parsed by `et-parse-type'.")
 
 (et-defalias TupleR (&rest args) ,(et--expand-tuple-spec 'ConsR args))
 (et-defalias Args (&rest args) ,(et--expand-tuple-spec 'ConsR args))
-
-
-;;;; Type struct
-
-(cl-defstruct et-var
-  "A variable currently in scope."
-  name type)
-
-(cl-defstruct et-type-case
-  "Struct representing a case of an `et-type'.
-
-BINDS is a list of (`et-var' . `et-type').
-
-TYPEOFS is a list of `et-var'.
-
-VALUE is an instance of either `et-datatype' or `et-alias'."
-  value binds typeofs)
-
-(cl-defstruct et-type
-  "Struct representing a root-level et type.
-
-  CASES is a list of `et-type-case' instances being unioned."
-  cases)
-
-(defun et--verify-type (type)
-  "Check that a matcher is valid."
-  (unless (et-type-p type)
-    (error "Not a type: %s" type))
-
-  (when et-debug
-    (dolist (case (et-type-cases type))
-      (let ((val (et-type-case-value case)))
-        (cond
-         ((et-datatype-p val)
-          ;; Check that all of the arguments have the correct role
-          (et--datatype-map-type-args (et-datatype-name val) (et-datatype-args val) #'et--verify-type))
-         ((et-alias-p val) (mapc #'et--verify-type (et-alias-args val)))
-         (t (error "Expected datatype or alias, found %s" val))))
-
-      (dolist (x (et-type-case-binds case))
-        (or (and (consp x) (et-var-p (car x)) (et--verify-type (cdr x)))
-            (error "Expected bind, found %s" x)))
-      (dolist (x (et-type-case-typeofs case))
-        (or (et-var-p x) (error "Expected typeof var, found %s" x)))))
-
-  type)
-
-(advice-add #'make-et-type :filter-return #'et--verify-type)
 
 
 ;;;; Constructors
@@ -1408,7 +1438,16 @@ which are invalid for types."
  ;; Check recursive subtypes
  (et-subtype? (et ListR<Integer>) (et ListR<Number>))
  (et-subtype? (et Cons<1~Cons<2~List<3>>>) (et ListR<Number>))
- (not (et-subtype? (et ListR<Number>) (et ListR<Integer>))))
+ (not (et-subtype? (et ListR<Number>) (et ListR<Integer>)))
+
+ ;; Check cons is plist
+ ;; ConsFull representing (:a 1 :b 2) is a subtype of PList<:a Integer :b Integer>
+ (et-subtype? (et ConsR<@:a~ConsR<1~ConsR<@:b~ConsR<2~Nil>>>>)
+              (et PList<:a~Integer~:b~Integer>))
+
+ ;; Wrong value type: (:a "hi" :b 2) is NOT a subtype of PList<:a Integer :b Integer>
+ (not (et-subtype? (et ConsR<@:a~ConsR<%hi~ConsR<@:b~ConsR<2~Nil>>>>)
+                   (et PList<:a~Integer~:b~Integer>))))
 
 
 ;;;; Simplify
