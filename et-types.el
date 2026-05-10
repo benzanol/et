@@ -26,13 +26,16 @@
 
 
 ;;; ============================================================
-;;; Definitions
+;;; Function definitions
+;;;; Checkers
 
 (et-define-checker lambda
   (et-checker-funcdef 1))
 
-(et-define-pcase-checker defun `(,_name . ,_body)
-  (et-checker-funcdef 2))
+(et-define-pcase-checker (defun cl-defun) `(,(and (pred symbolp) name) . ,_body)
+  (when-let* ((func-type (et-checker-funcdef 2)))
+    (put name 'et-function-type func-type)
+    func-type))
 
 (et-test
  ;; Inline typed args
@@ -123,6 +126,20 @@ SCALE : Number
      "X : Integer
 Y : String"
      x)))
+
+
+;;;; et-defun
+
+(defmacro et-defun (&rest args)
+  "Define a type-checked function.
+
+\(fn NAME ARGLIST [DOCSTRING] BODY...)"
+  (declare (doc-string 3)
+           (indent 2))
+
+  (let* ((result (et--check (cons #'cl-defun args))))
+    (et-show-result-errors result)
+    (et-result-compiled result)))
 
 
 ;;; ============================================================

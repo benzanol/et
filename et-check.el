@@ -105,8 +105,10 @@ is not guaranteed to be non-nil (but it might be), and the entire call
 tree should propagate these errors.
 
 COMPILED is the compiled version of the expression that was being
-checked."
-  type diagnostics compiled)
+checked.
+
+FAILED is a boolean that is `t' when type checking was invalid."
+  type diagnostics compiled failed)
 
 
 ;;;; Check
@@ -116,6 +118,9 @@ checked."
 
 (defvar et--checker-expr nil
   "The current expr.")
+
+(defvar et--checker-failed nil
+  "Whether type checking the current expr failed.")
 
 (defun et--check (expr)
   "Generates an `et-result' resulting from typechecking EXPR.
@@ -143,6 +148,7 @@ individually, and then will be passed to `et--funcall' as a list to
 determine the output type."
   (let* ((et--checker-diagnostics nil)
          (et--checker-expr (copy-tree expr))
+         (et--checker-failed nil)
          (return-type nil))
 
     (pcase expr
@@ -161,12 +167,15 @@ determine the output type."
           (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
                  (output-type (et--funcall func-type args-type)))
             (if output-type (setq return-type output-type)
-              (et-checker-err "Function %s not defined on %s" func (et-pp args-type)))))
+              ;; If `et--checker-failed' is already true, that means one of the arguments was invalid,
+              ;; which means the true error was in the arguments, not this call
+              (unless et--checker-failed
+                (et-checker-err "Function `%s' not defined on %s" func (et-pp args-type))))))
 
          (_ (et-checker-err '(0) "No type for `%s'" func))))
 
-      ;; Type check a variable
-      ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
+      ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
+      ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
 
        (if-let* ((var (et-get-symbol-var sym)))
            (setq return-type
@@ -175,14 +184,20 @@ determine the output type."
                   (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
                                               :typeofs (list var)))))
 
-         (et-checker-err "Free variable: %s" var)))
+         (et-checker-err "Free variable: %s" sym)))
 
       (expr (setq return-type (et-literal expr))))
 
-    (cl-assert (or et--checker-diagnostics return-type))
+    ;; If it returned nil, then it failed
+    (when (null return-type) (setq et--checker-failed t))
+    ;; This shouldn't happen: checkers should always report a real error if returning nil
+    (when (and et--checker-failed (null et--checker-diagnostics))
+      (et-checker-err "Type checking failed mysteriously"))
+
     (make-et-result :type (or return-type (et-never))
                     :diagnostics (nreverse et--checker-diagnostics)
-                    :compiled et--checker-expr)))
+                    :compiled et--checker-expr
+                    :failed et--checker-failed)))
 
 (defmacro et-check-call (func &rest args)
   `(let ((result (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a))))))
@@ -198,14 +213,15 @@ determine the output type."
           et--checker-diagnostics)
     nil))
 
-(defmacro et--define-diagnostics-function (name severity)
+(defmacro et--define-diagnostics-function (name severity &optional failed)
   `(defun ,name (&rest args)
      ,(format "Create a checker diagnostic with severity `%s'.\n\n%s" severity
               "(fn [PATH] FORMAT-STRING ARGS...)")
+     ,@(when failed (list '(setq et--checker-failed t)))
      (apply #'et--checker-diagnostic ',severity args)
      nil))
 
-(et--define-diagnostics-function et-checker-err error)
+(et--define-diagnostics-function et-checker-err error t)
 (et--define-diagnostics-function et-checker-warn warning)
 (et--define-diagnostics-function et-checker-hint hint)
 
@@ -413,6 +429,10 @@ RETURN is a parsable expression for the return type.
     ;; Rebase them to be relative to et--checker-expr
     (cl-loop for (p severity message) in (et-result-diagnostics sub-result)
              do (et--checker-diagnostic severity (append path p) message))
+
+    ;; If the child failed, then this one failed as well
+    (when (et-result-failed sub-result)
+      (setq et--checker-failed t))
 
     ;; Update the current expr to be the new compiled version
     (setf (nth path-last parent-expr) (et-result-compiled sub-result))
