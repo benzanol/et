@@ -445,7 +445,7 @@ subtype of super-arg."
          (_ (valid-if nil))))
 
       ('(ConsFull PList)
-       (et--cons-is-plist sub-args super-args co iso))
+       (et--cons-is-plist sub-args super-args co))
 
       ('(Plist Plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
@@ -455,26 +455,29 @@ subtype of super-arg."
 
       (_ (valid-if nil)))))
 
-(defun et--cons-is-plist (cons-args plist-args co _co-literal)
-  "Constraints for ConsFull (a plist cons) to be a subtype of PList.
-A plist is structured as (PROP VAL PROP VAL ...), so a ConsFull whose
-car is the property name must have a cdr that is itself a ConsFull
-whose car is the value and whose cdr covers the remaining plist."
+(defun et--cons-is-plist (cons-args plist-args co)
+  "Constraints for ConsFull to be a subtype of PList.
+A plist is a flat list (K1 V1 K2 V2 ...).  The ConsFull car is a key.
+If it matches a required PList key, the cdr must be a cons whose car
+satisfies that key's value type and whose cdr covers the remaining
+keys.  If it does not match, the cdr must be a cons (skipping the
+value) whose cdr still covers all required keys.  Extra keys are
+allowed and order does not matter."
   (let ((car-read (et-expand-all-aliases (nth 0 cons-args)))
         (cdr-read (nth 2 cons-args)))
     (pcase (et-type-cases car-read)
       (`(,(cl-struct et-type-case
                      (value (cl-struct et-datatype (name 'Literal) (args `(,prop))))))
-       (let ((pval (plist-get plist-args prop)))
-         (if (null pval) (et-ql (Q:NEVER))
-           (let ((rest-plist (copy-tree plist-args)))
-             (cl-remf rest-plist prop)
-             ;; cdr-read must be a cons of (VAL . remaining-plist)
-             (funcall co cdr-read
-                      (et-alias 'ConsR pval
-                                (if rest-plist
-                                    (apply #'et-dt 'PList rest-plist)
-                                  (et-literal nil))))))))
+       (let ((pval (plist-get plist-args prop))
+             (rest-plist (copy-tree plist-args)))
+         (when pval (cl-remf rest-plist prop))
+         (let ((tail (if rest-plist
+                         (apply #'et-dt 'PList rest-plist)
+                       (et-any))))
+           (funcall co cdr-read
+                    (if pval
+                        (et-alias 'ConsR pval tail)
+                      (et-alias 'ConsR (et-any) tail))))))
       (_ (et-ql (Q:NEVER))))))
 
 
@@ -1442,8 +1445,8 @@ which are invalid for types."
 
  ;; Check cons is plist
  ;; ConsFull representing (:a 1 :b 2) is a subtype of PList<:a Integer :b Integer>
- (et-subtype? (et ConsR<@:a~ConsR<1~ConsR<@:b~ConsR<2~Nil>>>>)
-              (et PList<:a~Integer~:b~Integer>))
+ (et-subtype? (et TupleR @:b %hi @:c 5 @:a 1 @:b 4)
+              (et PList<:a~Integer~:b~String>))
 
  ;; Wrong value type: (:a "hi" :b 2) is NOT a subtype of PList<:a Integer :b Integer>
  (not (et-subtype? (et ConsR<@:a~ConsR<%hi~ConsR<@:b~ConsR<2~Nil>>>>)
