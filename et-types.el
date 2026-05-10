@@ -335,7 +335,7 @@
 
  (et-assert-call ListR<Integer> cdr ListR<Integer>)
  (et-assert-call ListR<Integer>|String cdr ListR<Integer>|ConsR<Nil~String>)
- (et-assert-call-errors car ListR<Integer>|ConsR<String~nil>|String))
+ (et-assert-call-errors car ListR<Integer>|ConsR<String~Nil>|String))
 
 
 ;;;;; setcar

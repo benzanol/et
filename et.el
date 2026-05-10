@@ -219,6 +219,7 @@ An list of (NAME PLIST), where PLIST has the following properties:
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
+    ;; Literal<VALUE> is a type matching only the value VALUE
     (Literal :args (CONST) :overlap nil :predicate (lambda (v me) (equal v me)))
     (NonNil :args nil :overlap t :predicate (lambda (v) v))
     (Symbol :args nil :overlap (Function DynFunction) :predicate symbolp)
@@ -229,15 +230,31 @@ An list of (NAME PLIST), where PLIST has the following properties:
     (Positive :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (> v 0))))
     (Negative :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (< v 0))))
     (String :args nil :overlap nil :predicate stringp)
+    ;; ConsFull<CAR-READ CAR-WRITE CDR-READ CDR-WRITE> is a cons cell.
+    ;; CAR-READ/CDR-READ are the output types of calling car/cdr on
+    ;; the cons cell. CAR-WRITE/CDR-WRITE are the types that are valid
+    ;; to write to the cons cell. The most general cons cell is thus
+    ;; ConsFull<Any Never Any Never>.
     (ConsFull :args (CO CONTRA CO CONTRA) :overlap (Function DynFunction PList) :intersect t
               :predicate (lambda (v l _1 r _2) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
+    ;; VectorFull<ELEM-READ ELEM-WRITE> has the same semantics as
+    ;; ConsFull.
     (VectorFull :args (CO CONTRA) :overlap nil :intersect t
                 :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+    ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
+    ;; input and output type.
     (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
+    ;; DynFunction<ARGLIST-MATCHER OUTPUT-STRUCTURE> is a
+    ;; function whose output depends on the input. For a given
+    ;; ARGLIST-TYPE, the output of the function is determined by
+    ;; inferring ARGLIST-TYPE against ARGLIST-MATCHER, with
+    ;; OUTPUT-STRUCTURE as the output.
     (DynFunction :args (CONST CONST) :overlap nil)
+    ;; PList<PROP1 VAL1 PROP2 VAL2 ...> is a covariant, unordered
+    ;; plist.
     (PList
      :args (lambda (args)
-             (cl-loop for (prop _val) on args by #'cddr
+             (cl-loop for (_prop _val) on args by #'cddr
                       nconc (list 'CONST 'ISO)))
      :overlap nil
      :intersect
@@ -441,7 +458,8 @@ structure which can be parsed by `et-parse-type'.")
 
 (defun et--alias-call (name args)
   "Call the alias expansion function for alias NAME with args ARGS."
-  (let ((type-fn (or (car (alist-get name et-aliases)) (error "Alias %s is not defined" name))))
+  (let ((type-fn (or (car (alist-get name et-aliases))
+                     (error "Type %s is not defined" name))))
     (apply type-fn args)))
 
 (defun et-alias-expand (alias)
@@ -490,12 +508,12 @@ structure which can be parsed by `et-parse-type'.")
 
 (et-defalias AlistR (key val) (ListR (ConsR ,key ,val)))
 
-(defun et--expand-tuple (cons args)
+(defun et--expand-tuple-spec (cons args)
   (if (null args) 'Nil
-    (et-q (,cons ,(car args) ,(et--expand-tuple cons (cdr args))))))
+    (et-q (,cons ,(car args) ,(et--expand-tuple-spec cons (cdr args))))))
 
-(et-defalias TupleR (&rest args) ,(et--expand-tuple 'ConsR args))
-(et-defalias Args (&rest args) ,(et--expand-tuple 'ConsR args))
+(et-defalias TupleR (&rest args) ,(et--expand-tuple-spec 'ConsR args))
+(et-defalias Args (&rest args) ,(et--expand-tuple-spec 'ConsR args))
 
 
 ;;;; Type struct
@@ -1709,6 +1727,31 @@ If matching fails, return nil."
        (cl-loop for gen in (et-matcher-generics matcher)
                 for gen-type in (append gen-results extra-repls)
                 collect (cons gen gen-type))))))
+
+
+;;;; Funcall
+
+(defun et--funcall (func-type arglist-type)
+  "Determine the return type of calling FUNC-TYPE with ARGLIST-TYPE.
+
+Returns the output type, or nil if the call is invalid."
+  (et--verify-type func-type)
+  (et--verify-type arglist-type)
+
+  (setq func-type (et-expand-all-aliases func-type))
+
+  (cl-loop for case in (et-type-cases func-type)
+           for val = (et-type-case-value case)
+           for result =
+           (pcase val
+             ((cl-struct et-datatype (name 'Function) (args `(,param-type ,return-type)))
+              (and (et-subtype? arglist-type param-type) return-type))
+             ((cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,output-struct)))
+              (et--infer matcher arglist-type output-struct))
+             (_ nil))
+           unless result return nil
+           collect result into results
+           finally return (apply #'et--supersect results)))
 
 
 ;;; ============================================================

@@ -117,11 +117,19 @@ checked."
 (defvar et--checker-expr nil
   "The current expr.")
 
+(defun et--read-only-tuple (types)
+  (if (null types) (et-literal nil)
+    (et-alias 'ConsR (car types) (et--read-only-tuple (cdr types)))))
+
 (defun et--check (expr)
   "Generates an `et-result' resulting from typechecking EXPR.
 
 If EXPR is self quoting (a number, string, etc.), the resulting type
 will be a literal type representing the literal value.
+
+If EXPR is a symbol VAR, then check if it exists as a variable in the
+local scope. Return not just the variable's type, but also {typeof VAR}
+so that future calls can perform type narrowing for the variable.
 
 Otherwise, EXPR is (FUNC ARGS...).
 
@@ -133,25 +141,36 @@ a copy of EXPR. A checker function should set or mutate
 perform compilation. The `:compiled' field of the result will be set to
 the final value of `et--checker-expr'.
 
-If FUNC is a symbol with the `et-function-type' property set, the
-"
+If FUNC is a symbol with the `et-function-type' property set to an
+`et-type', then the arguments to the function will first be checked
+individually, and then will be passed to `et--funcall' as a list to
+determine the output type."
   (let* ((et--checker-diagnostics nil)
          (et--checker-expr (copy-tree expr))
          (return-type nil))
 
     (pcase expr
       (`(,func . ,_args)
-       (if-let ((checker (get func 'et-checker)))
-           (condition-case out (or (funcall checker) (et-never))
-             (et-checker-fatal)
-             (error
-              (et-checker-err "Checker for `%s' threw error: %s" func (error-message-string out)))
-             (:success
-              (if (et-type-p out) (setq return-type out)
-                (et-checker-err "Checker for `%s' had invalid return: %s" func out))))
+       (pcase nil
+         ;; Custom checker
+         ((and (let checker (get func 'et-checker)) (guard checker))
+          (condition-case out (funcall checker)
+            (et-checker-fatal)
+            (error (et-checker-err "Checker for `%s' threw error: %s" func (error-message-string out)))
+            (:success (if (or (null out) (et-type-p out)) (setq return-type out)
+                        (et-checker-err "Checker for `%s' had invalid return: %s" func out)))))
 
-         (et-checker-err '(0) "No checker for `%s'" func)))
+         ;; Function type property
+         ((and (let func-type (get func 'et-function-type)) (guard func-type))
+          (let* ((arg-types (mapcar #'et-checker-sub (number-sequence 1 (1- (length et--checker-expr)))))
+                 (args-type (et--read-only-tuple arg-types))
+                 (output-type (et--funcall func-type args-type)))
+            (if output-type (setq return-type output-type)
+              (et-checker-err "Function %s not defined on %s" (et-pp func-type) (et-pp args-type)))))
 
+         (_ (et-checker-err '(0) "No type for `%s'" func))))
+
+      ;; Type check a variable
       ((and sym (pred symbolp) (guard sym) (guard (not (eq sym t))))
 
        (if-let* ((var (et-get-symbol-var sym)))
@@ -166,7 +185,7 @@ If FUNC is a symbol with the `et-function-type' property set, the
       (expr (setq return-type (et-literal expr))))
 
     (cl-assert (or et--checker-diagnostics return-type))
-    (make-et-result :type return-type
+    (make-et-result :type (or return-type (et-never))
                     :diagnostics (nreverse et--checker-diagnostics)
                     :compiled et--checker-expr)))
 
@@ -338,52 +357,39 @@ If FUNC is a symbol with the `et-function-type' property set, the
 
 ;;;; Type checker
 
-(defun et--type-checker-body (arglist-matcher return-struct)
-  (let* ((arg-types (cl-loop for _expr in (cdr et--checker-expr)
-                             for idx upfrom 1
-                             collect (et-checker-sub idx)))
-         (args-type (cl-loop with acc = (et-literal nil)
-                             for arg-type in (nreverse arg-types)
-                             do (setq acc (et-alias 'ConsR arg-type acc))
-                             finally return acc)))
-    (or (et--infer arglist-matcher args-type return-struct)
-        (et-checker-err "Expected %s, got %s"
-                        (et-pp-matcher arglist-matcher) (et-pp args-type)))))
-
 (defmacro et-define-type-checker (funcs &rest arguments)
-  "Define a checker using argument and return types.
+  "Define a type checker by assigning a function type to FUNCS.
 
-FUNCS is the function to define the checker for, or a list of functions
-to define the checker for.
+FUNCS is the function or list of functions to define the checker for.
 
-GENERICS is a vector of symbols, representing generic variables. Each
-generic variable should be uppercase.
+GENERICS is an optional vector of generic type variable symbols.
 
-ARGLIST is a parsable expression to use to match the arglist against.
+ARGLIST is a parsable expression for the argument list matcher.
 
-RETURN is a parsable expression to use for the return type. This can use
-the generic variable names as aliases, and they will be correctly
-substituted.
+RETURN is a parsable expression for the return type.
 
 \(fn FUNC [GENERICS] ARGLIST RETURN)"
   (declare (indent 2))
 
-  (let ((generics
-         (when (vectorp (car arguments))
-           ;; Make sure the generics have the correct format
-           (cl-loop for var across (car arguments)
-                    do (or (symbolp var) (error "Generic vars must be symbols"))
-                    do (or (let ((case-fold-search nil))
-                             (string-match-p "^[A-Z]" (format "%s" var)))
-                           (error "Generic vars must start with an uppercase letter")))
-           (append (pop arguments) nil))))
+  (let* ((generics
+          (when (vectorp (car arguments))
+            (cl-loop for var across (car arguments)
+                     do (or (symbolp var) (error "Generic vars must be symbols"))
+                     do (or (let ((case-fold-search nil))
+                              (string-match-p "^[A-Z]" (format "%s" var)))
+                            (error "Generic vars must start with an uppercase letter")))
+            (append (pop arguments) nil)))
+         (arglist-spec (car arguments))
+         (return-spec (cadr arguments))
+         (matcher (et-parse-matcher arglist-spec generics))
+         (output-struct (et-parse-structure return-spec generics))
+         (func-type (et-dt 'DynFunction matcher output-struct)))
     (unless (eq (length arguments) 2)
       (error "Incorrect number of arguments"))
 
-    `(et-define-checker ,funcs
-       (et--type-checker-body
-        ,(et-parse-matcher (car arguments) generics)
-        (copy-tree ',(et-parse-structure (cadr arguments) generics))))))
+    (cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
+             collect `(setf (get ',func 'et-function-type) ,func-type) into exprs
+             finally return `(ignore ,@exprs))))
 
 
 ;;; ============================================================
