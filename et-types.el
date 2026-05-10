@@ -106,6 +106,24 @@
  (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
    (lambda ([x Integer]) -> Number "ignored" x)))
 
+(et-test
+ ;; Docstring with @et-generics and @et-return, using &key
+ (et-assert-resolve (DynFunction ,(et-matcher [T] ConsR T (PList :scale Number))
+                                 (((S:ALIAS VectorR (((S:GENERIC T)))))))
+   (lambda (x &key scale)
+     "@et-generics [T]
+X : T
+SCALE : Number
+@et-return VectorR<T>"
+     x))
+
+ ;; Docstring with no @et-generics and no @et-return, using &optional and &rest
+ (et-assert-resolve (Function ConsR<Integer~Nil|ConsR<String~ListR<Any>>> Integer)
+   (lambda (x &optional y &rest rest)
+     "X : Integer
+Y : String"
+     x)))
+
 
 ;;; ============================================================
 ;;; Control flow

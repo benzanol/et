@@ -947,9 +947,19 @@ Matchers only:
    ;; Name or Name<...>
    ((string-match "^\\([-a-zA-Z0-9:]+\\)\\(?:<\\(.*\\)>\\)?$" s)
     (let* ((name (intern (match-string 1 s)))
-           (inner (match-string 2 s)))
-      (cl-loop for arg-str in (when inner (et--split-at-depth inner ?~))
-               collect (list :parse arg-str) into args
+           (inner (match-string 2 s))
+           (arg-strs (when inner (et--split-at-depth inner ?~))))
+      (cl-loop for s in arg-strs
+               for role in (if (et--datatype-name? name) (et--datatype-arg-roles name arg-strs)
+                             (make-list (length arg-strs) nil))
+               collect (if (not (eq role 'CONST)) (list :parse s)
+                         (cond ((string-match-p ":.*" s) (intern s))
+                               ((string-match-p "@.*" s) (intern (substring s 1)))
+                               ((string-match-p "%.*" s) (substring s 1))
+                               ((string-match-p "[0-9]+\\(\\.[0-9]+\\)?" s)
+                                (string-to-number s))
+                               (t (error "Invalid constant format: %s" s))))
+               into args
                finally return (et-parse-structure (cons name args) generics))))
 
    (t (error "Invalid parse syntax: %s" s))))
@@ -1201,7 +1211,15 @@ which are invalid for types."
  (equal (et Never)
         (et infer ListR<Number> [T] ListR<T&Integer> VectorR<T> Never))
  (equal (et VectorR<Never>)
-        (et infer Nil [T] ListR<T&Integer> VectorR<T> Never)))
+        (et infer Nil [T] ListR<T&Integer> VectorR<T> Never))
+
+ ;; Test constant args
+ (equal (et PList<%hello~%hi~@hello~@hi~:hello~@:hi~123~4.56>)
+        (et-dt 'PList
+               "hello" (et-literal "hi")
+               'hello (et-literal 'hi)
+               :hello (et-literal :hi)
+               123 (et-literal 4.56))))
 
 
 ;;;; To/from matcher
