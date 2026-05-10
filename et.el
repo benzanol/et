@@ -1131,7 +1131,8 @@ which are invalid for types."
 
 
 (defun et-pp-type (type)
-  (et--format-structure (et-type-to-structure type)))
+  (or (ignore-errors (et--format-structure (et-type-to-structure type)))
+      (format "%s" type)))
 
 (cl-defmethod cl-print-object ((type et-type) stream)
   (princ (format "#<%s>" (et-pp-type type)) stream))
@@ -1752,6 +1753,19 @@ Returns the output type, or nil if the call is invalid."
            unless result return nil
            collect result into results
            finally return (apply #'et--supersect results)))
+
+
+;;;; Tuple
+
+(defun et--tuple (cons types)
+  (if (null types) (et-literal nil)
+    (et-alias cons (car types) (et--tuple cons (cdr types)))))
+
+(defun et--tailed-tuple (cons types)
+  (pcase types
+    (`(,last) last)
+    (`(,next . ,rest) (et-alias cons next (et--tailed-tuple cons rest)))
+    (_ (error "No tail provided"))))
 
 
 ;;; ============================================================

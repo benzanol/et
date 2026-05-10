@@ -29,13 +29,35 @@
 ;;; Definitions
 
 (et-define-checker lambda
-  (pcase-let ((`(,input ,ret) (et-checker-funcdef 1)))
-    (et-dt 'Function input ret)))
+  (et-checker-funcdef 1))
 
-(et-define-pcase-checker defun
-    `(,_name . ,_body)
-  (pcase-let ((`(,input ,ret) (et-checker-funcdef 2)))
-    (et-dt 'Function input ret)))
+(et-define-pcase-checker defun `(,_name . ,_body)
+  (et-checker-funcdef 2))
+
+(et-test
+ ;; Inline typed args
+ (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
+   (lambda ([x Integer]) (+ x 1)))
+
+ ;; Untyped args default to Any
+ (et-assert-resolve Function<ConsR<Any~Nil>~Any>
+   (lambda (x) x))
+
+ ;; &optional — cdr is Nil|ConsR<String~Nil>
+ (et-assert-resolve (Function ConsR<Integer~Nil|ConsR<String~Nil>> Integer)
+   (lambda ([x Integer] &optional [y String]) x))
+
+ ;; Multiple body forms — return type is last
+ (et-assert-resolve Function<ConsR<Integer~ConsR<String~Nil>>~String>
+   (lambda ([x Integer] [y String]) (+ x 1) y))
+
+ ;; Empty arglist
+ (et-assert-resolve Function<Nil~Integer>
+   (lambda () 1))
+
+ ;; &rest
+ (et-assert-resolve (Function ConsR<Integer~ListR<Any>> Integer)
+   (lambda ([x Integer] &rest args) x)))
 
 (et-test
  ;; Body return type with typed args
@@ -47,7 +69,7 @@
    (lambda (x) x))
 
  ;; &optional arg becomes Nil|Type
- (et-assert-resolve Function<ConsR<Integer~ConsR<Nil|String~Nil>>~Integer>
+ (et-assert-resolve Function<ConsR<Integer~Nil|ConsR<String~Nil>>~Integer>
    (lambda ([x Integer] &optional [y String]) (+ x 1)))
 
  ;; Multiple body forms, return type is last
@@ -187,7 +209,8 @@
 
 ;;; ============================================================
 ;;; Function types
-;;;; Quoted
+;;;; Quotes
+;;;;; quote
 
 (et-define-pcase-checker quote `(,expr)
   (et-literal expr))
@@ -197,24 +220,49 @@
  (et-assert-resolve Number '1.1)
  (et-assert-resolve String '"hi")
  (et-assert-resolve Symbol 'a)
- (et-assert-error (et-root-resolve 'Integer ''1.1))
- (et-assert-error (et-root-resolve 'Integer '''1))
- (et-assert-error (et-root-resolve 'Number '''1.1))
- (et-assert-error (et-root-resolve 'String '''"hi"))
- (et-assert-error (et-root-resolve 'Symbol '''a))
+ (et-assert-no-resolve Integer '1.1)
+ (et-assert-no-resolve Integer ''1)
+ (et-assert-no-resolve Number ''1.1)
+ (et-assert-no-resolve String ''"hi")
+ (et-assert-no-resolve Symbol ''a)
 
  (et-assert-resolve ConsR<Any~Any> '(1 2 3))
  (et-assert-resolve ListR<Symbol> '(a b c))
  (et-assert-resolve ListR<Integer> '())
- (et-assert-error (et-root-resolve 'ListR<Integer> ''(1 2 '3)))
- (et-assert-error (et-root-resolve 'ListR<Integer> ''(1 2 3.3)))
- (et-assert-error (et-root-resolve 'ListR<Integer> '''(1 2 3)))
- (et-assert-error (et-root-resolve 'ListR<Integer> '''()))
+ (et-assert-no-resolve ListR<Integer> '(1 2 '3))
+ (et-assert-no-resolve ListR<Integer> '(1 2 3.3))
+ (et-assert-no-resolve ListR<Integer> ''(1 2 3))
+ (et-assert-no-resolve ListR<Integer> ''())
 
  (et-assert-resolve ConsR<Integer~Integer> '(1 . 2))
- (et-assert-error (et-root-resolve 'ConsR<Integer~Integer> ''(1 . 2.2)))
- (et-assert-error (et-root-resolve 'ConsR<Integer~Integer> ''(1.1 . 2)))
+ (et-assert-no-resolve ConsR<Integer~Integer> '(1 . 2.2))
+ (et-assert-no-resolve ConsR<Integer~Integer> '(1.1 . 2))
  (et-assert-resolve ConsR<Symbol~ListR<String>> '(a "2" "3")))
+
+
+;;;;; function
+
+(et-define-pcase-checker function `(,inner)
+  (pcase inner
+    ;; Lambda expression: typecheck it as a lambda
+    (`(lambda . ,_rest)
+     (et-checker-sub 1))
+
+    ;; Symbol: look up its function type
+    ((and sym (pred symbolp))
+     (if-let* ((func-type (get sym 'et-function-type)))
+         func-type
+       (et-checker-err "No function type for `%s'" sym)))
+
+    ;; Anything else is invalid
+    (_ (et-checker-err "Invalid argument to function: %s" inner))))
+
+(et-test
+ (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
+   #'(lambda ([x Integer]) x))
+
+ (not (et-never-p (et-result-type (et--check '#'+))))
+ (et-never-p (et-result-type (et--check '#'function))))
 
 
 ;;;; Arithmetic
@@ -255,14 +303,14 @@
 
 (et-test
  (et-assert-resolve ConsR<Integer~String> (cons 1 "2"))
- (et-assert-error (et-root-resolve 'ConsR<Integer~String> '(cons "1" 2)))
+ (et-assert-no-resolve ConsR<Integer~String> (cons "1" 2))
  (et-assert-resolve ConsR<Integer~ListR<String>> (cons 1 nil))
  (et-assert-resolve ConsR<Integer~ListR<String>> (cons 1 (cons "2" nil)))
 
  (et-assert-resolve ListR<Integer> (cons 1 (cons 2 nil)))
- (et-assert-error (et-root-resolve 'ListR<Integer> '(cons 1 (cons "2" nil))))
- (et-assert-error (et-root-resolve 'ListR<Integer> '(cons "1" (cons 2 nil))))
- (et-assert-error (et-root-resolve 'ListR<Integer> '(cons 1 (cons 2 t)))))
+ (et-assert-no-resolve ListR<Integer> (cons 1 (cons "2" nil)))
+ (et-assert-no-resolve ListR<Integer> (cons "1" (cons 2 nil)))
+ (et-assert-no-resolve ListR<Integer> (cons 1 (cons 2 t))))
 
 
 ;;;;; list
@@ -271,12 +319,12 @@
 
 (et-test
  (et-assert-resolve ConsR<Integer~ListR<String>> (list 1 "2"))
- (et-assert-error (et-root-resolve 'ConsR<Integer~String> '(list "1" 2)))
- (et-assert-error (et-root-resolve 'ConsR<Integer~String> '(list)))
+ (et-assert-no-resolve ConsR<Integer~String> (list "1" 2))
+ (et-assert-no-resolve ConsR<Integer~String> (list))
 
  (et-assert-resolve ListR<Integer> (list 1 2 3))
  (et-assert-resolve ListR<Integer> (list 1))
- (et-assert-error (et-root-resolve 'ListR<Integer> '(list 1 "2" 3))))
+ (et-assert-no-resolve ListR<Integer> (list 1 "2" 3)))
 
 
 ;;;;; car
@@ -285,12 +333,12 @@
 
 (et-test
  (et-assert-resolve Integer (car (list 1 2.2 3)))
- (et-assert-error (et-root-resolve 'Integer '(car (list 1.1 2 3))))
+ (et-assert-no-resolve Integer (car (list 1.1 2 3)))
  (et-assert-resolve Integer (car (cons 1 "3")))
  (et-assert-resolve ListR<Integer> (car (cons (list 1) "3")))
  (et-assert-resolve ConsR<Integer~Any> (car (cons (list 1) "3")))
  (et-assert-resolve Integer (car (car (cons (list 1) "3"))))
- (et-assert-error (et-root-resolve 'Integer '(car (car (cons (list 1.1) "3")))))
+ (et-assert-no-resolve Integer (car (car (cons (list 1.1) "3"))))
 
  (et-assert-call Never cdr Never)
  (et-assert-call Nil cdr Nil)
@@ -319,19 +367,19 @@
 (et-test
  (et-assert-resolve ListR<Number> (cdr (list 1 2.2 3)))
  (et-assert-resolve ListR<Integer> (cdr (list 1.1 2 3)))
- (et-assert-error (et-root-resolve 'ListR<Integer> '(car (list 1 2.2 3))))
+ (et-assert-no-resolve ListR<Integer> (car (list 1 2.2 3)))
 
  (et-assert-resolve Integer (cdr (cons "1" 2)))
- (et-assert-error (et-root-resolve 'Integer '(cdr (cons 1 "2"))))
+ (et-assert-no-resolve Integer (cdr (cons 1 "2")))
 
  (et-assert-resolve ListR<Integer> (cdr (cons "1" (list 2))))
  (et-assert-resolve ConsR<Integer~Any> (cdr (cons "1" (list 2))))
  (et-assert-resolve ConsR<Integer~Boolean> (cdr (cons "1" (list 2))))
- (et-assert-error (et-root-resolve 'ConsR<Integer~Boolean> '(cdr (cons "1" (list 2 3)))))
+ (et-assert-no-resolve ConsR<Integer~Boolean> (cdr (cons "1" (list 2 3))))
  (et-assert-resolve Integer (car (cdr (cons "1" (list 2)))))
 
  (et-assert-resolve Boolean (cdr (cdr (cdr (list 1 2 3)))))
- (et-assert-error (et-root-resolve 'Boolean '(cdr (cdr (list 1 2 3)))))
+ (et-assert-no-resolve Boolean (cdr (cdr (list 1 2 3))))
 
  (et-assert-call ListR<Integer> cdr ListR<Integer>)
  (et-assert-call ListR<Integer>|String cdr ListR<Integer>|ConsR<Nil~String>)
@@ -407,6 +455,49 @@
  ;; Approximating to never would incorrectly determine that this call will always determine nil.
  ;; So, in order to ensure correctness, it must assume a SUPERSET of the real intersection (by picking either Positive or Integer.)
  (not (et-subtype? (et-typecheck-call integerp Positive&{::$a}) (et Nil))))
+
+
+;;;; Funcall
+
+(et-define-checker apply
+  (let* ((func-type (et-checker-sub 1))
+         (args-type (et--tailed-tuple 'ConsR (et-checker-remaining 2)))
+         (result (et--funcall func-type args-type)))
+    (or result
+        (et-checker-err "Cannot apply %s with args %s" (et-pp func-type) (et-pp args-type)))))
+
+(et-define-checker funcall
+  (let* ((func-type (et-checker-sub 1))
+         (args-type (et--tuple 'ConsR (et-checker-remaining 2)))
+         (output-type (et--funcall func-type args-type)))
+    (or output-type
+        (et-checker-err "Cannot call %s with args %s" (et-pp func-type) (et-pp args-type)))))
+
+
+(et-test
+ (et-assert-resolve Integer (funcall (lambda ([x Integer] [y Integer]) x) 1 2))
+ (et-assert-resolve-errors (funcall (lambda ([x Integer] [y Integer]) x) 1 2.5))
+ (et-assert-resolve-errors (funcall (lambda ([x Integer] [y Integer]) x) 1))
+ (et-assert-resolve-errors (funcall (lambda ([x Integer]) x) 1 2))
+ (et-assert-resolve-errors (funcall (lambda () x) 1))
+ (et-assert-resolve-errors (funcall (lambda ([x Integer]) x)))
+
+ (et-assert-resolve Integer (apply (lambda ([x Integer] [y Integer] [z Integer]) x) (list 1 2 3)))
+ (et-assert-resolve Integer (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 2 (list 3)))
+ (et-assert-resolve Integer (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 2 3 nil))
+ (et-assert-resolve-errors (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 2 (list 3 4)))
+ (et-assert-resolve-errors (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 (list 3)))
+ (et-assert-resolve-errors (apply (lambda ([x Integer] [y Integer] [z Integer]) x) (list 3)))
+
+ (et-assert-resolve Integer (apply (lambda () 0) nil))
+ (et-assert-resolve-errors (apply (lambda () 0) 1 nil))
+
+ (et-assert-resolve Integer (apply #'+ 1 2 (list 3 4)))
+ (et-assert-resolve Integer (apply #'+ 1 2 nil))
+ (et-assert-resolve Number (apply #'+ 1 2 (list 3 4.4 5)))
+ (et-assert-resolve 0 (apply #'+ nil))
+ (et-assert-resolve-errors (apply #'+ 1 2 (list "3")))
+ (et-assert-resolve-errors (apply #'+ 1 2 3)))
 
 
 ;;; ============================================================
