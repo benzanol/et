@@ -118,7 +118,23 @@ checked."
   "The current expr.")
 
 (defun et--check (expr)
-  "Returns the type of the current expr, if typechecking did not error."
+  "Generates an `et-result' resulting from typechecking EXPR.
+
+If EXPR is self quoting (a number, string, etc.), the resulting type
+will be a literal type representing the literal value.
+
+Otherwise, EXPR is (FUNC ARGS...).
+
+If FUNC is a symbol with the `et-checker' property set, the value of
+`et-checker' is assumed to be a checker function. A checker function has
+no arguments, and runs in an environment with `et--checker-expr' set to
+a copy of EXPR. A checker function should set or mutate
+`et--checker-expr' in order to remove type annotations or otherwise
+perform compilation. The `:compiled' field of the result will be set to
+the final value of `et--checker-expr'.
+
+If FUNC is a symbol with the `et-function-type' property set, the
+"
   (let* ((et--checker-diagnostics nil)
          (et--checker-expr (copy-tree expr))
          (return-type nil))
@@ -442,27 +458,8 @@ PATH is the path to the subexpression."
   (cl-assert (vectorp gens))
   (setq gens (append gens nil))
   `(et--infer ,(et-parse-matcher matcher-spec gens)
-              ,type
+              (et-parse-type ,type)
               (et-q ,(et-parse-structure output-spec gens))))
-
-
-(defun et--infer (matcher type output-struct)
-  "Type check an expression at PATH, ensuring that it satisfied TYPE.
-
-Return the resulting type, or nil if it didn't match.
-
-TYPE is a type or an expression parseable to a type.
-
-PATH is the path to the subexpression."
-  (unless (et-type-p type) (setq type (et-parse-type type)))
-
-  (let* ((gen-results (et--sub-match matcher type)))
-    (if (eq gen-results 'INVALID) nil
-      (et-structure-to-type
-       output-struct
-       (cl-loop for gen in (et-matcher-generics matcher)
-                for gen-type in gen-results
-                collect (cons gen gen-type))))))
 
 
 ;;;; Check a function definition

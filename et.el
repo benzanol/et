@@ -784,23 +784,6 @@ ARGS is a mix of constant args (where the corresponding arg role is
 ;;; Structure
 ;;;; Parsing
 
-;; A "type structure" is a list of lists of the following form:
-;; \(`S:DT' NAME ARGS...)
-;; \(`S:ALIAS' NAME ARGS...)
-
-;; Types only:
-;; \(`S:TYPE' TYPE) - an already compiled type
-;; \(`S:BIND' VAR TYPE)
-;; \(`S:TYPEOF' VAR)
-;; \(`S:BINDS-OF' TYPE)
-;; \(`S:SUBTRACT' TYPE1 TYPE2)
-;; \(`S:INFER' GENERICS MATCHER TYPE Y-RESULT N-RESULT)
-
-;; Matchers only:
-;; \(`S:MATCHER-DNF' DNF) - an already compiled matcher dnf
-;; \(`S:GENERIC' VAR)
-;; \(`S:SET' VAR DNF)
-
 ;; Variables used for testing
 (defvar et--test-variables
   (list (cons '$a (make-et-var :name '$a :type (et-dt 'Any)))
@@ -808,6 +791,31 @@ ARGS is a mix of constant args (where the corresponding arg role is
         (cons '$c (make-et-var :name '$c :type (et-dt 'Any)))))
 
 (defun et-parse-structure (spec generics)
+  "Compile a spec to a type structure.
+
+A structure is a general format that can be parsed to either a matcher
+or a type. It is a list of cases, each of which is a list of factors. A
+factor is one of the following:
+
+\(`S:DT' NAME ARGS...)
+\(`S:ALIAS' NAME ARGS...)
+\(`S:GENERIC' VAR) - In matchers, this compiles to a matcher generic. In
+  types, you must provide replacements for each generic when parsing the
+  structure to a type.
+
+Types only:
+\(`S:TYPE' TYPE) - an already compiled type
+\(`S:BIND' VAR TYPE)
+\(`S:TYPEOF' VAR)
+\(`S:BINDS-OF' TYPE)
+\(`S:SUBTRACT' TYPE1 TYPE2)
+\(`S:INFER' GENERICS MATCHER TYPE Y-RESULT N-RESULT)
+
+Matchers only:
+\(`S:MATCHER-DNF' DNF) - an already compiled matcher dnf
+\(`S:SET' VAR DNF)"
+
+
   (let ((case-fold-search nil)
         (parse (lambda (arg) (et-parse-structure arg generics))))
 
@@ -1019,60 +1027,57 @@ Also, there are certain structure types that are designed for matchers,
 which are invalid for types."
 
   (let* ((to-type (lambda (sub) (et-structure-to-type sub gen-repls))))
-    (cl-loop for factors in structure
-             collect
-             (cl-loop for factor in factors
-                      collect
-                      ;; Return a list of cases
-                      (pcase factor
-                        (`(S:TYPE ,type) (apply #'list (et-type-cases type)))
-                        (`(S:GENERIC ,name)
-                         (et-type-cases
-                          (or (alist-get name gen-repls)
-                              (error "Replacement not provided for generic %s" gen-repls))))
-                        (`(S:DT ,name . ,args)
-                         (let ((new-args (et--datatype-map-type-args name args to-type)))
-                           (list (make-et-type-case :value (make-et-datatype :name name :args new-args)))))
-                        (`(S:ALIAS ,name . ,args)
-                         (list (make-et-type-case
-                                :value (make-et-alias
-                                        :name name
-                                        :args (mapcar to-type args)))))
-                        (`(S:BIND ,var ,struct)
-                         (list (make-et-type-case
-                                :value (make-et-datatype :name 'Any)
-                                :binds (list (cons var (funcall to-type struct))))))
-                        (`(S:TYPEOF ,var)
-                         (list (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var))))
-                        (`(S:BINDS-OF ,struct)
-                         (let* ((type (funcall to-type struct)))
-                           (if (et-never-p type) nil
-                             (list (make-et-type-case
-                                    :value (make-et-datatype :name 'Any)
-                                    :binds (et--type-binds type))))))
-                        (`(S:SUBTRACT ,type1 ,type2)
-                         (et-type-cases (et--subtract (funcall to-type type1)
-                                                      (funcall to-type type2))))
-                        (`(S:INFER ,type ,gens ,matcher ,yes ,no)
-                         (setq type (funcall to-type type))
-                         (setq matcher (make-et-matcher
-                                        :generics gens
-                                        :dnf (et-structure-to-matcher-dnf matcher gens)))
-                         (let* ((result (et--sub-match matcher type)))
-                           (et-type-cases
-                            (if (eq result 'INVALID) (et-structure-to-type no gen-repls)
-                              (let* ((new-repls (cl-loop for gen in gens
-                                                         for gen-type in result
-                                                         collect (cons gen gen-type))))
-                                (et-structure-to-type yes (append new-repls gen-repls)))))))
-                        (_ (error "Invalid structure factor for type: %s" factor)))
-                      into and-case-lists
-                      finally return
-                      (apply #'et--supersect
-                             (cl-loop for cs in and-case-lists
-                                      collect (make-et-type :cases cs))))
-             into or-types
-             finally return (apply #'et--or or-types))))
+    (cl-loop
+     for factors in structure
+     collect
+     (cl-loop
+      for factor in factors
+      collect
+      ;; Return a list of cases
+      (pcase factor
+        (`(S:TYPE ,type) (apply #'list (et-type-cases type)))
+        (`(S:GENERIC ,name)
+         (et-type-cases
+          (or (alist-get name gen-repls)
+              (error "Replacement not provided for generic %s" gen-repls))))
+        (`(S:DT ,name . ,args)
+         (let ((new-args (et--datatype-map-type-args name args to-type)))
+           (list (make-et-type-case :value (make-et-datatype :name name :args new-args)))))
+        (`(S:ALIAS ,name . ,args)
+         (list (make-et-type-case
+                :value (make-et-alias
+                        :name name
+                        :args (mapcar to-type args)))))
+        (`(S:BIND ,var ,struct)
+         (list (make-et-type-case
+                :value (make-et-datatype :name 'Any)
+                :binds (list (cons var (funcall to-type struct))))))
+        (`(S:TYPEOF ,var)
+         (list (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var))))
+        (`(S:BINDS-OF ,struct)
+         (let* ((type (funcall to-type struct)))
+           (if (et-never-p type) nil
+             (list (make-et-type-case
+                    :value (make-et-datatype :name 'Any)
+                    :binds (et--type-binds type))))))
+        (`(S:SUBTRACT ,type1 ,type2)
+         (et-type-cases (et--subtract (funcall to-type type1)
+                                      (funcall to-type type2))))
+        (`(S:INFER ,type ,gens ,matcher ,yes ,no)
+         (setq type (funcall to-type type))
+         (setq matcher (make-et-matcher
+                        :generics gens
+                        :dnf (et-structure-to-matcher-dnf matcher gens)))
+         (et-type-cases (or (et--infer matcher type yes gen-repls)
+                            (et-structure-to-type no))))
+        (_ (error "Invalid structure factor for type: %s" factor)))
+      into and-case-lists
+      finally return
+      (apply #'et--supersect
+             (cl-loop for cs in and-case-lists
+                      collect (make-et-type :cases cs))))
+     into or-types
+     finally return (apply #'et--or or-types))))
 
 
 (defun et-type-to-structure (type)
@@ -1113,8 +1118,7 @@ which are invalid for types."
 (cl-defmethod cl-print-object ((type et-type) stream)
   (princ (format "#<%s>" (et-pp-type type)) stream))
 
-(defun et-pp (obj)
-  (cl-prin1-to-string obj))
+(defalias 'et-pp #'cl-prin1-to-string)
 
 
 
@@ -1584,7 +1588,7 @@ returning A itself is a valid approximation."
 (defun et--match-satisfy-constraints-biggest (generics constraints)
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
-Returns the symbol NEVER if invalid."
+Returns the symbol `INVALID' if invalid."
   (if (member '(Q:NEVER) constraints) 'INVALID
     (cl-loop
      for gen in generics
@@ -1607,7 +1611,7 @@ Returns the symbol NEVER if invalid."
 (defun et--match-satisfy-constraints-smallest (generics constraints)
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
-Returns the symbol NEVER if invalid.
+Returns the symbol `INVALID' if invalid.
 
 However, unlike `et--match-satisfy-constraints-biggest', this allows
 values to be the never type."
@@ -1683,6 +1687,28 @@ values to be the never type."
            collect (make-et-type-case :value (et-type-case-value case) :binds binds)
            into cases
            finally return (make-et-type :cases cases)))
+
+
+;;;; Infer
+
+(defun et--infer (matcher type output-struct &optional extra-repls)
+  "Infer TYPE against MATCHER, then convert OUTPUT-STRUCT to a type.
+
+Specifically, this will first call `et--sub-match' on MATCHER and TYPE
+to determine values for the generics defined in MATCHER. Then, if this
+succeeds, it will convert OUTPUT-STRUCT to a type, replacing each
+generic with the value determined by `et--sub-match', as well as
+EXTRA-REPLS if provided.
+
+If matching fails, return nil."
+
+  (let* ((gen-results (et--sub-match matcher type)))
+    (if (eq gen-results 'INVALID) nil
+      (et-structure-to-type
+       output-struct
+       (cl-loop for gen in (et-matcher-generics matcher)
+                for gen-type in (append gen-results extra-repls)
+                collect (cons gen gen-type))))))
 
 
 ;;; ============================================================
