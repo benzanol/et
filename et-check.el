@@ -161,7 +161,7 @@ determine the output type."
           (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
                  (output-type (et--funcall func-type args-type)))
             (if output-type (setq return-type output-type)
-              (et-checker-err "Function %s not defined on %s" (et-pp func-type) (et-pp args-type)))))
+              (et-checker-err "Function %s not defined on %s" func (et-pp args-type)))))
 
          (_ (et-checker-err '(0) "No type for `%s'" func))))
 
@@ -519,13 +519,16 @@ The resulting structure is a nested ConsR chain where:
 (defun et--parse-docstring-types (docstring)
   "Parse type annotations from DOCSTRING.
 
-Returns (GENERICS . ARG-SPECS) where GENERICS is a list of generic
-symbols (or nil) and ARG-SPECS is an alist of (DOWNCASE-SYMBOL . SPEC).
+Returns (GENERICS RETURN-SPEC . ARG-SPECS) where GENERICS is a list of
+generic symbols (or nil), RETURN-SPEC is a type spec for the return type
+\(or nil), and ARG-SPECS is an alist of (DOWNCASE-SYMBOL . SPEC).
 
 Recognizes:
   @et-generics [T U] — declares generic type variables
+  @et-return TYPE-SPEC — declares the return type
   ARGNAME : TYPE-SPEC — assigns TYPE-SPEC to the lowercased ARGNAME"
   (let* ((generics nil)
+         (return-spec nil)
          (arg-specs nil))
     (when (and docstring (stringp docstring))
       ;; Parse @et-generics VECTOR
@@ -533,6 +536,13 @@ Recognizes:
         (let* ((gen-expr (car (read-from-string (match-string 1 docstring)))))
           (when (vectorp gen-expr)
             (setq generics (append gen-expr nil)))))
+
+      ;; Parse @et-return TYPE-SPEC
+      (when (string-match "@et-return\\s-+\\(\\S-.*\\)" docstring)
+        (let* ((type-str (match-string 1 docstring))
+               (type-expr (ignore-errors (car (read-from-string type-str)))))
+          (when type-expr
+            (setq return-spec type-expr))))
 
       ;; Parse ARGNAME : TYPE-SPEC
       (let ((pos 0))
@@ -545,7 +555,7 @@ Recognizes:
             (when type-expr
               (push (cons name type-expr) arg-specs)))
           (setq pos (match-end 0)))))
-    (cons generics (nreverse arg-specs))))
+    (cons generics (cons return-spec (nreverse arg-specs)))))
 
 
 ;;;;; Arglist parsing
@@ -622,57 +632,91 @@ START-PATH points to the first element after the keyword (e.g. 1 for
 lambda, 2 for defun). That position may hold a generics vector
 \(followed by the arglist) or the arglist directly.
 
+A return type can be declared either inline with -> after the arglist:
+  (lambda ([x Integer]) -> Integer x)
+or via @et-return in the docstring. Inline takes precedence.
+
+When a return type is declared, the body's inferred type is checked
+against it and the declared type is used.
+
 Returns a Function type when no generics are present, or a DynFunction
 type when generics are present."
   (let* ((elems (nthcdr start-path et--checker-expr))
          (generics nil)
-         (arglist-pos start-path))
+         (arglist-pos start-path)
+         (return-spec nil)
+         (return-struct nil))
 
-    ;; Detect inline generics vector
+    ;; Detect and remove inline generics vector
     (when (vectorp (car elems))
       (setq generics (append (car elems) nil))
-      ;; Remove the vector from the compiled expression
-      (let* ((cell (nthcdr (1- start-path) et--checker-expr)))
-        (setcdr cell (cddr cell)))
-      ;; The arglist is now at the same position (since we removed the vector)
+      (setcdr (nthcdr (1- start-path) et--checker-expr) (cddr elems))
       (setq elems (nthcdr start-path et--checker-expr)))
 
-    (let* ((arglist (car elems)))
-      (unless (listp arglist)
-        (et-checker-err arglist-pos "Expected argument list, got %s" (type-of arglist))
-        (signal 'et-checker-fatal nil))
+    (unless (listp (car elems))
+      (et-checker-err arglist-pos "Expected argument list, got %s" (type-of (car elems)))
+      (signal 'et-checker-fatal nil))
 
-      (let* ((after-arglist (cdr elems))
-             (docstring (when (and (stringp (car after-arglist))
-                                   (cdr after-arglist))
-                          (car after-arglist)))
-             (doc-info (et--parse-docstring-types docstring))
-             (doc-generics (car doc-info))
-             (doc-arg-specs (cdr doc-info)))
+    ;; Detect and remove inline return type: -> SPEC after arglist
+    (when (eq (cadr elems) '->)
+      (setq return-spec (caddr elems))
+      (setcdr elems (cdddr elems)))
 
-        ;; Merge generics: inline vector takes precedence over docstring
-        (unless generics (setq generics doc-generics))
+    ;; Parse docstring (must come after arglist, and body must follow)
+    (let* ((after-arglist (cdr elems))
+           (docstring (when (and (stringp (car after-arglist))
+                                 (cdr after-arglist))
+                        (car after-arglist)))
+           (doc-info (et--parse-docstring-types docstring))
+           (doc-generics (car doc-info))
+           (doc-return-spec (cadr doc-info))
+           (doc-arg-specs (cddr doc-info)))
 
-        (pcase-let* ((`(,std-structs ,opt-structs ,rest-or-keys ,all-vars)
-                      (et--parse-funcdef-arglist arglist doc-arg-specs generics arglist-pos))
-                     (arglist-struct
-                      (et--generate-arglist-structure std-structs opt-structs rest-or-keys))
-                     (body-start (+ arglist-pos (if docstring 2 1))))
+      ;; Inline -> takes precedence over docstring @et-return
+      (setq return-spec (or return-spec doc-return-spec))
+      ;; Inline generics vector takes precedence over docstring
+      (unless generics (setq generics doc-generics))
 
-          ;; Strip inline annotations from compiled arglist
-          (et--strip-inline-types arglist)
+      (pcase-let* ((`(,std-structs ,opt-structs ,rest-or-keys ,all-vars)
+                    (et--parse-funcdef-arglist (car elems) doc-arg-specs generics arglist-pos))
+                   (arglist-struct
+                    (et--generate-arglist-structure std-structs opt-structs rest-or-keys))
+                   (body-start (+ arglist-pos (if docstring 2 1))))
 
-          ;; Type-check the body
-          (let* ((return-type (et-with-vars all-vars (et-checker-tail body-start))))
-            (if generics
-                (let* ((matcher (make-et-matcher
-                                 :generics generics
-                                 :dnf (et-structure-to-matcher-dnf arglist-struct generics)))
-                       (output-struct (et-type-to-structure return-type)))
-                  (et-dt 'DynFunction matcher output-struct))
-              (et-dt 'Function
-                     (et--remove-type-binds (et-structure-to-type arglist-struct))
-                     (et--remove-type-binds return-type)))))))))
+        ;; Parse the return type spec into a structure
+        (when return-spec
+          (setq return-struct
+                (condition-case err
+                    (et-parse-structure return-spec generics)
+                  (error
+                   (et-checker-err arglist-pos "Invalid return type: %s"
+                                   (error-message-string err))
+                   nil))))
+
+        ;; Strip inline annotations from compiled arglist
+        (et--strip-inline-types (car elems))
+
+        ;; Type-check the body and validate against declared return type
+        (let* ((body-type (et-with-vars all-vars (et-checker-tail body-start)))
+               (return-type
+                (pcase return-struct
+                  ('nil body-type)
+                  (_ (let* ((declared-type
+                             (condition-case nil (et-structure-to-type return-struct)
+                               (error (et-any)))))
+                       (unless (et-subtype? body-type declared-type)
+                         (et-checker-err "Body type %s does not satisfy declared return type %s"
+                                         (et-pp body-type) (et-pp declared-type)))
+                       declared-type)))))
+          (if generics
+              (et-dt 'DynFunction
+                     (make-et-matcher
+                      :generics generics
+                      :dnf (et-structure-to-matcher-dnf arglist-struct generics))
+                     (or return-struct (et-type-to-structure return-type)))
+            (et-dt 'Function
+                   (et-structure-to-type arglist-struct)
+                   return-type)))))))
 
 (defun et--strip-inline-types (arglist)
   "Destructively replace [name Type] vectors in ARGLIST with bare names."

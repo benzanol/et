@@ -80,6 +80,32 @@
  (et-assert-resolve Function<Nil~Integer>
    (lambda () 1)))
 
+;; Return type annotation tests
+(et-test
+ ;; Inline -> return type: uses declared type
+ (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
+   (lambda ([x Integer]) -> Number (+ x 1)))
+
+ ;; Inline -> with typed args
+ (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
+   (lambda ([x Integer]) -> Number x))
+
+ ;; Inline -> is stripped from compiled output
+ (let* ((result (et--check '(lambda (x) -> Integer 1))))
+   (equal (et-result-compiled result) '(lambda (x) 1)))
+
+ ;; Inline -> with body type mismatch produces error
+ (et-assert-resolve-errors
+  (lambda ([x Integer]) -> String x))
+
+ ;; Inline -> with empty arglist
+ (et-assert-resolve Function<Nil~Number>
+   (lambda () -> Number 1))
+
+ ;; Inline -> with multiple body forms
+ (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
+   (lambda ([x Integer]) -> Number "ignored" x)))
+
 
 ;;; ============================================================
 ;;; Control flow

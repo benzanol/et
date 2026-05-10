@@ -995,13 +995,15 @@ Depth tracks < > and { } nesting."
     (`(Literal ,val)
      (format "`%s'" (prin1-to-string val)))
 
-    ((and `(ConsR ,left-sub ,right-sub) (guard nil))
+    ((or `(ConsFull ,left-sub ,_1 ,right-sub ,_2)
+         `(,(or 'ConsR 'ConsW 'ConsRW 'ConsWR) ,left-sub ,right-sub))
      (let ((elems (list (et--format-structure left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
                  (when (and (= (length d) 1) (= (length (car d)) 1))
                    (pcase (car (car d))
-                     (`(S:DT ConsR ,car-sub ,cdr-sub)
+                     ((or `(S:DT ConsFull ,car-sub ,_1 ,cdr-sub ,_2)
+                          `(S:ALIAS ,(or 'ConsR 'ConsW 'ConsRW 'ConsWR) ,car-sub ,cdr-sub))
                       (nconc elems (list (et--format-structure car-sub)))
                       (setq right-sub cdr-sub)
                       t))))))
@@ -1014,6 +1016,9 @@ Depth tracks < > and { } nesting."
            (format "(%s . %s)"
                    (mapconcat #'identity elems " ")
                    (et--format-structure right-sub))))))
+
+    (`(DynFunction ,matcher ,output-type)
+     (format "(%s) -> %s" (et-pp-matcher matcher) (et--format-structure output-type)))
 
     (_
      (let* ((name-str (symbol-name name))
