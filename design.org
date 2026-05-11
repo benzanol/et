@@ -79,7 +79,7 @@ There are three types of matching: In subtype matching, we try to find generics 
 
 ** match-constraints
 Matching a types against a match factor results in a list of constraints for our generics, where each constraint looks like:
-$Q_{a_1,...,a_n} := \operatorname{Q_\emptyset} \mid \operatorname{Q_\text{always}} \mid \operatorname{Q_{=}} a_i \, T \mid \operatorname{Q_{\le}} a_i \, T \mid \operatorname{Q_{\ge}} a_i \, T$
+$Q_{a_1,...,a_n} := \operatorname{Q_\emptyset} \mid \operatorname{Q_{=}} a_i \, T \mid \operatorname{Q_{\le}} a_i \, T \mid \operatorname{Q_{\ge}} a_i \, T$
 
 ** Converting constraints to a type
 Once we have a collection of constraints ${q_{a_1,...,a_n}}^{\ast} \in {Q_{a_1,...,a_n}}^{\ast}$, we need to determine whether a solution is possible.

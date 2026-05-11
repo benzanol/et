@@ -649,8 +649,15 @@ Each match factor is one of:
   (M:SET VAR `et-type')
 
 ARGS is a mix of constant args (where the corresponding arg role is
-'CONST,) and DNFs for the other role types."
-  generics dnf)
+'CONST,) and DNFs for the other role types.
+
+CONSTRAINTS is a list of fixed constraints on the generics. Each
+constraint is one of:
+  (Q:NEVER)
+  (Q:EQ GENERIC TYPE)
+  (Q:LEQ GENERIC TYPE)
+  (Q:GEQ GENERIC TYPE)"
+  generics dnf constraints)
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
@@ -661,6 +668,14 @@ ARGS is a mix of constant args (where the corresponding arg role is
     (let ((generics (et-matcher-generics matcher)))
       (dolist (generic generics)
         (or (symbolp generic) (error "Generics must be a list of symbols")))
+
+      (dolist (q (et-matcher-constraints matcher))
+        (pcase q
+          (`(Q:NEVER))
+          (`(,(or 'Q:EQ Q:LEQ Q:GEQ)
+             ,(and gen (guard (memq gen generics)))
+             (pred et-type-p)))
+          (_ (error "Invalid constraint: %s" q))))
 
       (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
                                     (error "Not a generic: %s" var))))
@@ -1312,12 +1327,36 @@ which are invalid for types."
   `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
                      (et-q ,(append generics nil))))
 
-(defun et-parse-matcher (spec generics)
-  "Parse SPEC as an `et-matcher' with GENERICS."
-  (make-et-matcher
-   :generics generics
-   :dnf (et-structure-to-matcher-dnf (et-parse-structure spec generics) generics)))
+(defun et-parse-matcher (spec generics-spec)
+  "Parse SPEC as an `et-matcher' with GENERICS-SPEC.
 
+GENERICS-SPEC is a list of symbols and constraint specs. A constraint
+spec is one of:
+  (= GEN TYPE-SPEC)
+  (>= GEN TYPE-SPEC)
+  (<= GEN TYPE-SPEC)
+
+A generic can be implicitly defined by just providing a constraint
+involving that generic. For example, the spec [(<= T Number)] is the
+same as [T (<= T Number)]."
+  (cl-loop for gen-spec in (append generics-spec nil)
+           for (gen . constraint) =
+           (pcase gen-spec
+             (`(,(or (and '= (let op 'Q:EQ))
+                     (and '<= (let op 'Q:LEQ))
+                     (and '>= (let op 'Q:GEQ)))
+                ,(and gen (pred symbolp)) ,type-spec)
+              (cons gen (list op (et-parse-type type-spec))))
+             ((pred symbolp)
+              (cons gen-spec nil)))
+           when constraint collect constraint into constraints
+           when (and gen (not (memq gen generics)))
+           collect gen into generics
+           finally return
+           (make-et-matcher
+            :generics generics
+            :constraints constraints
+            :dnf (et-structure-to-matcher-dnf (et-parse-structure spec generics) generics))))
 
 (defun et-pp-matcher (matcher)
   "Format an `et-matcher' into a human-readable string."
@@ -1664,12 +1703,14 @@ returning A itself is a valid approximation."
 ;;;; Satisfy constraints
 
 (defun et--sub-match (matcher type)
-  (let ((constraints (et--sub-constraints matcher type)))
+  (let ((constraints (append (et--sub-constraints matcher type)
+                             (et-matcher-constraints matcher))))
     (et--match-satisfy-constraints-smallest
      (et-matcher-generics matcher) constraints)))
 
 (defun et--super-match (matcher type)
-  (let ((constraints (et--super-constraints matcher type)))
+  (let ((constraints (append (et--super-constraints matcher type)
+                             (et-matcher-constraints matcher))))
     (et--match-satisfy-constraints-biggest
      (et-matcher-generics matcher) constraints)))
 
