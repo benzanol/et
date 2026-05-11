@@ -128,20 +128,6 @@ Y : String"
      x)))
 
 
-;;;; et-defun
-
-(defmacro et-defun (&rest args)
-  "Define a type-checked function.
-
-\(fn NAME [GENERICS] ARGLIST [DOCSTRING] BODY...)"
-  (declare (doc-string 3)
-           (indent 5))
-
-  (let* ((result (et--check (cons #'cl-defun args))))
-    (et-show-result-errors result)
-    (et-result-compiled result)))
-
-
 ;;;; Var checkers
 
 (defun et--parse-defvar-docstring (docstring)

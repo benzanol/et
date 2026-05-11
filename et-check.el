@@ -486,125 +486,49 @@ PATH is the path to the subexpression."
 
 ;;; ============================================================
 ;;; Function types
-;;;; Struct
+;;;; et-defun
 
-(cl-defstruct et-func-sig
-  "Parsed function signature.
+(defun et--process-funcdef-header (body)
+  (let* ((gen-vec (when (vectorp (car body)) (pop body)))
+         (args-alist
+          (cl-loop for tail on (car body)
+                   for entry = (pcase (car tail) (`[,param ,spec] (cons param spec)))
+                   ;; Replace the entry with just the parameter
+                   when entry do (setcar tail (car entry))
+                   and collect entry))
+         (ret (when (eq (cadr body) '->) (pop (cdr body)) (pop (cdr body)))))
+    (list body gen-vec args-alist ret)))
 
-BODY is the function body with inline annotations stripped.
-SCOPED is the list of scoped datatype entries.
-VARS is a list of `et-var' for all parameters.
-INPUT is a matcher (if generics) or type (if not) for the arglist.
-EXPECTED-RETURN is the declared return type (with scoped datatypes), or nil.
-SOURCE is one of `nil', `lambda', `defun', `cl-defun', `et-defun', etc."
-  body scoped vars input expected-return source)
+(defun et--funcdef-inline-to-declare (body)
+  (pcase-let*
+      ((`(,new-body ,gen-vec ,args-alist ,ret) (et--process-funcdef-header body))
+       ;; Find the declare form, or add one
+       (decl-form (or (assq 'declare new-body)
+                      (car (if (stringp (cadr new-body))
+                               (push (list 'declare) (cddr new-body))
+                             (push (list 'declare) (cdr new-body))))))
+       ;; Find the et declarations in the declare block, or add it
+       (et-decl (or (cl-find #'et decl-form :key #'car-safe)
+                    (car (push (list 'et) (cdr decl-form)))))
+       (add (lambda (key val)
+              (when (alist-get key et-decl) (error "`%s' specified in both arglist and declare block" key))
+              (push (list key val) (cdr et-decl)))))
+    ;; Add return to the declare block
+    (when ret (funcall add '@return ret))
+    ;; Add params to the declare block
+    (dolist (pair args-alist) (funcall add (car pair) (cdr pair)))
+    ;; Add generics to the declare block
+    (when gen-vec (funcall add '@generics (append gen-vec nil)))
 
+    new-body))
 
-;;;; Docstring parsing
-
-(defun et--parse-docstring-annotations (docstring)
-  "Extract type annotations from DOCSTRING.
-
-Returns (GENERICS RETURN-SPEC . ARG-SPECS) where:
-  GENERICS is a list of generic symbols, or nil.
-  RETURN-SPEC is a type spec form, or nil.
-  ARG-SPECS is an alist of (DOWNCASE-SYMBOL . SPEC).
-
-Recognizes:
-  `@et-generics' [T U]    — generic type variables
-  `@et-return' TYPE-SPEC   — return type
-  ARGNAME : TYPE-SPEC    — per-parameter type (ARGNAME uppercase)"
-
-  (let* ((generics nil)
-         (return-spec nil)
-         (arg-specs nil)
-         (case-fold-search nil))
-    (when (stringp docstring)
-      (when (string-match "@et-generics +\\(.*\\)" docstring)
-        (let* ((expr (ignore-errors (car (read-from-string (match-string 1 docstring))))))
-          (when (vectorp expr)
-            (setq generics (append expr nil)))))
-
-      (when (string-match "@et-return +\\(.*\\)" docstring)
-        (setq return-spec
-              (ignore-errors (car (read-from-string (match-string 1 docstring))))))
-
-      (let* ((pos 0))
-        (while (string-match
-                "^\\([A-Z][-A-Z0-9_]*\\)\\s-+:\\s-+\\(\\S-.*\\)"
-                docstring pos)
-          (let* ((name (intern (downcase (match-string 1 docstring))))
-                 (spec (ignore-errors (car (read-from-string (match-string 2 docstring))))))
-            (when spec (push (cons name spec) arg-specs)))
-          (setq pos (match-end 0)))))
-    (cons generics (cons return-spec (nreverse arg-specs)))))
+(defmacro et-defun (name &rest body)
+  `(defun ,name . ,(et--funcdef-inline-to-declare body)))
 
 
-;;;; Arglist parsing
+;;;; Generate input type
 
-(defun et--parse-funcdef-params (arglist doc-arg-specs)
-  "Parse ARGLIST into parameter alists, stripping inline type vectors.
-
-DOC-ARG-SPECS is an alist of (SYMBOL . SPEC) from docstring parsing.
-
-Destructively modifies ARGLIST to replace [name Type] vectors with bare
-symbols.
-
-Returns (REQUIRED OPTIONAL KEY REST) where REQUIRED, OPTIONAL, KEY are
-alists of (SYMBOL . TYPE-SPEC-OR-NIL) and REST is a single cons or nil.
-
-Signals an error on malformed parameters."
-  (let* ((required nil)
-         (optional nil)
-         (key-params nil)
-         (rest-param nil)
-         (mode 'standard)
-         (cell arglist))
-
-    (while cell
-      (pcase (car cell)
-        ('&optional (setq mode 'optional))
-        ('&rest     (setq mode 'rest))
-        ('&key      (setq mode 'key))
-        (elem
-         (let* ((name nil)
-                (spec nil))
-           (pcase elem
-             ((and (pred vectorp) (guard (>= (length elem) 2)))
-              (setq name (aref elem 0)
-                    spec (aref elem 1))
-              (or (symbolp name) (error "Parameter name must be a symbol: %s" name))
-              (setcar cell name))
-
-             ((pred consp)
-              (setq name (car elem))
-              (or (symbolp name) (error "Parameter name must be a symbol: %s" name))
-              (setq spec (alist-get name doc-arg-specs)))
-
-             ((pred symbolp)
-              (setq name elem
-                    spec (alist-get elem doc-arg-specs)))
-
-             (_ (error "Invalid parameter: %s" elem)))
-
-           (pcase mode
-             ('standard (push (cons name spec) required))
-             ('optional (push (cons name spec) optional))
-             ('key      (push (cons name spec) key-params))
-             ('rest
-              (when rest-param (error "Multiple &rest parameters"))
-              (setq rest-param (cons name spec)))))))
-      (setq cell (cdr cell)))
-
-    (list (nreverse required)
-          (nreverse optional)
-          (nreverse key-params)
-          rest-param)))
-
-
-;;;; Make input
-
-(defun et-func-sig-to-input (generics required optional key-params rest-param)
+(defun et--generate-func-input (generics required optional key-params rest-param)
   "Build an input matcher or type from parameter specs.
 
 GENERICS is a list of generic symbols, or nil.
@@ -653,189 +577,119 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 
 
 (et-test
- (equal (et-func-sig-to-input nil '((x . Integer) (y . nil)) nil nil nil)
+ (equal (et--generate-func-input nil '((x . Integer) (y . nil)) nil nil nil)
         (et ConsR<Integer~ConsR<Any~Nil>>))
 
- (equal (et-func-sig-to-input nil '((x . Integer) (y . String)) nil nil '(args . nil))
+ (equal (et--generate-func-input nil '((x . Integer) (y . String)) nil nil '(args . nil))
         (et ConsR<Integer~ConsR<String~ListR<Any>>>))
 
- (equal (et-func-sig-to-input '(T) '((x . T)) '((y . Number)) nil '(args . ListR<String>))
+ (equal (et--generate-func-input '(T) '((x . T)) '((y . Number)) nil '(args . ListR<String>))
         (et-matcher [T]
           ConsR<T~{Nil|ConsR<Number~ListR<String>>}>))
 
- (equal (et-func-sig-to-input '(T) '((a . T)) nil '((scale . Number) (flag . nil)) nil)
+ (equal (et--generate-func-input '(T) '((a . T)) nil '((scale . Number) (flag . nil)) nil)
         (et-matcher [T]
           ConsR<T~PList<:scale~Number~:flag~Any>>)))
 
 
-;;;; Main entry point
+;;;; `declare' -> `et-func-sig'
+
+(cl-defstruct et-func-sig
+  "Parsed function signature.
+
+BODY is the function body with inline annotations stripped.
+SCOPED is the list of scoped datatype entries.
+VARS is a list of `et-var' for all parameters.
+INPUT is a matcher (if generics) or type (if not) for the arglist.
+EXPECTED-RETURN is the declared return type (with scoped datatypes), or nil.
+SOURCE is one of `nil', `lambda', `defun', `cl-defun', `et-defun', etc."
+  body scoped vars input expected-return source)
 
 (defun et-parse-function-type (body &optional source)
-  "Parse function signature from BODY, returning an `et-func-sig'.
+  (when-let* ((decl-body (alist-get 'declare body))
+              (et-body (alist-get 'et decl-body)))
+    (et--parse-func-declare (car body) et-body source)))
 
-BODY is the forms after the function name in a defun: an optional
-generics vector, the arglist, an optional `-> RETURN-SPEC', an optional
-docstring, then body forms.
+(defun et--parse-func-declare (arglist et-decl &optional source)
+  "Parse a function signature from ARGLIST and ET-DECL, returning an `et-func-sig'.
 
-SOURCE is optionally the function/macro (e.g. `lambda', `defun',
-`et-defun') which triggered to function definition.
+ARGLIST is the parameter list with inline type annotations already
+stripped (just symbols and default-value forms).
 
-Signals an error if anything is malformed."
-  (let* ((forms (copy-tree body))
-         (generics nil)
-         (return-spec nil))
+ET-DECL is the contents of the (et ...) declare form — a list of
+entries.  Each entry is one of:
+  (@generics GEN...)    — generic type variables
+  (@return TYPE-SPEC)   — return type
+  (PARAM TYPE-SPEC)     — type for parameter PARAM"
+  (pcase-let* ((generics (alist-get '@generics et-decl))
+               (return-spec (car (alist-get '@return et-decl)))
 
-    ;; Consume leading generics vector
-    (when (vectorp (car forms))
-      (setq generics (append (pop forms) nil)))
+               (`(,required ,optional ,key-params ,rest-param)
+                (et--parse-arglist-params arglist))
+               ;; Merge each param name with its declared type (or nil)
+               (merge (lambda (name) (cons name (car (alist-get name et-decl)))))
+               (req-pairs (mapcar merge required))
+               (opt-pairs (mapcar merge optional))
+               (key-pairs (mapcar merge key-params))
+               (rest-pair (when rest-param (funcall merge rest-param)))
+               ;; All params for building vars
+               (all-params (append req-pairs opt-pairs key-pairs
+                                   (when rest-pair
+                                     (list (cons (car rest-pair)
+                                                 (or (cdr rest-pair) 'ListR<Any>))))))
+               ;; Build input matcher/type
+               (input (et--generate-func-input generics req-pairs opt-pairs key-pairs rest-pair))
+               ;; Scoped datatypes for body-internal use
+               (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input)))
+               (vars nil)
+               (expected-return nil))
 
-    (or (listp (car forms))
-        (error "Expected argument list, got %s" (type-of (car forms))))
-    (let* ((arglist (pop forms)))
+    ;; Parse parameter types and return type with scoped datatypes bound
+    (et--with-scoped-datatypes scoped
+      (setq vars
+            (cl-loop for (name . spec) in all-params
+                     collect (make-et-var :name name
+                                          :type (et-parse-type (or spec 'Any)))))
+      (when return-spec
+        (setq expected-return (et-parse-type return-spec))))
 
-      ;; Consume inline return type
-      (when (eq (car forms) '->)
-        (pop forms)
-        (or forms (error "Missing type after `->'"))
-        (setq return-spec (pop forms)))
+    (make-et-func-sig
+     :source source
+     :body (list arglist)  ; body is not available here; caller sets it
+     :scoped scoped
+     :vars vars
+     :input input
+     :expected-return expected-return)))
 
-      ;; Extract docstring only when followed by more body forms
-      (let* ((docstring (when (and (stringp (car forms)) (cdr forms))
-                          (car forms)))
-             (doc-info (et--parse-docstring-annotations docstring))
-             (doc-generics (car doc-info))
-             (doc-return (cadr doc-info))
-             (doc-arg-specs (cddr doc-info)))
+(defun et--parse-arglist-params (arglist)
+  "Parse ARGLIST into (REQUIRED OPTIONAL KEY REST).
 
-        ;; Inline annotations take precedence
-        (or generics (setq generics doc-generics))
-        (or return-spec (setq return-spec doc-return))
-
-        (pcase-let* ((`(,required ,optional ,key-params ,rest-param)
-                      (et--parse-funcdef-params arglist doc-arg-specs))
-                     (all-params (append required optional key-params
-                                         (when rest-param
-                                           (list (cons (car rest-param)
-                                                       (or (cdr rest-param) 'ListR<Any>))))))
-                     ;; Build input using generics (external view)
-                     (input (et-func-sig-to-input generics required optional key-params rest-param))
-                     ;; Scoped datatypes for body-internal use
-                     (scoped (et--make-scoped-datatypes
-                              (when (et-matcher-p input) input)))
-                     (vars nil)
-                     (expected-return nil))
-
-          ;; Parse parameter types and return type with scoped datatypes bound
-          (et--with-scoped-datatypes scoped
-            (setq vars
-                  (cl-loop for (name . spec) in all-params
-                           collect (make-et-var :name name
-                                                :type (et-parse-type (or spec 'Any)))))
-            (when return-spec
-              (setq expected-return (et-parse-type return-spec))))
-
-          (make-et-func-sig
-           :source source
-           :body (cons arglist forms)
-           :scoped scoped
-           :vars vars
-           :input input
-           :expected-return expected-return))))))
-
-
-;;;; Tests
-
-(defun et--func-sig-test-equal (a b)
-  "Test equality of two `et-func-sig' structs, tolerating scoped gensyms."
-  (and (equal (et-func-sig-body a) (et-func-sig-body b))
-       (equal (mapcar #'car (et-func-sig-scoped a))
-              (mapcar #'car (et-func-sig-scoped b)))
-       (equal (mapcar #'et-var-name (et-func-sig-vars a))
-              (mapcar #'et-var-name (et-func-sig-vars b)))
-       (equal (et-func-sig-input a) (et-func-sig-input b))
-       (eq (not (not (et-func-sig-expected-return a)))
-           (not (not (et-func-sig-expected-return b))))))
-
-(et-test
- ;; 1. Inline generics + inline typed args + arrow return + multi-form body
- (et--func-sig-test-equal
-  (et-parse-function-type '([T U] ([x T] [y U]) -> ConsR<T~U> (message "hi") (cons x y)))
-  (make-et-func-sig
-   :body '((x y) (message "hi") (cons x y))
-   :scoped '((T) (U))
-   :vars (list (make-et-var :name 'x) (make-et-var :name 'y))
-   :input (et-matcher [T U] ConsR<T~ConsR<U~Nil>>)
-   :expected-return t))
-
- ;; 2. No generics + docstring annotations + &optional + &rest
- (et--func-sig-test-equal
-  (et-parse-function-type
-   '((a &optional b (c 10) &rest args)
-     "A : Integer\nB : String\nC : Number\nARGS : ListR<Symbol>\n@et-return Boolean"
-     (or b a)))
-  (make-et-func-sig
-   :body '((a &optional b (c 10) &rest args)
-           "A : Integer\nB : String\nC : Number\nARGS : ListR<Symbol>\n@et-return Boolean"
-           (or b a))
-   :scoped nil
-   :vars (list (make-et-var :name 'a) (make-et-var :name 'b)
-               (make-et-var :name 'c) (make-et-var :name 'args))
-   :input (et ConsR<Integer~Nil|ConsR<String~Nil|ConsR<Number~ListR<Symbol>>>>)
-   :expected-return t))
-
- ;; 3. Docstring generics + &key + no inline annotations
- (et--func-sig-test-equal
-  (et-parse-function-type
-   '((x &key scale flag)
-     "@et-generics [T]\nX : T\nSCALE : Number\n@et-return VectorR<T>"
-     (vector x)))
-  (make-et-func-sig
-   :body '((x &key scale flag)
-           "@et-generics [T]\nX : T\nSCALE : Number\n@et-return VectorR<T>"
-           (vector x))
-   :scoped '((T))
-   :vars (list (make-et-var :name 'x) (make-et-var :name 'scale)
-               (make-et-var :name 'flag))
-   :input (et-matcher [T] ConsR<T~PList<:scale~Number~:flag~Any>>)
-   :expected-return t))
-
- ;; 4. Inline overrides docstring + mixed inline/bare required
- (et--func-sig-test-equal
-  (et-parse-function-type
-   '([U] ([a U] b) -> ListR<U>
-     "@et-generics [T]\nA : T\nB : String\n@et-return VectorR<T>"
-     (list a b)))
-  (make-et-func-sig
-   :body '((a b)
-           "@et-generics [T]\nA : T\nB : String\n@et-return VectorR<T>"
-           (list a b))
-   :scoped '((U))
-   :vars (list (make-et-var :name 'a) (make-et-var :name 'b))
-   :input (et-matcher [U] ConsR<U~ConsR<String~Nil>>)
-   :expected-return t))
-
- ;; 5. No return annotation
- (et--func-sig-test-equal
-  (et-parse-function-type '((x) x))
-  (make-et-func-sig
-   :body '((x) x)
-   :scoped nil
-   :vars (list (make-et-var :name 'x))
-   :input (et ConsR<Any~Nil>)
-   :expected-return nil))
-
- ;; 6. Empty arglist + no return
- (et--func-sig-test-equal
-  (et-parse-function-type '(() 1))
-  (make-et-func-sig
-   :body '(() 1)
-   :scoped nil
-   :vars nil
-   :input (et Nil)
-   :expected-return nil)))
+ARGLIST is a plain parameter list with no type annotations — just
+symbols and default-value forms.  REQUIRED, OPTIONAL, and KEY are each
+lists of parameter name symbols.  REST is a single symbol or nil."
+  (let ((required nil)
+        (optional nil)
+        (key-params nil)
+        (rest-param nil)
+        (state 'required))
+    (dolist (elt arglist)
+      (pcase elt
+        ('&optional (setq state 'optional))
+        ('&rest     (setq state 'rest))
+        ('&key      (setq state 'key))
+        ((or `(,name . ,_) name)
+         (pcase state
+           ('required (push name required))
+           ('optional (push name optional))
+           ('key      (push name key-params))
+           ('rest     (setq rest-param name))))))
+    (list (nreverse required)
+          (nreverse optional)
+          (nreverse key-params)
+          rest-param)))
 
 
-;;;; Make func type
+;;;; Generate func type
 
 (defun et--make-func-type (input return-type scoped)
   "Build a Function or DynFunction type from INPUT and RETURN-TYPE.
@@ -852,6 +706,30 @@ SCOPED is the list of scoped datatype entries from `et--make-scoped-datatypes'."
                                         :test #'equal)))
         (et-dt 'DynFunction input output-struct))
     (et-dt 'Function input return-type)))
+
+
+;;;; Custom declare form
+
+(defun et--declare-handler (name arglist &rest entries)
+  "Process an (et ...) declare form for defun.
+
+ENTRIES is the list of specs inside the declare form, e.g.:
+  (declare (et (@generics T) (x T) (@return ListR<T>)))
+
+Each entry is one of:
+  (@generics GEN...)   — generic type variables
+  (@return TYPE-SPEC)  — declared return type
+  (PARAM TYPE-SPEC)    — type annotation for parameter PARAM"
+  (when-let* ((sig (et--parse-func-declare arglist entries))
+              (input (et-func-sig-input sig))
+              (return (et-func-sig-expected-return sig))
+              (func-type (et--make-func-type input return (et-func-sig-scoped sig))))
+    (put name 'et-function-signature sig)
+    (put name 'et-function-type func-type))
+  ;; Return nil — no forms to splice into the defun body
+  nil)
+
+(setf (alist-get 'et defun-declarations-alist) (list #'et--declare-handler))
 
 
 ;;;; Preprocessing
