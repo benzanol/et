@@ -35,7 +35,6 @@
 (et-define-pcase-checker defun body
   (et-checker-function-body (et-parse-function-type body) 1))
 
-
 (et-test
  ;; Inline typed args
  (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>

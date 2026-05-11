@@ -886,23 +886,30 @@ SCOPED is the list of scoped datatype entries from `et--make-scoped-datatypes'."
 OFFSET is the position of the start of the body (the arglist or
 generics)."
 
-  (let* ((gen-vec? (vectorp (nth et--checker-expr offset))))
+  (let* ((orig-body (nthcdr offset et--checker-expr))
+         (stripped-body (et-func-sig-body sig))
+         ;; Decorators include the generic vector, and "-> TYPE"
+         (decorator-count (- (length orig-body) (length stripped-body)))
+         ;; The start of the inside of the function
+         (inside-offset (+ offset 1 decorator-count)))
 
     ;; Typecheck the body with scoped datatypes and parameter vars bound
-    (et--with-scoped-datatypes (et-func-sig-scoped sig)
-      (et-with-vars (et-func-sig-vars sig)
-        (let* ((expected (et-func-sig-expected-return sig))
-               (actual (et-checker-tail (+ offset (if gen-vec? 2 1)))))
+    (prog1
+        (et--with-scoped-datatypes (et-func-sig-scoped sig)
+          (et-with-vars (et-func-sig-vars sig)
+            (let* ((expected (et-func-sig-expected-return sig))
+                   (actual (et-checker-tail inside-offset)))
 
-          (when (and expected (not (et-subtype? actual expected)))
-            (et-checker-err 0 "Expected %s, got %s" (et-pp expected) (et-pp actual)))
-          (et--make-func-type (et-func-sig-input sig)
-                              (if expected expected (et--remove-type-binds actual))
-                              (et-func-sig-scoped sig)))))
+              (when (and expected (not (et-subtype? actual expected)))
+                (et-checker-err 0 "Expected %s, got %s" (et-pp expected) (et-pp actual)))
+              (et--make-func-type (et-func-sig-input sig)
+                                  (if expected expected (et--remove-type-binds actual))
+                                  (et-func-sig-scoped sig)))))
 
-    ;; Remove inline type annotations and generics vector
-    (when gen-vec? (pop (nthcdr offset et--checker-expr)))
-    (setf (nth offset et--checker-expr) (car (et-func-sig-body sig)))))
+      ;; Remove inline type annotations and generics vector
+      (setf (nthcdr offset et--checker-expr)
+            (cons (car stripped-body)
+                  (nthcdr inside-offset et--checker-expr))))))
 
 
 ;;; ============================================================
