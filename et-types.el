@@ -30,10 +30,10 @@
 ;;;; Function checkers
 
 (et-define-pcase-checker lambda body
-  (et-checker-function-body (et-parse-function-type body) 1))
+  (et-checker-function-body (et-parse-function-type body #'lambda) 1))
 
-(et-define-pcase-checker defun `(,_name . ,body)
-  (et-checker-function-body (et-parse-function-type body) 2))
+(et-define-pcase-checker (defun cl-defun) `(,_name . ,body)
+  (et-checker-function-body (et-parse-function-type body (car et--checker-expr)) 2))
 
 (et-test
  ;; Inline typed args
@@ -135,7 +135,7 @@ Y : String"
 
 \(fn NAME [GENERICS] ARGLIST [DOCSTRING] BODY...)"
   (declare (doc-string 3)
-           (indent 2))
+           (indent 5))
 
   (let* ((result (et--check (cons #'cl-defun args))))
     (et-show-result-errors result)
@@ -200,7 +200,7 @@ Y : String"
       . ,_body)
 
   (et-with-vars vars
-    (et-checker-sub 2)))
+    (et-checker-tail 2)))
 
 
 ;;;; dolist
@@ -268,27 +268,38 @@ Y : String"
   (cl-loop with acc-type = (et-literal t)
            for pos upfrom 1 to (length args)
            do (cl-callf et--and-return-type acc-type (lambda () (et-checker-sub pos)))
-           finally return acc-type))
+           finally return (et-simplify-type acc-type)))
 
 (et-define-pcase-checker or args
   (cl-loop with acc-type = (et Nil)
            for pos upfrom 1 to (length args)
            do (cl-callf et--or-return-type acc-type (lambda () (et-checker-sub pos)))
-           finally return acc-type))
+           finally return (et-simplify-type acc-type)))
 
 
 ;;;; if
 
 (et-define-pcase-checker if `(,_cond ,_then . ,_else)
-  (let* ((cond-type (et-checker-sub 1)))
+  (let* ((cond-type (et-checker-sub 1))
+
+         ;; Then branch: cond was non-nil
+         (non-nil-cond (et--non-nil cond-type))
+         (non-nil-binds (et--type-binds non-nil-cond))
+         (then-type (et-with-narrow-binds non-nil-binds
+                      (et-checker-sub 2)))
+
+         ;; Else branch: cond was nil
+         (nil-cond (et--supersect cond-type (et Nil)))
+         (nil-binds (et--type-binds nil-cond))
+         (else-type (et-with-narrow-binds nil-binds
+                      (et-checker-tail 3))))
 
     (et-checker-hint-narrows
      0
-     "IF:\\n%s" (et--non-nil cond-type)
-     "ELSE:\\n%s" (et--supersect cond-type (et Nil)))
+     "IF:\\n%s" non-nil-cond
+     "ELSE:\\n%s" nil-cond)
 
-    (et--or (et--and-return-type cond-type (lambda () (et-checker-sub 2)))
-            (et--or-return-type cond-type (lambda () (et-checker-tail 3))))))
+    (et-simplify-type (et--or then-type else-type))))
 
 (et-define-pcase-checker when `(,_cond . ,then)
   (let* ((cond-type (et-checker-sub 1)))
@@ -302,6 +313,17 @@ Y : String"
     (et-checker-hint-narrows 0 "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (et--or-return-type cond-type (lambda () (et-checker-tail 2)))))
+
+
+(et-test
+ (equal (et String|Nil)
+        (et-typecheck
+         (let* ((a String|Number 4))
+           (when (stringp a) a))))
+ (et-subtype? (et String)
+              (et-typecheck
+               (let* ((a String|Number 4))
+                 (if (stringp a) a "hello!")))))
 
 
 ;;; ============================================================

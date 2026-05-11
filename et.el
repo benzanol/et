@@ -114,7 +114,10 @@
 
 (eval-and-compile
   (defvar et-run-tests (if noninteractive t nil)
-    "Whether to run et tests when compiling source files."))
+    "Whether to run et tests when compiling source files.")
+
+  (defvar et-running-tests nil
+    "Whether tests are currently being run."))
 
 (defmacro et-test (&rest body)
   "BODY can start with a series of VAR VECTOR... forms."
@@ -130,7 +133,8 @@
 
   (when (and et-run-tests (null load-file-name))
     ;; Repeat var
-    (let* ((evaller
+    (let* ((et-running-tests t)
+           (evaller
             (lambda (body start-idx)
               (cl-loop for expr in body
                        for idx upfrom 0
@@ -426,27 +430,6 @@ subtype of super-arg."
   (cl-flet ((valid-if (valid) (if valid nil (et-ql (Q:NEVER)))))
 
     (pcase (list sub-name super-name)
-      ((guard (eq sub-name super-name))
-       ;; Datatypes of the same type (except PList) should have the same number of arguments
-       (cl-assert (eq (length sub-args) (length super-args)))
-       (cl-loop for sub-arg in sub-args
-                for super-arg in super-args
-                for role in (et--datatype-arg-roles super-name super-args)
-                nconc (pcase role
-                        ;; Const args must be equal to match
-                        ('CONST (valid-if (equal sub-arg super-arg)))
-                        ('CO (funcall co sub-arg super-arg))
-                        ('CONTRA (funcall contra sub-arg super-arg))
-                        ('ISO (funcall iso sub-arg super-arg))
-                        (_ (error "Unknown argument role: %s" role)))))
-
-      (`(Literal ,_)
-       (let* ((pred (plist-get (alist-get super-name et--datatypes) :predicate)))
-         (pcase (apply (or pred #'ignore) (car sub-args) super-args)
-           ('nil (valid-if nil))
-           ('t (valid-if t))
-           (sub (cl-loop for (sub-val . arg) in sub nconc (funcall co-literal sub-val arg))))))
-
       (`(,_ Any) nil)
 
       ('(Integer Number) nil)
@@ -471,6 +454,27 @@ subtype of super-arg."
                 for sub-val = (plist-get sub-args prop)
                 unless sub-val return (et-ql (Q:NEVER))
                 nconc (funcall co sub-val super-val)))
+
+      ((guard (eq sub-name super-name))
+       ;; Datatypes of the same type (except PList) should have the same number of arguments
+       (cl-assert (eq (length sub-args) (length super-args)))
+       (cl-loop for sub-arg in sub-args
+                for super-arg in super-args
+                for role in (et--datatype-arg-roles super-name super-args)
+                nconc (pcase role
+                        ;; Const args must be equal to match
+                        ('CONST (valid-if (equal sub-arg super-arg)))
+                        ('CO (funcall co sub-arg super-arg))
+                        ('CONTRA (funcall contra sub-arg super-arg))
+                        ('ISO (funcall iso sub-arg super-arg))
+                        (_ (error "Unknown argument role: %s" role)))))
+
+      (`(Literal ,_)
+       (let* ((pred (plist-get (alist-get super-name et--datatypes) :predicate)))
+         (pcase (apply (or pred #'ignore) (car sub-args) super-args)
+           ('nil (valid-if nil))
+           ('t (valid-if t))
+           (sub (cl-loop for (sub-val . arg) in sub nconc (funcall co-literal sub-val arg))))))
 
       (_ (valid-if nil)))))
 

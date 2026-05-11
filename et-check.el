@@ -84,7 +84,7 @@
   "Display a list of binds to the user at path=(0).
 
 TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
-  (when et-display-narrows
+  (when (and et-display-narrows (not et-running-tests))
     (cl-loop for (fmt type) on types by #'cddr
              for binds = (et--type-binds type) ; TODO: display just binds instead of whole type
              when binds do (et-checker-hint path fmt (et-pp-narrows binds)))))
@@ -495,8 +495,9 @@ BODY is the function body with inline annotations stripped.
 SCOPED is the list of scoped datatype entries.
 VARS is a list of `et-var' for all parameters.
 INPUT is a matcher (if generics) or type (if not) for the arglist.
-EXPECTED-RETURN is the declared return type (with scoped datatypes), or nil."
-  body scoped vars input expected-return)
+EXPECTED-RETURN is the declared return type (with scoped datatypes), or nil.
+SOURCE is one of `nil', `lambda', `defun', `cl-defun', `et-defun', etc."
+  body scoped vars input expected-return source)
 
 
 ;;;; Docstring parsing
@@ -669,12 +670,15 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 
 ;;;; Main entry point
 
-(defun et-parse-function-type (body)
+(defun et-parse-function-type (body &optional source)
   "Parse function signature from BODY, returning an `et-func-sig'.
 
 BODY is the forms after the function name in a defun: an optional
 generics vector, the arglist, an optional `-> RETURN-SPEC', an optional
 docstring, then body forms.
+
+SOURCE is optionally the function/macro (e.g. `lambda', `defun',
+`et-defun') which triggered to function definition.
 
 Signals an error if anything is malformed."
   (let* ((forms (copy-tree body))
@@ -731,6 +735,7 @@ Signals an error if anything is malformed."
               (setq expected-return (et-parse-type return-spec))))
 
           (make-et-func-sig
+           :source source
            :body (cons arglist forms)
            :scoped scoped
            :vars vars
@@ -871,8 +876,8 @@ SCOPED is the list of scoped datatype entries from `et--make-scoped-datatypes'."
                                   (insert-file-contents file)
                                   (buffer-string))))
       (pcase form
-        (`(,(or 'defun 'cl-defun) ,(and name (pred symbolp)) . ,body)
-         (when-let* ((sig (ignore-errors (et-parse-function-type body)))
+        (`(,(and source (or 'defun 'cl-defun 'et-defun)) ,(and name (pred symbolp)) . ,body)
+         (when-let* ((sig (ignore-errors (et-parse-function-type body source)))
                      ((et-func-sig-expected-return sig)))
            (put name 'et-function-signature sig)
            (put name 'et-function-type
