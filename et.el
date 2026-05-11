@@ -44,7 +44,8 @@
 
 (defun et-error (path string &rest args)
   (setq string (concat string (et--error-message-suffix path)))
-  (byte-compile-warn "%s" (if args (apply #'format string args) string)))
+  (byte-compile-warn "%s" (if args (apply #'format string args) string))
+  nil)
 
 (defun et--error-message-suffix (path)
   (format "\0;;error-path:%s" (append et--error-path path)))
@@ -249,22 +250,6 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 (advice-add #'make-et-type :filter-return #'et--verify-type)
 
 
-;;;; Scoped datatypes
-
-(defvar et-scoped-datatypes nil
-  "Locally scoped datatypes.
-
-An list of (NAME PLIST), where PLIST has the following properties:
-  :sub TYPE - means that this scoped type is a subtype of TYPE.
-  :super TYPE - means that this scoped type is a supertype of TYPE.")
-
-(defmacro et-with-scoped-datatype (entry &rest body)
-  `(condition-case _err (et--datatype-arg-roles (car entry))
-     (:success (error "Cannot shadow an existing type: %s" (car entry)))
-     (error (let ((et-scoped-datatypes (cons ,entry et-scoped-datatypes)))
-              ,@body))))
-
-
 ;;;; Datatypes
 
 (cl-defstruct et-datatype
@@ -311,8 +296,34 @@ An list of (NAME PLIST), where PLIST has the following properties:
              (cl-loop for (_prop _val) on args by #'cddr
                       nconc (list 'CONST 'ISO)))
      :overlap nil
-     :intersect et--plist-intersect-args))
+     :intersect et--plist-intersect-args)
+    ;; Scoped datatypes occur when you have a function with generics.
+    ;; Then, inside of that function you can use the generics provided
+    ;; in the function as types. How a scoped datatype interacts with
+    ;; other datatypes is determined entirely by what constraints were
+    ;; placed upon it in its definition. Its arguments are (NAME
+    ;; UNIQUE CONSTRAINTS), where UNIQUE is a unique symbol for this
+    ;; scoped datatype, and CONSTRAINTS is a list of type constraints.
+    (Scoped
+     :args (CONST CONST CONST)
+     :overlap t
+     :intersect nil))
   "Datatypes")
+
+(defvar et--scoped-datatypes nil
+  "A list of (NAME SCOPED CONSTRAINTS).")
+
+(defun et--make-scoped-datatypes (matcher)
+  (cl-loop for name in (when matcher (et-matcher-generics matcher))
+           for qs = (cl-loop for q in (et-matcher-constraints matcher)
+                             when (eq (cadr q) name)
+                             collect q)
+           collect (list name (gensym (format "scoped-%s@" name)) qs)))
+
+(defmacro et--with-scoped-datatypes (scoped &rest body)
+  (declare (indent 1))
+  `(let* ((et--scoped-datatypes (append ,scoped et--scoped-datatypes)))
+     ,@body))
 
 (defun et--plist-intersect-args (args1 args2 intersect _union)
   (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
@@ -329,6 +340,10 @@ An list of (NAME PLIST), where PLIST has the following properties:
 (defun et--datatype-name? (name)
   "Check if NAME is a datatype name."
   (not (not (assq name et--datatypes))))
+
+(defun et--scoped-datatype-from-name (name)
+  "Check if NAME is a datatype name."
+  (assq name et--scoped-datatypes))
 
 (defun et--datatype-arg-roles (dt-name dt-args)
   "Returns a list of `CONST' | `CO' | `CONTRA' | `ISO'.
@@ -932,15 +947,18 @@ Matchers only:
        (et-q (((S:SET ,var ,(funcall parse type))))))
 
       (`(,(and name (pred symbolp) (pred (not keywordp))) . ,args)
-       (cond
-        ((memq name generics)
-         (or (null args) (error "Generic type cannot have arguments"))
-         (et-q (((S:GENERIC ,name)))))
+       (pcase nil
+         ((guard (memq name generics))
+          (or (null args) (error "Generic type cannot have arguments"))
+          (et-q (((S:GENERIC ,name)))))
 
-        ((et--datatype-name? name)
-         (et-q (((S:DT ,name ,@(et--datatype-map-type-args name args parse))))))
+         ((guard (et--datatype-name? name))
+          (et-q (((S:DT ,name ,@(et--datatype-map-type-args name args parse))))))
 
-        (t (et-q (((S:ALIAS ,name ,@(mapcar parse args))))))))
+         ((and (let args (et--scoped-datatype-from-name name)) (guard args))
+          (et-q (((S:DT Scoped ,@args)))))
+
+         (_ (et-q (((S:ALIAS ,name ,@(mapcar parse args))))))))
 
       (_ (error "Invalid parse syntax: %s" spec)))))
 

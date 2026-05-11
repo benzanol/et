@@ -388,14 +388,7 @@ RETURN is a parsable expression for the return type.
 \(fn FUNC [GENERICS] ARGLIST RETURN)"
   (declare (indent 2))
 
-  (let* ((generics
-          (when (vectorp (car arguments))
-            (cl-loop for var across (car arguments)
-                     do (or (symbolp var) (error "Generic vars must be symbols"))
-                     do (or (let ((case-fold-search nil))
-                              (string-match-p "^[A-Z]" (format "%s" var)))
-                            (error "Generic vars must start with an uppercase letter")))
-            (append (pop arguments) nil)))
+  (let* ((generics (when (vectorp (car arguments)) (append (pop arguments) nil)))
          (arglist-spec (car arguments))
          (return-spec (cadr arguments))
          (matcher (et-parse-matcher arglist-spec generics))
@@ -489,267 +482,322 @@ PATH is the path to the subexpression."
               (et-q ,(et-parse-structure output-spec gens))))
 
 
-;;;; Function checking
-;;;;; Arglist structure generation
+;;; ============================================================
+;;; Function types
+;;;; Struct
 
-(defun et--generate-arglist-structure (std-structs opt-structs rest-or-keys)
-  "Build a structure representing a function's argument list.
+(cl-defstruct et-func-sig
+  "Parsed function signature.
 
-STD-STRUCTS is a list of structures for required parameters.
-OPT-STRUCTS is a list of structures for &optional parameters.
-REST-OR-KEYS is one of:
-  nil              — no rest or key parameters
-  (:rest . STRUCT) — a structure for the &rest type (already ListR-wrapped)
-  ALIST            — an alist of (NAME . STRUCTURE) for &key
-
-The resulting structure is a nested ConsR chain where:
-  - Required args are unconditional ConsR links.
-  - Optional args each introduce (or Nil ConsR<type~...>).
-  - &rest appends the rest structure as the tail.
-  - &key generates a PList as the tail."
-  (et--generate-arglist-required-structure
-   std-structs
-   (et--generate-arglist-tail-structure opt-structs rest-or-keys)))
-
-(defun et--generate-arglist-required-structure (structs tail)
-  "Chain required STRUCTS into nested ConsR structure, terminated by TAIL."
-  (if (null structs) tail
-    (et-q (((S:ALIAS ConsR
-                     ,(car structs)
-                     ,(et--generate-arglist-required-structure (cdr structs) tail)))))))
-
-(defun et--generate-arglist-tail-structure (opt-structs rest-or-keys)
-  "Build the optional/rest/key tail of an arglist structure."
-  (cond
-   ((and (null opt-structs) (null rest-or-keys))
-    (et-q (((S:DT Literal nil)))))
-   ((and (null opt-structs) (eq (car-safe rest-or-keys) :rest))
-    (cdr rest-or-keys))
-   ((and (null opt-structs) (listp rest-or-keys))
-    (et--generate-keys-plist-structure rest-or-keys))
-   (t
-    (let* ((inner (et--generate-arglist-tail-structure (cdr opt-structs) rest-or-keys)))
-      (et-q (((S:DT Literal nil))
-             ((S:ALIAS ConsR ,(car opt-structs) ,inner))))))))
-
-(defun et--generate-keys-plist-structure (keys-alist)
-  "Build a PList structure from KEYS-ALIST, an alist of (NAME . STRUCTURE)."
-  (cl-loop for (name . struct) in keys-alist
-           nconc (list (intern (format ":%s" name)) struct) into plist-args
-           finally return (et-q (((S:DT PList ,@plist-args))))))
+GENERICS is a list of generic symbols, or nil.
+RETURN is the return type spec (a form parseable by `et-parse-structure').
+BODY is the function body with inline annotations stripped.
+REQUIRED, OPTIONAL, KEY are alists of (SYMBOL . TYPE-SPEC-OR-NIL).
+REST is either nil or a single (SYMBOL . TYPE-SPEC-OR-NIL) cons."
+  generics return body required optional key rest)
 
 
-;;;;; Docstring type parsing
+;;;; Parsing to a struct
+;;;;; Docstring parsing
 
-(defun et--parse-docstring-types (docstring)
-  "Parse type annotations from DOCSTRING.
+(defun et--parse-docstring-annotations (docstring)
+  "Extract type annotations from DOCSTRING.
 
-Returns (GENERICS RETURN-SPEC . ARG-SPECS) where GENERICS is a list of
-generic symbols (or nil), RETURN-SPEC is a type spec for the return type
-\(or nil), and ARG-SPECS is an alist of (DOWNCASE-SYMBOL . SPEC).
+Returns (GENERICS RETURN-SPEC . ARG-SPECS) where:
+  GENERICS is a list of generic symbols, or nil.
+  RETURN-SPEC is a type spec form, or nil.
+  ARG-SPECS is an alist of (DOWNCASE-SYMBOL . SPEC).
 
 Recognizes:
-  @et-generics [T U] — declares generic type variables
-  @et-return TYPE-SPEC — declares the return type
-  ARGNAME : TYPE-SPEC — assigns TYPE-SPEC to the lowercased ARGNAME"
+  @et-generics [T U]    — generic type variables
+  @et-return TYPE-SPEC   — return type
+  ARGNAME : TYPE-SPEC    — per-parameter type (ARGNAME uppercase)"
   (let* ((generics nil)
          (return-spec nil)
          (arg-specs nil))
-    (when (and docstring (stringp docstring))
-      ;; Parse @et-generics VECTOR
+    (when (stringp docstring)
       (when (string-match "@et-generics\\s-+\\(\\[.*?\\]\\)" docstring)
-        (let* ((gen-expr (car (read-from-string (match-string 1 docstring)))))
-          (when (vectorp gen-expr)
-            (setq generics (append gen-expr nil)))))
+        (let* ((expr (ignore-errors (car (read-from-string (match-string 1 docstring))))))
+          (when (vectorp expr)
+            (setq generics (append expr nil)))))
 
-      ;; Parse @et-return TYPE-SPEC
       (when (string-match "@et-return\\s-+\\(\\S-.*\\)" docstring)
-        (let* ((type-str (match-string 1 docstring))
-               (type-expr (ignore-errors (car (read-from-string type-str)))))
-          (when type-expr
-            (setq return-spec type-expr))))
+        (setq return-spec
+              (ignore-errors (car (read-from-string (match-string 1 docstring))))))
 
-      ;; Parse ARGNAME : TYPE-SPEC
-      (let ((pos 0))
+      (let* ((pos 0))
         (while (string-match
                 "^\\([A-Z][-A-Z0-9_]*\\)\\s-+:\\s-+\\(\\S-.*\\)"
                 docstring pos)
           (let* ((name (intern (downcase (match-string 1 docstring))))
-                 (type-str (match-string 2 docstring))
-                 (type-expr (ignore-errors (car (read-from-string type-str)))))
-            (when type-expr
-              (push (cons name type-expr) arg-specs)))
+                 (spec (ignore-errors (car (read-from-string (match-string 2 docstring))))))
+            (when spec (push (cons name spec) arg-specs)))
           (setq pos (match-end 0)))))
     (cons generics (cons return-spec (nreverse arg-specs)))))
 
 
 ;;;;; Arglist parsing
 
-(defun et--parse-funcdef-arglist (arglist doc-arg-specs generics arglist-pos)
-  "Parse ARGLIST into structure-level parameter components.
+(defun et--parse-funcdef-params (arglist doc-arg-specs)
+  "Parse ARGLIST into parameter alists, stripping inline type vectors.
 
-DOC-ARG-SPECS is an alist of (NAME . SPEC) from docstring parsing.
-GENERICS is the list of generic type variable symbols (or nil).
-ARGLIST-POS is for error reporting.
+DOC-ARG-SPECS is an alist of (SYMBOL . SPEC) from docstring parsing.
 
-Returns (STD-STRUCTS OPT-STRUCTS REST-OR-KEYS ALL-VARS) where:
-  STD-STRUCTS is a list of structures for required params.
-  OPT-STRUCTS is a list of structures for optional params.
-  REST-OR-KEYS is nil, (:rest . STRUCTURE) for a rest param, or a
-    key alist of (NAME . STRUCTURE).
-  ALL-VARS is a list of `et-var' (with types for body checking)."
-  (let* ((std-structs nil) (opt-structs nil)
-         (key-entries nil) (rest-entry nil)
-         (all-vars nil)
-         (mode 'standard))
+Destructively modifies ARGLIST to replace [name Type] vectors with bare
+symbols.
 
-    (dolist (elem arglist)
-      (pcase elem
+Returns (REQUIRED OPTIONAL KEY REST) where REQUIRED, OPTIONAL, KEY are
+alists of (SYMBOL . TYPE-SPEC-OR-NIL) and REST is a single cons or nil.
+
+Signals an error on malformed parameters."
+  (let* ((required nil)
+         (optional nil)
+         (key-params nil)
+         (rest-param nil)
+         (mode 'standard)
+         (cell arglist))
+
+    (while cell
+      (pcase (car cell)
         ('&optional (setq mode 'optional))
         ('&rest     (setq mode 'rest))
         ('&key      (setq mode 'key))
-        (_
-         (let* ((inline-p (and (vectorp elem) (>= (length elem) 2)))
-                (name (pcase elem
-                        ((guard inline-p) (aref elem 0))
-                        ((pred consp)     (car elem))
-                        ((pred symbolp)   elem)
-                        (_                (et-checker-err arglist-pos
-                                                          "Invalid parameter: %s" elem)
-                                          nil)))
-                (spec (pcase elem
-                        ((guard inline-p) (aref elem 1))
-                        (_ (alist-get name doc-arg-specs))))
-                (struct (condition-case err
-                            (et-parse-structure (or spec 'Any) generics)
-                          (error
-                           (et-checker-err arglist-pos
-                                           "Invalid type for `%s': %s"
-                                           name (error-message-string err))
-                           (et-parse-structure 'Any nil))))
-                (type (condition-case nil
-                          (et-structure-to-type struct)
-                        (error (et-any)))))
+        (elem
+         (let* ((name nil)
+                (spec nil))
+           (pcase elem
+             ((and (pred vectorp) (guard (>= (length elem) 2)))
+              (setq name (aref elem 0)
+                    spec (aref elem 1))
+              (or (symbolp name) (error "Parameter name must be a symbol: %s" name))
+              (setcar cell name))
 
-           (when name
-             (push (et-new-var name type) all-vars)
-             (pcase mode
-               ('standard (push struct std-structs))
-               ('optional (push struct opt-structs))
-               ('rest     (setq rest-entry
-                                (cons :rest
-                                      (et-parse-structure
-                                       (et-q (ListR (:structure ,struct))) generics))))
-               ('key      (push (cons name struct) key-entries))))))))
+             ((pred consp)
+              (setq name (car elem))
+              (or (symbolp name) (error "Parameter name must be a symbol: %s" name))
+              (setq spec (alist-get name doc-arg-specs)))
 
-    (list (nreverse std-structs)
-          (nreverse opt-structs)
-          (or rest-entry (when key-entries (nreverse key-entries)))
-          (nreverse all-vars))))
+             ((pred symbolp)
+              (setq name elem
+                    spec (alist-get elem doc-arg-specs)))
+
+             (_ (error "Invalid parameter: %s" elem)))
+
+           (pcase mode
+             ('standard (push (cons name spec) required))
+             ('optional (push (cons name spec) optional))
+             ('key      (push (cons name spec) key-params))
+             ('rest
+              (when rest-param (error "Multiple &rest parameters"))
+              (setq rest-param (cons name spec)))))))
+      (setq cell (cdr cell)))
+
+    (list (nreverse required)
+          (nreverse optional)
+          (nreverse key-params)
+          rest-param)))
 
 
-;;;;; Function definition checker
+;;;;; Main entry point
 
-(defun et-checker-funcdef (start-path)
-  "Type-check a function definition at START-PATH in `et--checker-expr'.
+(defun et-parse-function-type (body)
+  "Parse function signature from BODY, returning an `et-func-sig'.
 
-START-PATH points to the first element after the keyword (e.g. 1 for
-lambda, 2 for defun). That position may hold a generics vector
-\(followed by the arglist) or the arglist directly.
+BODY is the forms after the function name in a defun: an optional
+generics vector, the arglist, an optional `-> RETURN-SPEC', an optional
+docstring, then body forms.
 
-A return type can be declared either inline with -> after the arglist:
-  (lambda ([x Integer]) -> Integer x)
-or via @et-return in the docstring. Inline takes precedence.
-
-When a return type is declared, the body's inferred type is checked
-against it and the declared type is used.
-
-Returns a Function type when no generics are present, or a DynFunction
-type when generics are present."
-  (let* ((elems (nthcdr start-path et--checker-expr))
+Signals an error if anything is malformed."
+  (let* ((forms (copy-tree body))
          (generics nil)
-         (arglist-pos start-path)
-         (return-spec nil)
-         (return-struct nil))
+         (return-spec nil))
 
-    ;; Detect and remove inline generics vector
-    (when (vectorp (car elems))
-      (setq generics (append (car elems) nil))
-      (setcdr (nthcdr (1- start-path) et--checker-expr) (cddr elems))
-      (setq elems (nthcdr start-path et--checker-expr)))
+    ;; Consume leading generics vector
+    (when (vectorp (car forms))
+      (setq generics (append (pop forms) nil)))
 
-    (unless (listp (car elems))
-      (et-checker-err arglist-pos "Expected argument list, got %s" (type-of (car elems)))
-      (signal 'et-checker-fatal nil))
+    (or (listp (car forms))
+        (error "Expected argument list, got %s" (type-of (car forms))))
+    (let* ((arglist (pop forms)))
 
-    ;; Detect and remove inline return type: -> SPEC after arglist
-    (when (eq (cadr elems) '->)
-      (setq return-spec (caddr elems))
-      (setcdr elems (cdddr elems)))
+      ;; Consume inline return type
+      (when (eq (car forms) '->)
+        (pop forms)
+        (or forms (error "Missing type after `->'"))
+        (setq return-spec (pop forms)))
 
-    ;; Parse docstring (must come after arglist, and body must follow)
-    (let* ((after-arglist (cdr elems))
-           (docstring (when (and (stringp (car after-arglist))
-                                 (cdr after-arglist))
-                        (car after-arglist)))
-           (doc-info (et--parse-docstring-types docstring))
-           (doc-generics (car doc-info))
-           (doc-return-spec (cadr doc-info))
-           (doc-arg-specs (cddr doc-info)))
+      ;; Extract docstring only when followed by more body forms
+      (let* ((docstring (when (and (stringp (car forms)) (cdr forms))
+                          (car forms)))
+             (doc-info (et--parse-docstring-annotations docstring))
+             (doc-generics (car doc-info))
+             (doc-return (cadr doc-info))
+             (doc-arg-specs (cddr doc-info)))
 
-      ;; Inline -> takes precedence over docstring @et-return
-      (setq return-spec (or return-spec doc-return-spec))
-      ;; Inline generics vector takes precedence over docstring
-      (unless generics (setq generics doc-generics))
+        ;; Inline annotations take precedence
+        (or generics (setq generics doc-generics))
+        (or return-spec (setq return-spec doc-return))
 
-      (pcase-let* ((`(,std-structs ,opt-structs ,rest-or-keys ,all-vars)
-                    (et--parse-funcdef-arglist (car elems) doc-arg-specs generics arglist-pos))
-                   (arglist-struct
-                    (et--generate-arglist-structure std-structs opt-structs rest-or-keys))
-                   (body-start (+ arglist-pos (if docstring 2 1))))
+        (pcase-let* ((`(,required ,optional ,key-params ,rest-param)
+                      (et--parse-funcdef-params arglist doc-arg-specs)))
 
-        ;; Parse the return type spec into a structure
-        (when return-spec
-          (setq return-struct
-                (condition-case err
-                    (et-parse-structure return-spec generics)
-                  (error
-                   (et-checker-err arglist-pos "Invalid return type: %s"
-                                   (error-message-string err))
-                   nil))))
+          (make-et-func-sig
+           :generics generics
+           :return return-spec
+           :body (cons arglist forms)
+           :required required
+           :optional optional
+           :key key-params
+           :rest rest-param))))))
 
-        ;; Strip inline annotations from compiled arglist
-        (et--strip-inline-types (car elems))
 
-        ;; Type-check the body and validate against declared return type
-        (let* ((body-type (et-with-vars all-vars (et-checker-tail body-start)))
-               (return-type
-                (pcase return-struct
-                  ('nil body-type)
-                  (_ (let* ((declared-type
-                             (condition-case nil (et-structure-to-type return-struct)
-                               (error (et-any)))))
-                       (unless (et-subtype? body-type declared-type)
-                         (et-checker-err "Body type %s does not satisfy declared return type %s"
-                                         (et-pp body-type) (et-pp declared-type)))
-                       declared-type)))))
-          (if generics
-              (et-dt 'DynFunction
-                     (make-et-matcher
-                      :generics generics
-                      :dnf (et-structure-to-matcher-dnf arglist-struct generics))
-                     (or return-struct (et-type-to-structure return-type)))
-            (et-dt 'Function
-                   (et-structure-to-type arglist-struct)
-                   return-type)))))))
+;;;;; Tests
 
-(defun et--strip-inline-types (arglist)
-  "Destructively replace [name Type] vectors in ARGLIST with bare names."
-  (let ((cell arglist))
-    (while cell
-      (when (and (vectorp (car cell)) (>= (length (car cell)) 2))
-        (setcar cell (aref (car cell) 0)))
-      (setq cell (cdr cell)))))
+(et-test
+ ;; 1. Inline generics + inline typed args + arrow return + multi-form body
+ (equal (et-parse-function-type
+         '([T U] ([x T] [y U]) -> ConsR<T~U> (message "hi") (cons x y)))
+        (make-et-func-sig
+         :generics '(T U)
+         :return 'ConsR<T~U>
+         :body '((x y) (message "hi") (cons x y))
+         :required '((x . T) (y . U))
+         :optional nil
+         :key nil
+         :rest nil))
+
+ ;; 2. No generics + docstring annotations + &optional (bare + defaulted) + &rest
+ (equal (et-parse-function-type
+         '((a &optional b (c 10) &rest args)
+           "A : Integer\nB : String\nC : Number\nARGS : ListR<Symbol>\n@et-return Boolean"
+           (or b a)))
+        (make-et-func-sig
+         :generics nil
+         :return 'Boolean
+         :body '((a &optional b (c 10) &rest args)
+                 "A : Integer\nB : String\nC : Number\nARGS : ListR<Symbol>\n@et-return Boolean"
+                 (or b a))
+         :required '((a . Integer))
+         :optional '((b . String) (c . Number))
+         :key nil
+         :rest '(args . ListR<Symbol>)))
+
+ ;; 3. Docstring generics + &key (typed + untyped) + no inline annotations
+ (equal (et-parse-function-type
+         '((x &key scale flag)
+           "@et-generics [T]\nX : T\nSCALE : Number\n@et-return VectorR<T>"
+           (vector x)))
+        (make-et-func-sig
+         :generics '(T)
+         :return 'VectorR<T>
+         :body '((x &key scale flag)
+                 "@et-generics [T]\nX : T\nSCALE : Number\n@et-return VectorR<T>"
+                 (vector x))
+         :required '((x . T))
+         :optional nil
+         :key '((scale . Number) (flag . nil))
+         :rest nil))
+
+ ;; 4. Inline overrides docstring + mixed inline/bare required + no return annotation
+ (equal (et-parse-function-type
+         '([U] ([a U] b) -> ListR<U>
+           "@et-generics [T]\nA : T\nB : String\n@et-return VectorR<T>"
+           (list a b)))
+        (make-et-func-sig
+         :generics '(U)
+         :return 'ListR<U>
+         :body '((a b)
+                 "@et-generics [T]\nA : T\nB : String\n@et-return VectorR<T>"
+                 (list a b))
+         :required '((a . U) (b . String))
+         :optional nil
+         :key nil
+         :rest nil)))
+
+
+;;;; Make matcher
+
+(defun et-func-sig-to-matcher (sig)
+  "Convert an `et-func-sig' to an `et-matcher' for the arglist.
+
+Returns an `et-matcher' if the sig has generics, or an `et-type' if not.
+The arglist is represented as a nested ConsR tuple:
+  - Required params are unconditional links.
+  - Optional params each introduce an (or Nil ConsR<type~...>) branch.
+  - &rest appends a ListR<type> tail.
+  - &key generates a PList tail.
+  - Otherwise the tail is Nil."
+
+  (let* ((generics (et-func-sig-generics sig))
+         (parse (lambda (spec) (et-parse-structure (or spec 'Any) generics)))
+         (required-structs (mapcar (lambda (p) (funcall parse (cdr p)))
+                                   (et-func-sig-required sig)))
+         (optional-structs (mapcar (lambda (p) (funcall parse (cdr p)))
+                                   (et-func-sig-optional sig)))
+         (tail (pcase (et-func-sig-rest sig)
+                 (`(,_ . ,spec) (et-parse-structure
+                                 (et-q (ListR (:structure ,(funcall parse spec))))
+                                 generics))
+                 ((and (let keys (et-func-sig-key sig)) (guard keys)
+                       (let plist-args
+                         (cl-loop for (name . spec) in (et-func-sig-key sig)
+                                  nconc (list (intern (format ":%s" name))
+                                              (funcall parse spec)))))
+                  (et-q (((S:DT PList ,@plist-args)))))))
+         (opt-tail (et--func-sig-optional-tail optional-structs tail))
+         (struct (et--func-sig-required-chain required-structs opt-tail)))
+
+    (if generics
+        (make-et-matcher
+         :generics generics
+         :dnf (et-structure-to-matcher-dnf struct generics))
+      (et-structure-to-type struct))))
+
+(defun et--func-sig-required-chain (structs tail)
+  "Chain required STRUCTS into nested ConsR, terminated by TAIL."
+  (if (null structs) tail
+    (et-q (((S:ALIAS ConsR
+                     ,(car structs)
+                     ,(et--func-sig-required-chain (cdr structs) tail)))))))
+
+(defun et--func-sig-optional-tail (opt-structs rest-tail)
+  "Build the optional suffix of an arglist structure.
+
+Each optional param introduces (or Nil ConsR<type~...>).
+REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
+  (pcase opt-structs
+    ('nil (or rest-tail (et-q (((S:DT Literal nil))))))
+    (`(,first . ,remaining)
+     (let* ((inner (et--func-sig-optional-tail remaining rest-tail)))
+       (et-q (((S:DT Literal nil))
+              ((S:ALIAS ConsR ,first ,inner))))))))
+
+
+(et-test
+ ;; 1. No generics, required only -> returns et-type (not matcher)
+ ;;    ConsR<Integer, ConsR<String, Nil>>
+ (equal (et-func-sig-to-matcher
+         (make-et-func-sig :required '((x . Integer) (y . String))))
+        (et ConsR<Integer~ConsR<String~Nil>>))
+
+ ;; 2. Generics + required + optional + &rest -> matcher with optional branches and ListR tail
+ ;;    [T] ConsR<T, Nil | ConsR<Number, ListR<String>>>
+ (equal (et-func-sig-to-matcher
+         (make-et-func-sig :generics '(T)
+                           :required '((x . T))
+                           :optional '((y . Number))
+                           :rest '(args . String)))
+        (et-matcher [T]
+          ConsR<T~{Nil|ConsR<Number~ListR<String>>}>))
+
+ ;; 3. Generics + required + &key (typed + untyped) -> matcher with PList tail
+ ;;    [T] ConsR<T, PList<:scale Number :flag Any>>
+ (equal (et-func-sig-to-matcher
+         (make-et-func-sig :generics '(T)
+                           :required '((a . T))
+                           :key '((scale . Number) (flag . nil))))
+        (et-matcher [T]
+          ConsR<T~PList<:scale~Number~:flag~Any>>)))
 
 
 ;;; ============================================================

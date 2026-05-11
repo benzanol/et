@@ -29,13 +29,52 @@
 ;;; Definitions
 ;;;; Function checkers
 
-(et-define-checker lambda
-  (et-checker-funcdef 1))
+(defun et--func-sig-params (sig)
+  (append (et-func-sig-required sig)
+          (et-func-sig-optional sig)
+          (et-func-sig-key sig)
+          (when-let* ((rest (et-func-sig-rest sig)))
+            (list (cons (car rest) (or (cdr rest) 'ListR<Any>))))))
 
-(et-define-pcase-checker (defun cl-defun) `(,(and (pred symbolp) name) . ,_body)
-  (when-let* ((func-type (et-checker-funcdef 2)))
-    (put name 'et-function-type func-type)
-    func-type))
+(et-define-pcase-checker lambda body
+  (let* ((sig (et-parse-function-type body))
+         (input (et-func-sig-to-matcher sig))
+         (output-spec (et-func-sig-return sig))
+         (output-struct nil)
+         (scoped (when (et-matcher-p input) (et--make-scoped-datatypes input))))
+
+    ;; Remove inline type annotations and generics vector
+    (setcdr et--checker-expr (et-func-sig-body sig))
+
+    ;; Typecheck the body and make sure it matches the expected return
+    (et--with-scoped-datatypes scoped
+      ;; Parsing the var types and return types, and checking the tail
+      ;; must all be done inside with the scoped datatypes bound
+      (et-with-vars (cl-loop for (name . spec) in (et--func-sig-params sig)
+                             collect (make-et-var :name name
+                                                  :type (et-parse-type (or spec 'Any))))
+        (if (not output-spec)
+            ;; Infer the return type
+            (setq output-struct (et-type-to-structure (et--remove-type-binds (et-checker-tail 2))))
+
+          ;; Make sure the return type is valid
+          (setq output-struct (et-parse-structure output-spec nil)) ; Must be done inside scoped datatypes
+          (let* ((expected-ret (et-structure-to-type output-struct))
+                 (real-ret (et-checker-tail 2)))
+            (unless (et-subtype? real-ret expected-ret)
+              (et-checker-err 0 "Expected %s, got %s" (et-pp expected-ret) (et-pp real-ret))))))
+
+      ;; Replace the scoped datatypes with generics
+      (dolist (s scoped)
+        (setq output-struct (cl-subst `(S:GENERIC ,(car s))
+                                      `(S:DT Scoped . ,s)
+                                      output-struct
+                                      :test #'equal))))
+
+    (if (et-matcher-p input)
+        (et-dt 'DynFunction input output-struct)
+      (et-dt 'Function input (et-structure-to-type output-struct)))))
+
 
 (et-test
  ;; Inline typed args
@@ -60,7 +99,9 @@
 
  ;; &rest
  (et-assert-resolve (Function ConsR<Integer~ListR<Any>> Integer)
-   (lambda ([x Integer] &rest args) x)))
+   (lambda ([x Integer] &rest args) x))
+ (et-assert-resolve (Function ConsR<Any~ListR<Any>> ListR<Any>)
+   (lambda (x &rest args) args)))
 
 (et-test
  ;; Body return type with typed args
@@ -118,7 +159,7 @@
 X : T
 SCALE : Number
 @et-return VectorR<T>"
-     x))
+     (vector x)))
 
  ;; Docstring with no @et-generics and no @et-return, using &optional and &rest
  (et-assert-resolve (Function ConsR<Integer~Nil|ConsR<String~ListR<Any>>> Integer)
@@ -510,6 +551,16 @@ Y : String"
 (et-test
  (et-assert-call Integer length VectorR<Number>|ListR<String>)
  (et-assert-call-errors length VectorR<Number>|ListR<String>|Number))
+
+
+;;;;; vector
+
+(et-define-type-checker vector [T] ListR<T> Vector<T>)
+
+(et-test
+ (et-assert-call Vector<1|2> vector 1 2)
+ (et-assert-call Vector<Never> vector)
+ (et-assert-call Vector<Number> vector Integer Number Positive))
 
 
 ;;;;; aref
