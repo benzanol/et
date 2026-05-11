@@ -185,8 +185,10 @@ priority."
 
 ;;;; Dnf And
 
-(defun et--dnf-and (&rest args)
-  (pcase args
+(defun et--dnf-and (&rest dnfs)
+  "Return the DNF of intersecting DNFS."
+
+  (pcase dnfs
     ('() (list (list)))
     (`(,a) a)
     (`(,a ,b ,c . ,rest) (et--dnf-and a (apply #'et--dnf-and b c rest)))
@@ -309,7 +311,8 @@ An list of (NAME PLIST), where PLIST has the following properties:
              (cl-loop for (_prop _val) on args by #'cddr
                       nconc (list 'CONST 'ISO)))
      :overlap nil
-     :intersect et--plist-intersect-args)))
+     :intersect et--plist-intersect-args))
+  "Datatypes")
 
 (defun et--plist-intersect-args (args1 args2 intersect _union)
   (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
@@ -324,6 +327,7 @@ An list of (NAME PLIST), where PLIST has the following properties:
 ;;;; Datatype helpers
 
 (defun et--datatype-name? (name)
+  "Check if NAME is a datatype name."
   (not (not (assq name et--datatypes))))
 
 (defun et--datatype-arg-roles (dt-name dt-args)

@@ -26,8 +26,8 @@
 
 
 ;;; ============================================================
-;;; Function definitions
-;;;; Checkers
+;;; Definitions
+;;;; Function checkers
 
 (et-define-checker lambda
   (et-checker-funcdef 1))
@@ -138,6 +138,40 @@ Y : String"
            (indent 2))
 
   (let* ((result (et--check (cons #'cl-defun args))))
+    (et-show-result-errors result)
+    (et-result-compiled result)))
+
+
+;;;; Var checkers
+
+(defun et--parse-defvar-docstring (docstring)
+  "Parse a @et-type annotation from DOCSTRING, returning a type or nil."
+  (when (and (stringp docstring) (string-match "@et-type" docstring))
+    (when-let* ((type-expr (ignore-errors (car (read-from-string docstring (match-end 0))))))
+      (condition-case _err (et-parse-type type-expr)
+        (error nil)))))
+
+(et-define-pcase-checker defvar
+    `(,(and (pred symbolp) name) .
+      ,(or 'nil `(,val . ,(or 'nil `(,(and docstring (pred stringp)))))))
+  (let* ((declared-type (et--parse-defvar-docstring docstring))
+         (value-type (or (when val (et-checker-sub 2)) (et Nil))))
+
+    (when declared-type
+      (or (et-subtype? value-type declared-type)
+          (et-checker-err 2 "Initial value type %s does not satisfy declared type %s"
+                          (et-pp value-type) (et-pp declared-type))))
+
+    (setcar et--checker-expr 'defvar)
+    (put name 'et-variable-type (or declared-type value-type))))
+
+(defmacro et-defvar (&rest args)
+  "Define a type-checked function.
+
+\(fn NAME [INIT-VAL] [DOCSTRING])"
+  (declare (doc-string 3) (indent 2))
+
+  (let* ((result (et--check (cons #'defvar args))))
     (et-show-result-errors result)
     (et-result-compiled result)))
 
@@ -486,6 +520,11 @@ Y : String"
  (et-assert-call Integer aref String Integer)
  (et-assert-call Symbol|Integer aref (or VectorR<Symbol> String) Integer)
  (et-assert-call-errors aref (or VectorR<Symbol> String ListR<Any>) Integer))
+
+
+;;;;; alists
+
+(et-define-type-checker assq [C] (Args Any ListR<C&Cons>) C|Nil)
 
 
 ;;;; Predicates

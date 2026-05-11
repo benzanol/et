@@ -176,15 +176,20 @@ determine the output type."
 
       ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
       ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
+       (pcase nil
+         ;; Check if the variable is locally scoped
+         ((and (let var (et-get-symbol-var sym)) (guard var))
+          (setq return-type
+                (et--supersect
+                 (et-var-type var)
+                 (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
+                                             :typeofs (list var))))))
 
-       (if-let* ((var (et-get-symbol-var sym)))
-           (setq return-type
-                 (et--supersect
-                  (et-var-type var)
-                  (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
-                                              :typeofs (list var)))))
+         ;; Check if it is a global variable with a type
+         ((and (let type (get sym 'et-variable-type)) (guard type))
+          (setq return-type type))
 
-         (et-checker-err "Free variable: %s" sym)))
+         (_ (et-checker-err "Free variable: %s" sym))))
 
       (expr (setq return-type (et-literal expr))))
 
@@ -484,7 +489,7 @@ PATH is the path to the subexpression."
               (et-q ,(et-parse-structure output-spec gens))))
 
 
-;;;; Function parsing
+;;;; Function checking
 ;;;;; Arglist structure generation
 
 (defun et--generate-arglist-structure (std-structs opt-structs rest-or-keys)
