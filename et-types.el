@@ -133,7 +133,7 @@ Y : String"
 (defmacro et-defun (&rest args)
   "Define a type-checked function.
 
-\(fn NAME ARGLIST [DOCSTRING] BODY...)"
+\(fn NAME [GENERICS] ARGLIST [DOCSTRING] BODY...)"
   (declare (doc-string 3)
            (indent 2))
 
@@ -185,7 +185,8 @@ Y : String"
              (and
               (or
                ;; Explicit type annotation
-               (and form `(,name ,(app et-parse-type type) ,_val)
+               (and form `(,name ,type-spec ,_val)
+                    (let type (et-parse-type type-spec))
                     (let _1 (setcdr form (cddr form)))
                     (let _2 (et-with-vars vars (et-checker-resolve type 1 (length vars) 1))))
                ;; Implicit type
@@ -282,7 +283,8 @@ Y : String"
   (let* ((cond-type (et-checker-sub 1)))
 
     (et-checker-hint-narrows
-     "IF:\\n%s" (et--supersect cond-type (et NonNil))
+     0
+     "IF:\\n%s" (et--non-nil cond-type)
      "ELSE:\\n%s" (et--supersect cond-type (et Nil)))
 
     (et--or (et--and-return-type cond-type (lambda () (et-checker-sub 2)))
@@ -290,14 +292,14 @@ Y : String"
 
 (et-define-pcase-checker when `(,_cond . ,then)
   (let* ((cond-type (et-checker-sub 1)))
-    (et-checker-hint-narrows "WHEN:\\n%s" (et--non-nil cond-type))
+    (et-checker-hint-narrows 0 "WHEN:\\n%s" (et--non-nil cond-type))
     ;; Special case for empty then block because (when cond) always returns nil
     (if (null then) (et Nil)
       (et--and-return-type cond-type (lambda () (et-checker-tail 2))))))
 
 (et-define-pcase-checker unless `(,_cond . ,_else)
   (let* ((cond-type (et-checker-sub 1)))
-    (et-checker-hint-narrows "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
+    (et-checker-hint-narrows 0 "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
     ;; Special case for empty then block because (when cond) always returns nil
     (et--or-return-type cond-type (lambda () (et-checker-tail 2)))))
 
@@ -486,8 +488,7 @@ Y : String"
 (et-define-type-checker setcar [A] (Args A Nil|ConsW<A~Never>) A)
 
 (et-test
- (et-typecheck-call setcar Number ConsW<Number~Number>)
- )
+ (et-typecheck-call setcar Number ConsW<Number~Number>))
 
 
 ;;;;; nth/nthcdr

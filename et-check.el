@@ -55,14 +55,14 @@
 (defvar et--narrow-binds nil
   "Stack of (`et-var' . `et-type').")
 
-(defun et-var-type (variable)
+(defun et-current-var-type (variable)
   (or (alist-get variable et--narrow-binds)
       (et-var-type variable)))
 
 (defun et-get-symbol-type (sym)
   (cl-assert (symbolp sym))
   (when-let ((var (et-get-symbol-var sym)))
-    (et-var-type var)))
+    (et-current-var-type var)))
 
 (defmacro et-with-narrow-binds (binds &rest body)
   (declare (indent 1))
@@ -80,14 +80,14 @@
 (defvar et-display-narrows t
   "Whether to display narrowed types on if/when/etc blocks.")
 
-(defun et-checker-hint-narrows (&rest types)
+(defun et-checker-hint-narrows (path &rest types)
   "Display a list of binds to the user at path=(0).
 
 TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (when et-display-narrows
     (cl-loop for (fmt type) on types by #'cddr
              for binds = (et--type-binds type) ; TODO: display just binds instead of whole type
-             when binds do (et-checker-hint fmt (et-pp-narrows binds)))))
+             when binds do (et-checker-hint path fmt (et-pp-narrows binds)))))
 
 
 ;;; ============================================================
@@ -183,7 +183,7 @@ determine the output type."
          ((and (let var (et-get-symbol-var sym)) (guard var))
           (setq return-type
                 (et--supersect
-                 (et-var-type var)
+                 (et-current-var-type var)
                  (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
                                              :typeofs (list var))))))
 
@@ -247,7 +247,7 @@ determine the output type."
 (defmacro et-typecheck (body)
   (let* ((result (et--check body)))
     (et-with-error-path '(1) (et-show-result-errors result))
-    (et-result-type result)))
+    (et--remove-type-binds (et-simplify-type (et-result-type result)))))
 
 (defmacro et-typecheck-call (func &rest arg-types)
   (cl-loop for type in arg-types
@@ -510,9 +510,10 @@ Returns (GENERICS RETURN-SPEC . ARG-SPECS) where:
   ARG-SPECS is an alist of (DOWNCASE-SYMBOL . SPEC).
 
 Recognizes:
-  @et-generics [T U]    — generic type variables
-  @et-return TYPE-SPEC   — return type
+  `@et-generics' [T U]    — generic type variables
+  `@et-return' TYPE-SPEC   — return type
   ARGNAME : TYPE-SPEC    — per-parameter type (ARGNAME uppercase)"
+
   (let* ((generics nil)
          (return-spec nil)
          (arg-specs nil)
