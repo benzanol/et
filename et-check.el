@@ -170,7 +170,9 @@ determine the output type."
               ;; If `et--checker-failed' is already true, that means one of the arguments was invalid,
               ;; which means the true error was in the arguments, not this call
               (unless et--checker-failed
-                (et-checker-err "Function `%s' not defined on %s" func (et-pp args-type))))))
+                (et-checker-err "`%s' has type %s\\nInvalid arguments: %s" func
+                                (et-pp func-type)
+                                (et-pp (et--remove-type-binds args-type)))))))
 
          (_ (et-checker-err '(0) "No type for `%s'" func))))
 

@@ -1220,7 +1220,7 @@ which are invalid for types."
       (format "%s" type)))
 
 (cl-defmethod cl-print-object ((type et-type) stream)
-  (princ (format "#<%s>" (et-pp-type type)) stream))
+  (princ (format "%s" (et-pp-type type)) stream))
 
 (defalias 'et-pp #'cl-prin1-to-string)
 

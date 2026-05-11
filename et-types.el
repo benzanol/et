@@ -32,8 +32,8 @@
 (et-define-pcase-checker lambda body
   (et-checker-function-body (et-parse-function-type body) 1))
 
-(et-define-pcase-checker defun body
-  (et-checker-function-body (et-parse-function-type body) 1))
+(et-define-pcase-checker defun `(,_name . ,body)
+  (et-checker-function-body (et-parse-function-type body) 2))
 
 (et-test
  ;; Inline typed args
