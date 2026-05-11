@@ -29,51 +29,11 @@
 ;;; Definitions
 ;;;; Function checkers
 
-(defun et--func-sig-params (sig)
-  (append (et-func-sig-required sig)
-          (et-func-sig-optional sig)
-          (et-func-sig-key sig)
-          (when-let* ((rest (et-func-sig-rest sig)))
-            (list (cons (car rest) (or (cdr rest) 'ListR<Any>))))))
-
 (et-define-pcase-checker lambda body
-  (let* ((sig (et-parse-function-type body))
-         (input (et-func-sig-to-matcher sig))
-         (output-spec (et-func-sig-return sig))
-         (output-struct nil)
-         (scoped (when (et-matcher-p input) (et--make-scoped-datatypes input))))
+  (et-checker-function-body (et-parse-function-type body) 1))
 
-    ;; Remove inline type annotations and generics vector
-    (setcdr et--checker-expr (et-func-sig-body sig))
-
-    ;; Typecheck the body and make sure it matches the expected return
-    (et--with-scoped-datatypes scoped
-      ;; Parsing the var types and return types, and checking the tail
-      ;; must all be done inside with the scoped datatypes bound
-      (et-with-vars (cl-loop for (name . spec) in (et--func-sig-params sig)
-                             collect (make-et-var :name name
-                                                  :type (et-parse-type (or spec 'Any))))
-        (if (not output-spec)
-            ;; Infer the return type
-            (setq output-struct (et-type-to-structure (et--remove-type-binds (et-checker-tail 2))))
-
-          ;; Make sure the return type is valid
-          (setq output-struct (et-parse-structure output-spec nil)) ; Must be done inside scoped datatypes
-          (let* ((expected-ret (et-structure-to-type output-struct))
-                 (real-ret (et-checker-tail 2)))
-            (unless (et-subtype? real-ret expected-ret)
-              (et-checker-err 0 "Expected %s, got %s" (et-pp expected-ret) (et-pp real-ret))))))
-
-      ;; Replace the scoped datatypes with generics
-      (dolist (s scoped)
-        (setq output-struct (cl-subst `(S:GENERIC ,(car s))
-                                      `(S:DT Scoped . ,s)
-                                      output-struct
-                                      :test #'equal))))
-
-    (if (et-matcher-p input)
-        (et-dt 'DynFunction input output-struct)
-      (et-dt 'Function input (et-structure-to-type output-struct)))))
+(et-define-pcase-checker defun body
+  (et-checker-function-body (et-parse-function-type body) 1))
 
 
 (et-test

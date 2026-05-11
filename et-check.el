@@ -489,16 +489,15 @@ PATH is the path to the subexpression."
 (cl-defstruct et-func-sig
   "Parsed function signature.
 
-GENERICS is a list of generic symbols, or nil.
-RETURN is the return type spec (a form parseable by `et-parse-structure').
 BODY is the function body with inline annotations stripped.
-REQUIRED, OPTIONAL, KEY are alists of (SYMBOL . TYPE-SPEC-OR-NIL).
-REST is either nil or a single (SYMBOL . TYPE-SPEC-OR-NIL) cons."
-  generics return body required optional key rest)
+SCOPED is the list of scoped datatype entries.
+VARS is a list of `et-var' for all parameters.
+INPUT is a matcher (if generics) or type (if not) for the arglist.
+EXPECTED-RETURN is the declared return type (with scoped datatypes), or nil."
+  body scoped vars input expected-return)
 
 
-;;;; Parsing to a struct
-;;;;; Docstring parsing
+;;;; Docstring parsing
 
 (defun et--parse-docstring-annotations (docstring)
   "Extract type annotations from DOCSTRING.
@@ -514,14 +513,15 @@ Recognizes:
   ARGNAME : TYPE-SPEC    — per-parameter type (ARGNAME uppercase)"
   (let* ((generics nil)
          (return-spec nil)
-         (arg-specs nil))
+         (arg-specs nil)
+         (case-fold-search nil))
     (when (stringp docstring)
-      (when (string-match "@et-generics\\s-+\\(\\[.*?\\]\\)" docstring)
+      (when (string-match "@et-generics +\\(.*\\)" docstring)
         (let* ((expr (ignore-errors (car (read-from-string (match-string 1 docstring))))))
           (when (vectorp expr)
             (setq generics (append expr nil)))))
 
-      (when (string-match "@et-return\\s-+\\(\\S-.*\\)" docstring)
+      (when (string-match "@et-return +\\(.*\\)" docstring)
         (setq return-spec
               (ignore-errors (car (read-from-string (match-string 1 docstring))))))
 
@@ -536,7 +536,7 @@ Recognizes:
     (cons generics (cons return-spec (nreverse arg-specs)))))
 
 
-;;;;; Arglist parsing
+;;;; Arglist parsing
 
 (defun et--parse-funcdef-params (arglist doc-arg-specs)
   "Parse ARGLIST into parameter alists, stripping inline type vectors.
@@ -598,7 +598,73 @@ Signals an error on malformed parameters."
           rest-param)))
 
 
-;;;;; Main entry point
+;;;; Make input
+
+(defun et-func-sig-to-input (generics required optional key-params rest-param)
+  "Build an input matcher or type from parameter specs.
+
+GENERICS is a list of generic symbols, or nil.
+REQUIRED, OPTIONAL, KEY-PARAMS are alists of (SYMBOL . TYPE-SPEC-OR-NIL).
+REST-PARAM is either nil or a single (SYMBOL . TYPE-SPEC-OR-NIL) cons.
+
+Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
+  (let* ((parse (lambda (spec) (et-parse-structure (or spec 'Any) generics)))
+         (required-structs (mapcar (lambda (p) (funcall parse (cdr p))) required))
+         (optional-structs (mapcar (lambda (p) (funcall parse (cdr p))) optional))
+         (tail (pcase rest-param
+                 (`(,_ . ,spec) (funcall parse (or spec 'ListR<Any>)))
+                 ((and (guard key-params)
+                       (let plist-args
+                         (cl-loop for (name . spec) in key-params
+                                  nconc (list (intern (format ":%s" name))
+                                              (funcall parse spec)))))
+                  (et-q (((S:DT PList ,@plist-args)))))))
+         (opt-tail (et--func-sig-optional-tail optional-structs tail))
+         (struct (et--func-sig-required-chain required-structs opt-tail)))
+
+    (if generics
+        (make-et-matcher
+         :generics generics
+         :dnf (et-structure-to-matcher-dnf struct generics))
+      (et-structure-to-type struct))))
+
+(defun et--func-sig-required-chain (structs tail)
+  "Chain required STRUCTS into nested ConsR, terminated by TAIL."
+  (if (null structs) tail
+    (et-q (((S:ALIAS ConsR
+                     ,(car structs)
+                     ,(et--func-sig-required-chain (cdr structs) tail)))))))
+
+(defun et--func-sig-optional-tail (opt-structs rest-tail)
+  "Build the optional suffix of an arglist structure.
+
+Each optional param introduces (or Nil ConsR<type~...>).
+REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
+  (pcase opt-structs
+    ('nil (or rest-tail (et-q (((S:DT Literal nil))))))
+    (`(,first . ,remaining)
+     (let* ((inner (et--func-sig-optional-tail remaining rest-tail)))
+       (et-q (((S:DT Literal nil))
+              ((S:ALIAS ConsR ,first ,inner))))))))
+
+
+(et-test
+ (equal (et-func-sig-to-input nil '((x . Integer) (y . nil)) nil nil nil)
+        (et ConsR<Integer~ConsR<Any~Nil>>))
+
+ (equal (et-func-sig-to-input nil '((x . Integer) (y . String)) nil nil '(args . nil))
+        (et ConsR<Integer~ConsR<String~ListR<Any>>>))
+
+ (equal (et-func-sig-to-input '(T) '((x . T)) '((y . Number)) nil '(args . ListR<String>))
+        (et-matcher [T]
+          ConsR<T~{Nil|ConsR<Number~ListR<String>>}>))
+
+ (equal (et-func-sig-to-input '(T) '((a . T)) nil '((scale . Number) (flag . nil)) nil)
+        (et-matcher [T]
+          ConsR<T~PList<:scale~Number~:flag~Any>>)))
+
+
+;;;; Main entry point
 
 (defun et-parse-function-type (body)
   "Parse function signature from BODY, returning an `et-func-sig'.
@@ -639,165 +705,204 @@ Signals an error if anything is malformed."
         (or return-spec (setq return-spec doc-return))
 
         (pcase-let* ((`(,required ,optional ,key-params ,rest-param)
-                      (et--parse-funcdef-params arglist doc-arg-specs)))
+                      (et--parse-funcdef-params arglist doc-arg-specs))
+                     (all-params (append required optional key-params
+                                         (when rest-param
+                                           (list (cons (car rest-param)
+                                                       (or (cdr rest-param) 'ListR<Any>))))))
+                     ;; Build input using generics (external view)
+                     (input (et-func-sig-to-input generics required optional key-params rest-param))
+                     ;; Scoped datatypes for body-internal use
+                     (scoped (et--make-scoped-datatypes
+                              (when (et-matcher-p input) input)))
+                     (vars nil)
+                     (expected-return nil))
+
+          ;; Parse parameter types and return type with scoped datatypes bound
+          (et--with-scoped-datatypes scoped
+            (setq vars
+                  (cl-loop for (name . spec) in all-params
+                           collect (make-et-var :name name
+                                                :type (et-parse-type (or spec 'Any)))))
+            (when return-spec
+              (setq expected-return (et-parse-type return-spec))))
 
           (make-et-func-sig
-           :generics generics
-           :return return-spec
            :body (cons arglist forms)
-           :required required
-           :optional optional
-           :key key-params
-           :rest rest-param))))))
+           :scoped scoped
+           :vars vars
+           :input input
+           :expected-return expected-return))))))
 
 
-;;;;; Tests
+;;;; Tests
+
+(defun et--func-sig-test-equal (a b)
+  "Test equality of two `et-func-sig' structs, tolerating scoped gensyms."
+  (and (equal (et-func-sig-body a) (et-func-sig-body b))
+       (equal (mapcar #'car (et-func-sig-scoped a))
+              (mapcar #'car (et-func-sig-scoped b)))
+       (equal (mapcar #'et-var-name (et-func-sig-vars a))
+              (mapcar #'et-var-name (et-func-sig-vars b)))
+       (equal (et-func-sig-input a) (et-func-sig-input b))
+       (eq (not (not (et-func-sig-expected-return a)))
+           (not (not (et-func-sig-expected-return b))))))
 
 (et-test
  ;; 1. Inline generics + inline typed args + arrow return + multi-form body
- (equal (et-parse-function-type
-         '([T U] ([x T] [y U]) -> ConsR<T~U> (message "hi") (cons x y)))
-        (make-et-func-sig
-         :generics '(T U)
-         :return 'ConsR<T~U>
-         :body '((x y) (message "hi") (cons x y))
-         :required '((x . T) (y . U))
-         :optional nil
-         :key nil
-         :rest nil))
+ (et--func-sig-test-equal
+  (et-parse-function-type '([T U] ([x T] [y U]) -> ConsR<T~U> (message "hi") (cons x y)))
+  (make-et-func-sig
+   :body '((x y) (message "hi") (cons x y))
+   :scoped '((T) (U))
+   :vars (list (make-et-var :name 'x) (make-et-var :name 'y))
+   :input (et-matcher [T U] ConsR<T~ConsR<U~Nil>>)
+   :expected-return t))
 
- ;; 2. No generics + docstring annotations + &optional (bare + defaulted) + &rest
- (equal (et-parse-function-type
-         '((a &optional b (c 10) &rest args)
+ ;; 2. No generics + docstring annotations + &optional + &rest
+ (et--func-sig-test-equal
+  (et-parse-function-type
+   '((a &optional b (c 10) &rest args)
+     "A : Integer\nB : String\nC : Number\nARGS : ListR<Symbol>\n@et-return Boolean"
+     (or b a)))
+  (make-et-func-sig
+   :body '((a &optional b (c 10) &rest args)
            "A : Integer\nB : String\nC : Number\nARGS : ListR<Symbol>\n@et-return Boolean"
-           (or b a)))
-        (make-et-func-sig
-         :generics nil
-         :return 'Boolean
-         :body '((a &optional b (c 10) &rest args)
-                 "A : Integer\nB : String\nC : Number\nARGS : ListR<Symbol>\n@et-return Boolean"
-                 (or b a))
-         :required '((a . Integer))
-         :optional '((b . String) (c . Number))
-         :key nil
-         :rest '(args . ListR<Symbol>)))
+           (or b a))
+   :scoped nil
+   :vars (list (make-et-var :name 'a) (make-et-var :name 'b)
+               (make-et-var :name 'c) (make-et-var :name 'args))
+   :input (et ConsR<Integer~Nil|ConsR<String~Nil|ConsR<Number~ListR<Symbol>>>>)
+   :expected-return t))
 
- ;; 3. Docstring generics + &key (typed + untyped) + no inline annotations
- (equal (et-parse-function-type
-         '((x &key scale flag)
+ ;; 3. Docstring generics + &key + no inline annotations
+ (et--func-sig-test-equal
+  (et-parse-function-type
+   '((x &key scale flag)
+     "@et-generics [T]\nX : T\nSCALE : Number\n@et-return VectorR<T>"
+     (vector x)))
+  (make-et-func-sig
+   :body '((x &key scale flag)
            "@et-generics [T]\nX : T\nSCALE : Number\n@et-return VectorR<T>"
-           (vector x)))
-        (make-et-func-sig
-         :generics '(T)
-         :return 'VectorR<T>
-         :body '((x &key scale flag)
-                 "@et-generics [T]\nX : T\nSCALE : Number\n@et-return VectorR<T>"
-                 (vector x))
-         :required '((x . T))
-         :optional nil
-         :key '((scale . Number) (flag . nil))
-         :rest nil))
+           (vector x))
+   :scoped '((T))
+   :vars (list (make-et-var :name 'x) (make-et-var :name 'scale)
+               (make-et-var :name 'flag))
+   :input (et-matcher [T] ConsR<T~PList<:scale~Number~:flag~Any>>)
+   :expected-return t))
 
- ;; 4. Inline overrides docstring + mixed inline/bare required + no return annotation
- (equal (et-parse-function-type
-         '([U] ([a U] b) -> ListR<U>
+ ;; 4. Inline overrides docstring + mixed inline/bare required
+ (et--func-sig-test-equal
+  (et-parse-function-type
+   '([U] ([a U] b) -> ListR<U>
+     "@et-generics [T]\nA : T\nB : String\n@et-return VectorR<T>"
+     (list a b)))
+  (make-et-func-sig
+   :body '((a b)
            "@et-generics [T]\nA : T\nB : String\n@et-return VectorR<T>"
-           (list a b)))
-        (make-et-func-sig
-         :generics '(U)
-         :return 'ListR<U>
-         :body '((a b)
-                 "@et-generics [T]\nA : T\nB : String\n@et-return VectorR<T>"
-                 (list a b))
-         :required '((a . U) (b . String))
-         :optional nil
-         :key nil
-         :rest nil)))
+           (list a b))
+   :scoped '((U))
+   :vars (list (make-et-var :name 'a) (make-et-var :name 'b))
+   :input (et-matcher [U] ConsR<U~ConsR<String~Nil>>)
+   :expected-return t))
+
+ ;; 5. No return annotation
+ (et--func-sig-test-equal
+  (et-parse-function-type '((x) x))
+  (make-et-func-sig
+   :body '((x) x)
+   :scoped nil
+   :vars (list (make-et-var :name 'x))
+   :input (et ConsR<Any~Nil>)
+   :expected-return nil))
+
+ ;; 6. Empty arglist + no return
+ (et--func-sig-test-equal
+  (et-parse-function-type '(() 1))
+  (make-et-func-sig
+   :body '(() 1)
+   :scoped nil
+   :vars nil
+   :input (et Nil)
+   :expected-return nil)))
 
 
-;;;; Make matcher
+;;;; Make func type
 
-(defun et-func-sig-to-matcher (sig)
-  "Convert an `et-func-sig' to an `et-matcher' for the arglist.
+(defun et--make-func-type (input return-type scoped)
+  "Build a Function or DynFunction type from INPUT and RETURN-TYPE.
 
-Returns an `et-matcher' if the sig has generics, or an `et-type' if not.
-The arglist is represented as a nested ConsR tuple:
-  - Required params are unconditional links.
-  - Optional params each introduce an (or Nil ConsR<type~...>) branch.
-  - &rest appends a ListR<type> tail.
-  - &key generates a PList tail.
-  - Otherwise the tail is Nil."
-
-  (let* ((generics (et-func-sig-generics sig))
-         (parse (lambda (spec) (et-parse-structure (or spec 'Any) generics)))
-         (required-structs (mapcar (lambda (p) (funcall parse (cdr p)))
-                                   (et-func-sig-required sig)))
-         (optional-structs (mapcar (lambda (p) (funcall parse (cdr p)))
-                                   (et-func-sig-optional sig)))
-         (tail (pcase (et-func-sig-rest sig)
-                 (`(,_ . ,spec) (et-parse-structure
-                                 (et-q (ListR (:structure ,(funcall parse spec))))
-                                 generics))
-                 ((and (let keys (et-func-sig-key sig)) (guard keys)
-                       (let plist-args
-                         (cl-loop for (name . spec) in (et-func-sig-key sig)
-                                  nconc (list (intern (format ":%s" name))
-                                              (funcall parse spec)))))
-                  (et-q (((S:DT PList ,@plist-args)))))))
-         (opt-tail (et--func-sig-optional-tail optional-structs tail))
-         (struct (et--func-sig-required-chain required-structs opt-tail)))
-
-    (if generics
-        (make-et-matcher
-         :generics generics
-         :dnf (et-structure-to-matcher-dnf struct generics))
-      (et-structure-to-type struct))))
-
-(defun et--func-sig-required-chain (structs tail)
-  "Chain required STRUCTS into nested ConsR, terminated by TAIL."
-  (if (null structs) tail
-    (et-q (((S:ALIAS ConsR
-                     ,(car structs)
-                     ,(et--func-sig-required-chain (cdr structs) tail)))))))
-
-(defun et--func-sig-optional-tail (opt-structs rest-tail)
-  "Build the optional suffix of an arglist structure.
-
-Each optional param introduces (or Nil ConsR<type~...>).
-REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
-  (pcase opt-structs
-    ('nil (or rest-tail (et-q (((S:DT Literal nil))))))
-    (`(,first . ,remaining)
-     (let* ((inner (et--func-sig-optional-tail remaining rest-tail)))
-       (et-q (((S:DT Literal nil))
-              ((S:ALIAS ConsR ,first ,inner))))))))
+INPUT is a matcher (if generics exist) or a type (if not).
+RETURN-TYPE is the resolved return type, possibly containing scoped datatypes.
+SCOPED is the list of scoped datatype entries from `et--make-scoped-datatypes'."
+  (if (et-matcher-p input)
+      (let* ((output-struct (et-type-to-structure return-type)))
+        (dolist (s scoped)
+          (setq output-struct (cl-subst `(S:GENERIC ,(car s))
+                                        `(S:DT Scoped . ,s)
+                                        output-struct
+                                        :test #'equal)))
+        (et-dt 'DynFunction input output-struct))
+    (et-dt 'Function input return-type)))
 
 
-(et-test
- ;; 1. No generics, required only -> returns et-type (not matcher)
- ;;    ConsR<Integer, ConsR<String, Nil>>
- (equal (et-func-sig-to-matcher
-         (make-et-func-sig :required '((x . Integer) (y . String))))
-        (et ConsR<Integer~ConsR<String~Nil>>))
+;;;; Preprocessing
 
- ;; 2. Generics + required + optional + &rest -> matcher with optional branches and ListR tail
- ;;    [T] ConsR<T, Nil | ConsR<Number, ListR<String>>>
- (equal (et-func-sig-to-matcher
-         (make-et-func-sig :generics '(T)
-                           :required '((x . T))
-                           :optional '((y . Number))
-                           :rest '(args . String)))
-        (et-matcher [T]
-          ConsR<T~{Nil|ConsR<Number~ListR<String>>}>))
+(defun et--read-all (string)
+  "Read all s-expressions from STRING, returning a list."
+  (let* ((pos 0) forms)
+    (condition-case nil
+        (while t
+          (let* ((result (read-from-string string pos)))
+            (push (car result) forms)
+            (setq pos (cdr result))))
+      (end-of-file (nreverse forms)))))
 
- ;; 3. Generics + required + &key (typed + untyped) -> matcher with PList tail
- ;;    [T] ConsR<T, PList<:scale Number :flag Any>>
- (equal (et-func-sig-to-matcher
-         (make-et-func-sig :generics '(T)
-                           :required '((a . T))
-                           :key '((scale . Number) (flag . nil))))
-        (et-matcher [T]
-          ConsR<T~PList<:scale~Number~:flag~Any>>)))
+(defvar et--preprocessed-files nil)
+
+(defun et-preprocess-file (file)
+  "Preprocess FILE by extracting defun signatures and registering function types."
+  (unless (member file et--preprocessed-files)
+    (push file et--preprocessed-files)
+    (dolist (form (et--read-all (with-temp-buffer
+                                  (insert-file-contents file)
+                                  (buffer-string))))
+      (pcase form
+        (`(,(or 'defun 'cl-defun) ,(and name (pred symbolp)) . ,body)
+         (when-let* ((sig (ignore-errors (et-parse-function-type body)))
+                     ((et-func-sig-expected-return sig)))
+           (put name 'et-function-signature sig)
+           (put name 'et-function-type
+                (et--make-func-type (et-func-sig-input sig)
+                                    (et-func-sig-expected-return sig)
+                                    (et-func-sig-scoped sig)))))))))
+
+
+;;;; Checker function body
+
+(defun et-checker-function-body (sig offset)
+  "Typecheck a function signature.
+
+OFFSET is the position of the start of the body (the arglist or
+generics)."
+
+  (let* ((gen-vec? (vectorp (nth et--checker-expr offset))))
+
+    ;; Typecheck the body with scoped datatypes and parameter vars bound
+    (et--with-scoped-datatypes (et-func-sig-scoped sig)
+      (et-with-vars (et-func-sig-vars sig)
+        (let* ((expected (et-func-sig-expected-return sig))
+               (actual (et-checker-tail (+ offset (if gen-vec? 2 1)))))
+
+          (when (and expected (not (et-subtype? actual expected)))
+            (et-checker-err 0 "Expected %s, got %s" (et-pp expected) (et-pp actual)))
+          (et--make-func-type (et-func-sig-input sig)
+                              (if expected expected (et--remove-type-binds actual))
+                              (et-func-sig-scoped sig)))))
+
+    ;; Remove inline type annotations and generics vector
+    (when gen-vec? (pop (nthcdr offset et--checker-expr)))
+    (setf (nth offset et--checker-expr) (car (et-func-sig-body sig)))))
 
 
 ;;; ============================================================
