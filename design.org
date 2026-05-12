@@ -201,4 +201,3 @@ we get {A <= number} and {A >= integer} which is satisfiable!!!
 #+end_src
 
 
-* Subtraction

@@ -789,7 +789,8 @@ constraint is one of:
   (let ((generics (et-matcher-generics matcher))
         (dnf (et-matcher-dnf matcher)))
     (make-et-matcher :dnf (et--matcher-dnf-expand-aliases dnf generics)
-                     :generics generics)))
+                     :generics generics
+                     :constraints (et-matcher-constraints matcher))))
 
 (defun et--matcher-dnf-expand-aliases (dnf generics)
   (cl-loop for case in dnf
@@ -865,7 +866,10 @@ constraint is one of:
     (`(M:SET ,var ,type) (et-q ((,(if is-super 'Q:LEQ 'Q:GEQ) ,var ,type))))
     (`(M:DATATYPE ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
-       ((pred et-alias-p) (et-q ((Q:NEVER))))
+       ((and alias (pred et-alias-p))
+        (if (not is-super) (et-q ((Q:NEVER)))
+          (et--super-constraints (make-et-matcher :generics generics :dnf (list (list match-factor)))
+                                 (et-alias-expand alias))))
        ((and dt (pred et-datatype-p))
         (et--sub-or-super-constraints-4
          mdt-name mdt-args (et-datatype-name dt) (et-datatype-args dt)
