@@ -606,8 +606,8 @@ SOURCE is one of `nil', `lambda', `defun', `cl-defun', `et-defun', etc."
   body scoped vars input expected-return source)
 
 (defun et-parse-function-type (body &optional source)
-  (when-let* ((decl-body (alist-get 'declare body))
-              (et-body (alist-get 'et decl-body)))
+  (let* ((decl-body (alist-get 'declare body))
+         (et-body (alist-get 'et decl-body)))
     (et--parse-func-declare (car body) et-body source)))
 
 (defun et--parse-func-declare (arglist et-decl &optional source)
@@ -708,6 +708,36 @@ SCOPED is the list of scoped datatype entries from `et--make-scoped-datatypes'."
     (et-dt 'Function input return-type)))
 
 
+;;;; Pre-processing
+
+(defun et--read-all (string)
+  "Read all s-expressions from STRING, returning a list."
+  (let* ((pos 0) forms)
+    (condition-case nil
+        (while t
+          (let* ((result (read-from-string string pos)))
+            (push (car result) forms)
+            (setq pos (cdr result))))
+      (end-of-file (nreverse forms)))))
+
+(defvar et--preprocessed-files nil
+  "List of files that have been preprocessed.")
+
+(defvar et--preprocessing nil
+  "Currently performing preprocessing.")
+
+(defun et-preprocess-file (file)
+  (unless (member file et--preprocessed-files)
+    (push file et--preprocessed-files)
+
+    (let* ((et--preprocessing t))
+      (dolist (form (et--read-all (with-temp-buffer (insert-file-contents file) (buffer-string))))
+        (pcase form
+          (`(,(or 'defun 'cl-defun 'et-defun) . ,_rest)
+           ;; Macroexpanding will cause the et declare form to run
+           (ignore-errors (macroexpand-all form))))))))
+
+
 ;;;; Custom declare form
 
 (defun et--declare-handler (name arglist &rest entries)
@@ -720,63 +750,40 @@ Each entry is one of:
   (@generics GEN...)   — generic type variables
   (@return TYPE-SPEC)  — declared return type
   (PARAM TYPE-SPEC)    — type annotation for parameter PARAM"
+
+  ;; Set the global declaration
   (when-let* ((sig (et--parse-func-declare arglist entries))
               (input (et-func-sig-input sig))
               (return (et-func-sig-expected-return sig))
               (func-type (et--make-func-type input return (et-func-sig-scoped sig))))
     (put name 'et-function-signature sig)
     (put name 'et-function-type func-type))
+
+  ;; Typecheck the defun
+  (unless et--preprocessing
+    (when-let* ((macroexp-frame (cl-find #'macroexp-macroexpand (backtrace-frames) :key #'cadr))
+                (defun-expr (car (caddr macroexp-frame)))
+                ((eq (car defun-expr) #'defun))
+                (result (et--check defun-expr)))
+      (et-show-result-errors result)))
+
   ;; Return nil — no forms to splice into the defun body
   nil)
-
-(setf (alist-get 'et defun-declarations-alist) (list #'et--declare-handler))
-
-
-;;;; Preprocessing
-
-(defun et--read-all (string)
-  "Read all s-expressions from STRING, returning a list."
-  (let* ((pos 0) forms)
-    (condition-case nil
-        (while t
-          (let* ((result (read-from-string string pos)))
-            (push (car result) forms)
-            (setq pos (cdr result))))
-      (end-of-file (nreverse forms)))))
-
-(defvar et--preprocessed-files nil)
-
-(defun et-preprocess-file (file)
-  "Preprocess FILE by extracting defun signatures and registering function types."
-  (unless (member file et--preprocessed-files)
-    (push file et--preprocessed-files)
-    (dolist (form (et--read-all (with-temp-buffer
-                                  (insert-file-contents file)
-                                  (buffer-string))))
-      (pcase form
-        (`(,(and source (or 'defun 'cl-defun 'et-defun)) ,(and name (pred symbolp)) . ,body)
-         (when-let* ((sig (ignore-errors (et-parse-function-type body source)))
-                     ((et-func-sig-expected-return sig)))
-           (put name 'et-function-signature sig)
-           (put name 'et-function-type
-                (et--make-func-type (et-func-sig-input sig)
-                                    (et-func-sig-expected-return sig)
-                                    (et-func-sig-scoped sig)))))))))
 
 
 ;;;; Checker function body
 
 (defun et-checker-function-body (sig offset)
-  "Typecheck a function signature.
+  "Typecheck a function definition.
 
 OFFSET is the position of the start of the body (the arglist or
 generics)."
 
   (let* ((orig-body (nthcdr offset et--checker-expr))
-         (stripped-body (et-func-sig-body sig))
+         (stripped-body (car (et--process-funcdef-header (apply #'list orig-body))))
          ;; Decorators include the generic vector, and "-> TYPE"
          (decorator-count (- (length orig-body) (length stripped-body)))
-         ;; The start of the inside of the function
+         ;; The start of the inside of the function (in orig-body)
          (inside-offset (+ offset 1 decorator-count)))
 
     ;; Typecheck the body with scoped datatypes and parameter vars bound

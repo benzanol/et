@@ -27,13 +27,20 @@
 
 ;;; ============================================================
 ;;; Definitions
+;;;; Ignore certain forms
+
+(et-define-checker declare (et Nil))
+
+
 ;;;; Function checkers
 
 (et-define-pcase-checker lambda body
+  (setq body (et--funcdef-inline-to-declare (copy-tree body)))
   (et-checker-function-body (et-parse-function-type body #'lambda) 1))
 
-(et-define-pcase-checker (defun cl-defun) `(,_name . ,body)
-  (et-checker-function-body (et-parse-function-type body (car et--checker-expr)) 2))
+(et-define-pcase-checker defun `(,name . ,_body)
+  (when-let* ((sig (get name 'et-function-signature)))
+    (et-checker-function-body sig 2)))
 
 (et-test
  ;; Inline typed args
@@ -108,24 +115,6 @@
  ;; Inline -> with multiple body forms
  (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
    (lambda ([x Integer]) -> Number "ignored" x)))
-
-(et-test
- ;; Docstring with @et-generics and @et-return, using &key
- (et-assert-resolve (DynFunction ,(et-matcher [T] ConsR T (PList :scale Number))
-                                 (((S:ALIAS VectorR (((S:GENERIC T)))))))
-   (lambda (x &key scale)
-     "@et-generics [T]
-X : T
-SCALE : Number
-@et-return VectorR<T>"
-     (vector x)))
-
- ;; Docstring with no @et-generics and no @et-return, using &optional and &rest
- (et-assert-resolve (Function ConsR<Integer~Nil|ConsR<String~ListR<Any>>> Integer)
-   (lambda (x &optional y &rest rest)
-     "X : Integer
-Y : String"
-     x)))
 
 
 ;;;; Var checkers
@@ -385,6 +374,8 @@ Y : String"
   N)
 
 (et-define-type-checker (1+ 1-) [N] (Args Integer&{N=Integer}|Number&{N=Number}) N)
+
+;; (et-typecheck-call + Integer Integer 1 2.1 3)
 
 (et-test
  op [+ - * /]
