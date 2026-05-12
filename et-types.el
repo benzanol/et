@@ -38,10 +38,6 @@
   (setq body (et--funcdef-inline-to-declare (copy-tree body)))
   (et-checker-function-body (et-parse-function-type body #'lambda) 1))
 
-(et-define-pcase-checker defun `(,name . ,_body)
-  (when-let* ((sig (get name 'et-function-signature)))
-    (et-checker-function-body sig 2)))
-
 (et-test
  ;; Inline typed args
  (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
