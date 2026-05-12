@@ -2052,7 +2052,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
    (lambda (name args)
      (pcase name
        ('ConsFull
-        (let* ((new-args (list (et--freshen-type (car args)) (et--freshen-type (caddr args)))))
+        (let* ((new-args (list (car args) (et--freshen-type-shallow (caddr args)))))
           (make-et-datatype :name 'ConsFresh :args new-args)))
        (_ (make-et-datatype :name name :args args))))))
 

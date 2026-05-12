@@ -411,7 +411,8 @@ RETURN is a parsable expression for the return type.
       (error "Incorrect number of arguments"))
 
     (cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
-             collect `(setf (get ',func 'et-function-type) ,func-type) into exprs
+             collect `(put ',func 'et-checker nil) into exprs
+             collect `(put ',func 'et-function-type ,func-type) into exprs
              finally return `(ignore ,@exprs))))
 
 
@@ -421,7 +422,8 @@ RETURN is a parsable expression for the return type.
   "Should return a type, or nil if the input type is invalid."
   (declare (indent 2))
   (cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
-           collect `(setf (get ',func 'et-function-type) func-type) into exprs
+           collect `(put ',func 'et-checker nil) into exprs
+           collect `(put ',func 'et-function-type func-type) into exprs
            finally return
            `(let* ((func-type (et-dt 'ArbFunction (lambda ,arglist ,@body))))
               ,@exprs)))

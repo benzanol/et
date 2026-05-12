@@ -411,9 +411,11 @@
 ;;;;; list
 
 (et-define-arb-checker list (input)
-  (et--freshen-type input))
+  (et--freshen-type-shallow input))
 
 (et-test
+ (equal (et ConsFresh<Cons<1~2>~ConsFresh<Cons<3~4>~Nil>>)
+        (et-typecheck-call list Cons<1~2> Cons<3~4>))
  (et-assert-resolve ConsR<Integer~ListR<String>> (list 1 "2"))
  (et-assert-no-resolve ConsR<Integer~String> (list "1" 2))
  (et-assert-no-resolve ConsR<Integer~String> (list))
