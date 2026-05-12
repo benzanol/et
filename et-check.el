@@ -166,7 +166,8 @@ determine the output type."
          ;; Function type property
          ((and (let func-type (get func 'et-function-type)) (guard func-type))
           (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
-                 (output-type (et--funcall func-type args-type)))
+                 (output-type (condition-case err (et--funcall func-type args-type)
+                                (error (et-checker-err 0 "%s" (error-message-string err))))))
             (if output-type (setq return-type output-type)
               ;; If `et--checker-failed' is already true, that means one of the arguments was invalid,
               ;; which means the true error was in the arguments, not this call
@@ -262,8 +263,9 @@ path."
 
 (defmacro et-typecheck-call (func &rest arg-types)
   (cl-loop for type in arg-types
-           collect (list :type type) into arg-exprs
-           finally return (list #'et-typecheck (cons func arg-exprs))))
+           if (eq (car-safe type) :eval-type) collect type into arg-exprs
+           else collect (list :type type) into arg-exprs
+           finally return `(et-typecheck (,func ,@arg-exprs))))
 
 (defmacro et-compile (body)
   (let* ((result (et--check body)))
@@ -419,19 +421,6 @@ RETURN is a parsable expression for the return type.
              finally return `(ignore ,@exprs))))
 
 
-;;;; Arbitrary type checker
-
-(defmacro et-define-arb-checker (funcs arglist &rest body)
-  "Should return a type, or nil if the input type is invalid."
-  (declare (indent 2))
-  (cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
-           collect `(put ',func 'et-checker nil) into exprs
-           collect `(put ',func 'et-function-type func-type) into exprs
-           finally return
-           `(let* ((func-type (et-dt 'ArbFunction (lambda ,arglist ,@body))))
-              ,@exprs)))
-
-
 ;;; ============================================================
 ;;; Checker helpers
 ;;;; Check subexpr
@@ -508,7 +497,7 @@ PATH is the path to the subexpression."
   (cl-assert (vectorp gens))
   (setq gens (append gens nil))
   `(et--infer ,(et-parse-matcher matcher-spec gens)
-              (et-parse-type ,type)
+              ,type
               (et-q ,(et-parse-structure output-spec gens))))
 
 
@@ -944,6 +933,9 @@ generics)."
 
 (et-define-pcase-checker :type `(,spec)
   (setq et--checker-expr "dummy") (et-parse-type spec))
+
+(et-define-pcase-checker :eval-type `(,expr)
+  (setq et--checker-expr "dummy") (eval expr))
 
 (et-define-pcase-checker :assert-subtype `(,_expr ,type-spec)
   (let ((expr-type (et-checker-sub 1)))

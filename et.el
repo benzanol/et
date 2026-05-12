@@ -161,6 +161,44 @@
 
 ;;; ============================================================
 ;;; Utils
+;;;; Caching
+
+(defvar et-cache-file "~/.emacs.d/.cache/et.el")
+(defvar et-cache nil)
+
+(defun et--read-cache ()
+  (let* ((hash-table (make-hash-table :test #'equal)))
+    ;; Read the file into a hashtable
+    (when (and (stringp et-cache-file) (file-exists-p et-cache-file))
+      (with-temp-buffer
+        (insert-file-contents et-cache-file)
+        (goto-char (point-min))
+        (while (let* ((pair (ignore-errors (read (current-buffer)))))
+                 (when (consp pair)
+                   (puthash (car pair) (cdr pair) hash-table)
+                   t)))))
+    hash-table))
+
+(defun et--cache-retrieve (key)
+  (ignore-errors
+    (gethash key (if (hash-table-p et-cache) et-cache
+                   (setq et-cache (et--read-cache))))))
+
+(defun et--cache-store (key value)
+  (ignore-errors
+    (unless (hash-table-p et-cache) (setq et-cache (et--read-cache)))
+    (puthash key value et-cache)
+    (write-region (format "%s" (prin1-to-string (cons key value))) nil et-cache-file
+                  (file-exists-p et-cache-file)))
+  value)
+
+(defmacro et-cache (key &rest body)
+  `(let* ((key ,key))
+     (or (et--cache-retrieve key)
+         (progn (message "Cache miss: %s" key)
+                (et--cache-store key (progn . ,body))))))
+
+
 ;;;; Quote macro
 
 (eval-and-compile
@@ -271,7 +309,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
      (@alias EtDatatypeName (or @Any @Literal @NonNil
                                 @Symbol @NonNilSymbol @Number @Integer @Positive @Negative @String
                                 @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
-                                @Function @DynFunction @ArbFunction
+                                @Function @DynFunction
                                 @Struct @Scoped))
      (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>)))
 
@@ -294,7 +332,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
     ;; the cons cell. CAR-WRITE/CDR-WRITE are the types that are valid
     ;; to write to the cons cell. The most general cons cell is thus
     ;; ConsFull<Any Never Any Never>.
-    (ConsFull :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction ArbFunction PList) :intersect t
+    (ConsFull :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction PList) :intersect t
               :predicate (lambda (v l _1 r _2) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
     ;; When you create a new cons cell with cons/list/quote/etc, you
     ;; get a ConsFresh. This can be thought of as an "undetermined"
@@ -302,7 +340,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
     ;; yet decided what can be written to it. A ConsFresh can be
     ;; converted to a ConsFull as long as the read types of the
     ;; ConsFull are supertypes of the arg types of the ConsFresh.
-    (ConsFresh :args (CO CO) :overlap (Function DynFunction ArbFunction PList) :intersect t
+    (ConsFresh :args (CO CO) :overlap (Function DynFunction PList) :intersect t
                :predicate (lambda (v l r) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
 
     ;; VectorFull<ELEM-READ ELEM-WRITE>: same idea as ConsFull
@@ -314,16 +352,13 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
     ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
     ;; input and output type.
-    (Function :args (CONTRA CO) :overlap (DynFunction ArbFunction) :intersect t)
+    (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
     ;; DynFunction<ARGLIST-MATCHER OUTPUT-STRUCTURE> is a
     ;; function whose output depends on the input. For a given
     ;; ARGLIST-TYPE, the output of the function is determined by
     ;; inferring ARGLIST-TYPE against ARGLIST-MATCHER, with
     ;; OUTPUT-STRUCTURE as the output.
-    (DynFunction :args (CONST CONST) :overlap (ArbFunction))
-    ;; ArbFunction<TYPE-FN> is a function that for an input type TYPE,
-    ;; returns the output type (funcall TYPE-FN TYPE)
-    (ArbFunction :args (CONST) :overlap nil)
+    (DynFunction :args (CONST CONST) :overlap nil)
 
     ;; PList<PROP1 VAL1 PROP2 VAL2 ...> is a covariant, unordered
     ;; plist.
@@ -476,11 +511,11 @@ subtype of super-arg."
                                      (funcall co (cadr sub-args) (caddr super-args))))
       ('(VectorFull VectorFresh) (funcall co (car sub-args) (car super-args)))
 
-      (`(,(or 'ArbFunction 'DynFunction) Function)
+      (`(DynFunction Function)
        (if-let* ((func-input (car super-args))
                  (func-output (cadr super-args))
                  ((and (et-type-p func-input) (et-type-p func-output)))
-                 (dyn-output (et--funcall (apply #'et-dt sub-name sub-args)
+                 (dyn-output (et--funcall (apply #'et-dt 'DynFunction sub-args)
                                           (car super-args)))
                  ((et-subtype? dyn-output func-output)))
            (valid-if t)
@@ -673,8 +708,15 @@ structure which can be parsed by `et-parse-type'.")
   (if (null args) 'Nil
     (et-q (,cons ,(car args) ,(et--expand-tuple-spec cons (cdr args))))))
 
+(defun et--expand-tailed-tuple-spec (cons types)
+  (pcase types
+    (`(,last) last)
+    (`(,next . ,rest) (et-q (,cons ,next ,(et--expand-tailed-tuple-spec cons rest))))
+    (_ (error "No tail provided"))))
+
 (et-defalias TupleR (&rest args) ,(et--expand-tuple-spec 'ConsR args))
 (et-defalias Args (&rest args) ,(et--expand-tuple-spec 'ConsR args))
+(et-defalias ArgsWithTail (&rest args) ,(et--expand-tailed-tuple-spec 'ConsR args))
 
 
 ;;;; Constructors
@@ -945,6 +987,9 @@ constraint is one of:
         (cons '$b (make-et-var :name '$b :type (et-dt 'Any)))
         (cons '$c (make-et-var :name '$c :type (et-dt 'Any)))))
 
+(defmacro et-struct (&rest args)
+  `(et-parse-structure (et-q ,(if (eq (length args) 1) (car args) args))))
+
 (defun et-parse-structure (spec generics)
   "Compile a spec to a type structure.
 
@@ -965,6 +1010,7 @@ Types only:
 \(`S:BINDS-OF' TYPE)
 \(`S:SUBTRACT' TYPE1 TYPE2)
 \(`S:INFER' GENERICS MATCHER TYPE Y-RESULT N-RESULT)
+\(`S:EVAL' FUNC TYPES...)
 
 Matchers only:
 \(`S:MATCHER-DNF' DNF) - an already compiled matcher dnf
@@ -1014,6 +1060,8 @@ Matchers only:
        (setq yes (et-parse-structure yes (append gens generics)))
        (setq no (et-parse-structure no generics))
        (et-q (((S:INFER ,type ,gens ,matcher ,yes ,no)))))
+      (`(eval ,func . ,types)
+       (et-q (((S:EVAL ,func . ,(mapcar parse types))))))
 
       (`(set ,var ,type)
        (or (memq var generics) (error "Not a generic: %s" var))
@@ -1250,6 +1298,7 @@ which are invalid for types."
                         :dnf (et-structure-to-matcher-dnf matcher gens)))
          (et-type-cases (or (et--infer matcher type yes gen-repls)
                             (et-structure-to-type no))))
+        (`(S:EVAL ,func . ,types) (et-type-cases (apply func (mapcar to-type types))))
         (_ (error "Invalid structure factor for type: %s" factor)))
       into and-case-lists
       finally return
@@ -1813,12 +1862,24 @@ returning A itself is a valid approximation."
 ;;;; Satisfy constraints
 
 (defun et--sub-match (matcher type)
+  (if (cl-loop for c in (et-type-cases type)
+               thereis (or (et-type-case-binds c) (et-type-case-typeofs c)))
+      (et--sub-match-logic matcher type)
+    (et-cache (list #'et--sub-match matcher type) (et--sub-match-logic matcher type))))
+
+(defun et--sub-match-logic (matcher type)
   (let ((constraints (append (et--sub-constraints matcher type)
                              (et-matcher-constraints matcher))))
     (et--match-satisfy-constraints-smallest
      (et-matcher-generics matcher) constraints)))
 
 (defun et--super-match (matcher type)
+  (if (cl-loop for c in (et-type-cases type)
+               thereis (or (et-type-case-binds c) (et-type-case-typeofs c)))
+      (et--super-match-logic matcher type)
+    (et-cache (list #'et--super-match matcher type) (et--sub-match-logic matcher type))))
+
+(defun et--super-match-logic (matcher type)
   (let ((constraints (append (et--super-constraints matcher type)
                              (et-matcher-constraints matcher))))
     (et--match-satisfy-constraints-biggest
@@ -1969,8 +2030,6 @@ Returns the output type, or nil if the call is invalid."
               (and (et-subtype? arglist-type param-type) return-type))
              ((cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,output-struct)))
               (et--infer matcher arglist-type output-struct))
-             ((cl-struct et-datatype (name 'ArbFunction) (args `(,type-fn)))
-              (funcall type-fn arglist-type))
              (_ nil))
            unless result return nil
            collect result into results
