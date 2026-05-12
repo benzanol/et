@@ -150,7 +150,7 @@ Notice that
 \begin{align*}
 \forall_{c_M} \exists_{c_T} c_M \trianglelefteq c_T \Longrightarrow M \trianglelefteq T
 \end{align*}
-Since matchers do not have aliases, we do not have to do the extra step we had to do for subtype matching.
+We can expand matcher aliases right away without losing anything, so we don't need to do the "fallback" step we had to do for subtype matching.
 
 We define
 \begin{align*}
@@ -160,6 +160,7 @@ The resulting type must satisfy /all/ of the case match constraints, because of 
 \begin{align*}
 &\operatorname{sup2}(c_M, t) : C_M'^{a^\ast} \times T \rightarrow Q_{a^\ast}^\ast \\
 &= \begin{cases}
+\left\{ Q_{\le} a_i, t \right\} & c_M = \left\{ \operatorname{var} a_i \right\}\\
 \bigcup_{f \in c_M} \operatorname{sup3}(f, c_T) \text{ for the first matching $c_T$} &\exists_{c_T} c_M \trianglelefteq c_T \\
 \left\{ \operatorname{Q_\emptyset} \right\} &\text{otherwise}
 \end{cases}

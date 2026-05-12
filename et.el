@@ -920,14 +920,19 @@ constraint is one of:
   (make-et-matcher :dnf (list match-case) :generics generics)
   (et--verify-type type)
 
-  (cl-loop for case in (et-type-cases type)
-           for result =
-           (cl-loop for match-factor in match-case
-                    nconc (et--sub-or-super-constraints-3 match-factor case generics 'SUPER))
-           unless (member '(Q:NEVER) result)
-           return result
-           ;; If all cases failed, return never
-           finally return (et-q ((Q:NEVER)))))
+  (or
+   (pcase match-case
+     ;; A single match factor, at that is a M:MATCH match factor
+     (`((M:MATCH ,var)) (et-q ((Q:LEQ ,var ,type)))))
+
+   (cl-loop for case in (et-type-cases type)
+            for result =
+            (cl-loop for match-factor in match-case
+                     nconc (et--sub-or-super-constraints-3 match-factor case generics 'SUPER))
+            unless (member '(Q:NEVER) result)
+            return result
+            ;; If all cases failed, return never
+            finally return (et-q ((Q:NEVER))))))
 
 
 ;;; ============================================================
