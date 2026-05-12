@@ -550,6 +550,12 @@
  (et-assert-resolve 2|4|Nil (alist-get 4 (list (cons 1 2) (cons 3 4)))))
 
 
+;;;;; mapcar
+
+(et-define-type-checker mapcar [T R] (Args Function<Args<T>~R> ListR<T>) ListFresh<R>)
+(et-define-type-checker mapc [T R] (Args Function<Args<T>~R> ListR<T>) Nil)
+
+
 ;;;; Predicates
 
 (defmacro et-define-predicate (name type)
