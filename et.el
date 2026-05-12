@@ -1072,6 +1072,7 @@ Depth tracks < > and { } nesting."
     (`(,(or 'S:DT 'S:ALIAS) ,name . ,args) (et--format-structure-named name args))
     (`(S:BIND ,var ,type-struct) (format "{%s : %s}" (et-var-name var) (et--format-structure type-struct)))
     (`(S:TYPEOF ,var) (format "{typeof %s}" (et-var-name var)))
+    (`(S:BINDS-OF ,type-struct) (format "{bindsof %s}" (et--format-structure type-struct)))
     (_ (error "Invalid structure factor: %s" factor))))
 
 (defun et--format-structure-named (name args)
@@ -1368,7 +1369,7 @@ same as [T (<= T Number)]."
                      (and '<= (let op 'Q:LEQ))
                      (and '>= (let op 'Q:GEQ)))
                 ,(and gen (pred symbolp)) ,type-spec)
-              (cons gen (list op (et-parse-type type-spec))))
+              (cons gen (list op gen (et-parse-type type-spec))))
              ((pred symbolp)
               (cons gen-spec nil)))
            when constraint collect constraint into constraints

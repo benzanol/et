@@ -400,11 +400,11 @@ RETURN is a parsable expression for the return type.
 \(fn FUNC [GENERICS] ARGLIST RETURN)"
   (declare (indent 2))
 
-  (let* ((generics (when (vectorp (car arguments)) (append (pop arguments) nil)))
+  (let* ((gen-vec (when (vectorp (car arguments)) (append (pop arguments) nil)))
          (arglist-spec (car arguments))
          (return-spec (cadr arguments))
-         (matcher (et-parse-matcher arglist-spec generics))
-         (output-struct (et-parse-structure return-spec generics))
+         (matcher (et-parse-matcher arglist-spec gen-vec))
+         (output-struct (et-parse-structure return-spec (et-matcher-generics matcher)))
          (func-type (et-dt 'DynFunction matcher output-struct)))
     (unless (eq (length arguments) 2)
       (error "Incorrect number of arguments"))
@@ -763,12 +763,13 @@ generics)."
         (et--with-scoped-datatypes (et-func-sig-scoped sig)
           (et-with-vars (et-func-sig-vars sig)
             (let* ((expected (et-func-sig-expected-return sig))
-                   (actual (et-checker-tail inside-offset)))
+                   (actual (et--remove-type-binds (et-checker-tail inside-offset))))
 
               (when (and expected (not (et-subtype? actual expected)))
-                (et-checker-err 0 "Expected %s, got %s" (et-pp expected) (et-pp actual)))
+                (et-checker-err 0 "Expected %s, got %s" (et-pp expected)
+                                (et-pp actual)))
               (et--make-func-type (et-func-sig-input sig)
-                                  (if expected expected (et--remove-type-binds actual))
+                                  (or expected actual)
                                   (et-func-sig-scoped sig)))))
 
       ;; Remove inline type annotations and generics vector
@@ -810,7 +811,8 @@ generics)."
        (et-decl (or (cl-find #'et decl-form :key #'car-safe)
                     (car (push (list 'et) (cdr decl-form)))))
        (add (lambda (key val)
-              (when (alist-get key et-decl) (error "`%s' specified in both arglist and declare block" key))
+              (when (alist-get key et-decl)
+                (error "`%s' specified in both arglist and declare block" key))
               (push (list key val) (cdr et-decl)))))
     ;; Add return to the declare block
     (when ret (funcall add '@return ret))

@@ -606,6 +606,17 @@
  (et-assert-resolve-errors (apply #'+ 1 2 3)))
 
 
+;;;; Equality
+
+(et-define-type-checker (eq eql equal) [A B]
+  (Args A B)
+  (or Nil (and True (bindsof (and A B)))))
+
+(et-define-type-checker = [(<= A Number) (<= B Number)]
+  (Args A B)
+  (or Nil (and True (bindsof (and A B)))))
+
+
 ;;; ============================================================
 ;;; Provide
 
