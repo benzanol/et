@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'et)
+(require 'et-macros)
 (require 'seq)
 
 
@@ -414,6 +415,18 @@ RETURN is a parsable expression for the return type.
              finally return `(ignore ,@exprs))))
 
 
+;;;; Arbitrary type checker
+
+(defmacro et-define-arb-checker (funcs arglist &rest body)
+  "Should return a type, or nil if the input type is invalid."
+  (declare (indent 2))
+  (cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
+           collect `(setf (get ',func 'et-function-type) func-type) into exprs
+           finally return
+           `(let* ((func-type (et-dt 'ArbFunction (lambda ,arglist ,@body))))
+              ,@exprs)))
+
+
 ;;; ============================================================
 ;;; Checker helpers
 ;;;; Check subexpr
@@ -654,10 +667,8 @@ Supported forms are:
 
     (let* ((et--preprocessing t))
       (dolist (form (et--read-all (with-temp-buffer (insert-file-contents file) (buffer-string))))
-        (pcase form
-          (`(,(or 'defun 'cl-defun 'et-defun) . ,_rest)
-           ;; Macroexpanding will cause the et declare form to run
-           (macroexpand-all form)))))))
+        (condition-case err (et-preprocess-expr form)
+          (error (byte-compile-warn "Preprocessing error: %s" err)))))))
 
 
 ;;; ============================================================
@@ -920,51 +931,6 @@ generics)."
 (et-define-pcase-checker defun `(,name . ,_body)
   (when-let* ((sig (get name 'et-function-signature)))
     (et-checker-function-body sig 2)))
-
-
-;;;; et-defun
-
-(defun et--process-funcdef-header (body)
-  (let* ((gen-vec (when (vectorp (car body)) (pop body)))
-         (args-alist
-          (cl-loop for tail on (car body)
-                   for entry = (pcase (car tail) (`[,param ,spec] (cons param spec)))
-                   ;; Replace the entry with just the parameter
-                   when entry do (setcar tail (car entry))
-                   and collect entry))
-         (ret (when (eq (cadr body) '->) (pop (cdr body)) (pop (cdr body)))))
-    (list body gen-vec args-alist ret)))
-
-(defun et--funcdef-inline-to-declare (body)
-  (pcase-let*
-      ((`(,new-body ,gen-vec ,args-alist ,ret) (et--process-funcdef-header body))
-       ;; Find the declare form, or add one
-       (decl-form (or (assq 'declare new-body)
-                      (car (if (stringp (cadr new-body))
-                               (push (list 'declare) (cddr new-body))
-                             (push (list 'declare) (cdr new-body))))))
-       ;; Find the et declarations in the declare block, or add it
-       (et-decl (or (cl-find #'et decl-form :key #'car-safe)
-                    (car (push (list 'et) (cdr decl-form)))))
-       (add (lambda (key val)
-              (when (alist-get key et-decl)
-                (error "`%s' specified in both arglist and declare block" key))
-              (push (list key val) (cdr et-decl)))))
-    ;; Add return to the declare block
-    (when ret (funcall add '@return ret))
-    ;; Add params to the declare block
-    (dolist (pair args-alist) (funcall add (car pair) (cdr pair)))
-    ;; Add generics to the declare block
-    (when gen-vec (funcall add '@generics (append gen-vec nil)))
-
-    new-body))
-
-(defmacro et-defun (name &rest body)
-  (let* ((expr `(defun ,name . ,(et--funcdef-inline-to-declare (copy-tree body))))
-         (result (et--check expr))
-         (offset (- (length body) (length (cddr expr)))))
-    (et-show-result-errors result nil offset)
-    expr))
 
 
 ;;; ============================================================

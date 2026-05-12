@@ -165,7 +165,8 @@
 
 (eval-and-compile
   (defun et--copy-quotes (expr)
-    (cond ((eq (car-safe expr) #'quote) (list #'copy-tree expr))
+    (cond ((and (eq (car-safe expr) #'quote) (consp (cdr-safe expr)))
+           (list #'copy-tree expr))
           ((consp expr) (cons (et--copy-quotes (car expr)) (et--copy-quotes (cdr expr))))
           (t expr))))
 
@@ -262,12 +263,18 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
   (args nil :et List<*et-type|Any>))
 
 (declare
- (et (@alias EtDatatypeRole (Plist :args (or @CONST @CO @CONTRA @ISO @IGNORE)))
+ (et (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
      (@alias EtDatatypeProps
-             (Plist :args List<EtDatatypeRole>
+             (PList :args List<EtDatatypeRole>
                     :overlap True|List<Symbol>
                     :predicate (Function Any True|List<Any>)))
-     (@variable et--datatypes Number)))
+     (@alias EtDatatypeName (or @Any @Literal @NonNil
+                                @Symbol @NonNilSymbol @Number @Integer @Positive @Negative @String
+                                @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
+                                @Function @DynFunction @ArbFunction
+                                @Struct @Scoped))
+     (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>)))
+
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
     ;; Literal<VALUE> is a type matching only the value VALUE
@@ -281,26 +288,43 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
     (Positive :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (> v 0))))
     (Negative :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (< v 0))))
     (String :args nil :overlap nil :predicate stringp)
+
     ;; ConsFull<CAR-READ CAR-WRITE CDR-READ CDR-WRITE> is a cons cell.
     ;; CAR-READ/CDR-READ are the output types of calling car/cdr on
     ;; the cons cell. CAR-WRITE/CDR-WRITE are the types that are valid
     ;; to write to the cons cell. The most general cons cell is thus
     ;; ConsFull<Any Never Any Never>.
-    (ConsFull :args (CO CONTRA CO CONTRA) :overlap (Function DynFunction PList) :intersect t
+    (ConsFull :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction ArbFunction PList) :intersect t
               :predicate (lambda (v l _1 r _2) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
-    ;; VectorFull<ELEM-READ ELEM-WRITE> has the same semantics as
-    ;; ConsFull.
-    (VectorFull :args (CO CONTRA) :overlap nil :intersect t
+    ;; When you create a new cons cell with cons/list/quote/etc, you
+    ;; get a ConsFresh. This can be thought of as an "undetermined"
+    ;; cons cell: in that it knows what it contains, but it has not
+    ;; yet decided what can be written to it. A ConsFresh can be
+    ;; converted to a ConsFull as long as the read types of the
+    ;; ConsFull are supertypes of the arg types of the ConsFresh.
+    (ConsFresh :args (CO CO) :overlap (Function DynFunction ArbFunction PList) :intersect t
+               :predicate (lambda (v l r) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
+
+    ;; VectorFull<ELEM-READ ELEM-WRITE>: same idea as ConsFull
+    (VectorFull :args (CO CONTRA) :overlap (VectorFresh) :intersect t
                 :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+    ;; Same idea as ConsFresh
+    (VectorFresh :args (CO) :overlap nil :intersect t
+                 :predicate (lambda (v e) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+
     ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
     ;; input and output type.
-    (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
+    (Function :args (CONTRA CO) :overlap (DynFunction ArbFunction) :intersect t)
     ;; DynFunction<ARGLIST-MATCHER OUTPUT-STRUCTURE> is a
     ;; function whose output depends on the input. For a given
     ;; ARGLIST-TYPE, the output of the function is determined by
     ;; inferring ARGLIST-TYPE against ARGLIST-MATCHER, with
     ;; OUTPUT-STRUCTURE as the output.
-    (DynFunction :args (CONST CONST) :overlap nil)
+    (DynFunction :args (CONST CONST) :overlap (ArbFunction))
+    ;; ArbFunction<TYPE-FN> is a function that for an input type TYPE,
+    ;; returns the output type (funcall TYPE-FN TYPE)
+    (ArbFunction :args (CONST) :overlap nil)
+
     ;; PList<PROP1 VAL1 PROP2 VAL2 ...> is a covariant, unordered
     ;; plist.
     (PList
@@ -342,7 +366,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
      ,@body))
 
 (defun et--plist-intersect-args (args1 args2 intersect _union)
-  (let ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
+  (let* ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
     (cl-loop for prop in (delete-dups all-props)
              for val1 = (plist-get args1 prop)
              for val2 = (plist-get args2 prop)
@@ -447,11 +471,16 @@ subtype of super-arg."
       ('(Integer Number) nil)
       ('(Positive Number) nil)
       ('(Negative Number) nil)
-      ('(DynFunction Function)
+
+      ('(ConsFresh ConsFull) (append (funcall co (car sub-args) (car super-args))
+                                     (funcall co (cadr sub-args) (caddr super-args))))
+      ('(VectorFull VectorFresh) (funcall co (car sub-args) (car super-args)))
+
+      (`(,(or 'ArbFunction 'DynFunction) Function)
        (if-let* ((func-input (car super-args))
                  (func-output (cadr super-args))
                  ((and (et-type-p func-input) (et-type-p func-output)))
-                 (dyn-output (et--funcall (apply #'et-dt 'DynFunction sub-args)
+                 (dyn-output (et--funcall (apply #'et-dt sub-name sub-args)
                                           (car super-args)))
                  ((et-subtype? dyn-output func-output)))
            (valid-if t)
@@ -590,7 +619,7 @@ structure which can be parsed by `et-parse-type'.")
 (defun et-alias-expand (alias)
   "Expand an alias to a type."
   (let ((s-args (cl-loop for type in (et-alias-args alias)
-                         collect (et-q (:structure (((S:TYPE ,type))))))))
+                         collect (et-q (:type ,type)))))
     (et-parse-type (et--alias-call (et-alias-name alias) s-args))))
 
 (defun et-expand-all-aliases (type)
@@ -598,9 +627,9 @@ structure which can be parsed by `et-parse-type'.")
 
   (cl-loop for case in (et-type-cases type)
            for val = (et-type-case-value case)
-           nconc (if (et-alias-p val)
-                     (apply #'list (et-type-cases (et-expand-all-aliases (et-alias-expand val))))
-                   (list case))
+           append (if (et-alias-p val)
+                      (apply #'list (et-type-cases (et-expand-all-aliases (et-alias-expand val))))
+                    (list case))
            into new-cases
            finally return (make-et-type :cases new-cases)))
 
@@ -625,13 +654,20 @@ structure which can be parsed by `et-parse-type'.")
 (et-defalias True () (Literal t))
 (et-defalias Boolean () (or True Nil))
 
+;; ConsR/ListR/*R can be thought of as "read only references" to a
+;; type. It is merely a shortcut for "[(T <= Number)] List<T>" for
+;; function parameters. Actual data, such as return values from
+;; functions, should usually not have the ListR/ConsR/*R type.
+(et-defalias ListFresh (elem) (or Nil (ConsFresh ,elem (ListFresh ,elem))))
 (et-defalias ListR (elem) (or Nil (ConsR ,elem (ListR ,elem))))
 (et-defalias List (elem) (or Nil (Cons ,elem (List ,elem))))
 (et-defalias NonNilListR (elem) (ConsR ,elem (ListR ,elem)))
 
+(et-defalias Tree (elem) (or ,elem (List (Tree ,elem))))
 (et-defalias TreeR (elem) (or ,elem (ListR (TreeR ,elem))))
 
-(et-defalias AlistR (key val) (ListR (ConsR ,key ,val)))
+(et-defalias AList (key val) (List (Cons ,key ,val)))
+(et-defalias AListR (key val) (ListR (ConsR ,key ,val)))
 
 (defun et--expand-tuple-spec (cons args)
   (if (null args) 'Nil
@@ -785,9 +821,9 @@ constraint is one of:
 (defmacro et--stop-recursion (var elem default &rest body)
   (declare (indent 3))
   `(let ((elem ,elem))
-     (if (member elem ,var)
-         ,default
-       (let ((,var (cons elem ,var)))
+     (if-let* ((entry (assoc elem ,var)))
+         (setcdr entry (or (cdr entry) ,default))
+       (let ((,var (cons (cons elem nil) ,var)))
          ,@body))))
 
 (defun et--sub-constraints (matcher type)
@@ -926,8 +962,8 @@ Matchers only:
 \(`S:SET' VAR DNF)"
 
 
-  (let ((case-fold-search nil)
-        (parse (lambda (arg) (et-parse-structure arg generics))))
+  (let* ((case-fold-search nil)
+         (parse (lambda (arg) (et-parse-structure arg generics))))
 
     (pcase spec
       ;; Parse a symbol
@@ -936,7 +972,10 @@ Matchers only:
       ;; Parse a string
       (`(:parse ,(and str (pred stringp))) (et--parse-string str generics))
       ;; Insert a literal structure
-      (`(:structure ,structure) structure)
+      (`(:structure ,structure) (copy-tree structure))
+      ;; Literal type/matcher
+      (`(:type ,type) (et-q (((S:TYPE ,type)))))
+      (`(:matcher-dnf ,matcher-dnf) (et-q (((S:MATCHER-DNF ,matcher-dnf)))))
 
       ;; Literal number or string
       ((or (pred stringp) (pred numberp)) (et-q (((S:DT Literal ,spec)))))
@@ -1646,10 +1685,25 @@ same as [T (<= T Number)]."
     (cond
      (sub-val (list (funcall make-case sub-val)))
 
-     ((et-alias-p a) (cl-loop for exp-case in (et-type-cases (et-alias-expand a))
-                              nconc (et--intersect-cases subsect? exp-case b-case)))
-     ((et-alias-p b) (cl-loop for exp-case in (et-type-cases (et-alias-expand b))
-                              nconc (et--intersect-cases subsect? a-case exp-case)))
+     ((et-alias-p a)
+      (cl-loop for exp-case in (et-type-cases (et-alias-expand a))
+               ;; Carry forward binds/typeofs from the original a-case
+               for merged-case = (make-et-type-case
+                                  :value (et-type-case-value exp-case)
+                                  :binds (append (et-type-case-binds a-case)
+                                                 (et-type-case-binds exp-case))
+                                  :typeofs (append (et-type-case-typeofs a-case)
+                                                   (et-type-case-typeofs exp-case)))
+               nconc (et--intersect-cases subsect? merged-case b-case)))
+     ((et-alias-p b)
+      (cl-loop for exp-case in (et-type-cases (et-alias-expand b))
+               for merged-case = (make-et-type-case
+                                  :value (et-type-case-value exp-case)
+                                  :binds (append (et-type-case-binds b-case)
+                                                 (et-type-case-binds exp-case))
+                                  :typeofs (append (et-type-case-typeofs b-case)
+                                                   (et-type-case-typeofs exp-case)))
+               nconc (et--intersect-cases subsect? a-case merged-case)))
 
      ((and (et-datatype-p a) (et-datatype-p b))
       (let ((dt (et--intersect-datatypes subsect? a b)))
@@ -1906,6 +1960,8 @@ Returns the output type, or nil if the call is invalid."
               (and (et-subtype? arglist-type param-type) return-type))
              ((cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,output-struct)))
               (et--infer matcher arglist-type output-struct))
+             ((cl-struct et-datatype (name 'ArbFunction) (args `(,type-fn)))
+              (funcall type-fn arglist-type))
              (_ nil))
            unless result return nil
            collect result into results
@@ -1923,6 +1979,82 @@ Returns the output type, or nil if the call is invalid."
     (`(,last) last)
     (`(,next . ,rest) (et-alias cons next (et--tailed-tuple cons rest)))
     (_ (error "No tail provided"))))
+
+
+;;;; Freshen/Unfreshen
+
+(defvar et--rec-transform-stack nil)
+
+(defun et--rec-transform-datatypes (type transform)
+  "Recursively transform datatypes in a type.
+
+TRANSFORM is a function which takes (dt-name dt-args) and returns a new
+`et-datatype' or `et-alias' (type-case value)."
+  (et--stop-recursion et--rec-transform-stack (list type)
+                      (et-type (make-et-alias :name (gensym "@Loop") :args nil))
+
+    (cl-loop for case in (et-type-cases type)
+             for val = (et-type-case-value case)
+             nconc
+             (pcase val
+               ((cl-struct et-alias)
+                (let* ((binds (et-type-case-binds case))
+                       (typeofs (et-type-case-binds case))
+                       (expanded (et-alias-expand val))
+                       (expanded-transformed (et--rec-transform-datatypes expanded transform)))
+                  (if (equal expanded expanded-transformed) (list case)
+                    (if (not (or binds typeofs)) (et-type-cases expanded-transformed)
+                      ;; Add the binds from TYPE
+                      (cl-loop for exp-case in (et-type-cases expanded-transformed)
+                               collect (make-et-type-case
+                                        :value (et-type-case-value exp-case)
+                                        :binds (et-type-case-binds case)
+                                        :typeofs (et-type-case-typeofs case)))))))
+
+               ((cl-struct et-datatype name args)
+                (list (make-et-type-case
+                       :value (funcall transform name args)
+                       :binds (et-type-case-binds case)
+                       :typeofs (et-type-case-typeofs case)))))
+             into new-cases
+             finally return
+             (let* ((type (make-et-type :cases new-cases))
+                    (alias-type (cdar et--rec-transform-stack)))
+               (when alias-type
+                 (let* ((alias (et-type-case-value (car (et-type-cases alias-type)))))
+                   (et--define-alias (et-alias-name alias) (lambda () (list :type type)) nil)))
+               type))))
+
+
+(defun et--unfreshen-type (type)
+  (et--rec-transform-datatypes
+   type
+   (lambda (name args)
+     (pcase name
+       ('ConsFresh (make-et-alias :name 'Cons :args (mapcar #'et--unfreshen-type args)))
+       ('VectorFresh (make-et-alias :name 'Vector :args (mapcar #'et--unfreshen-type args)))
+       (_ (make-et-datatype :name name :args args))))))
+
+(defun et--freshen-type (type)
+  (et--rec-transform-datatypes
+   type
+   (lambda (name args)
+     (pcase name
+       ('ConsFull
+        (let* ((new-args (list (et--freshen-type (car args)) (et--freshen-type (caddr args)))))
+          (make-et-datatype :name 'ConsFresh :args new-args)))
+       ('VectorFull (make-et-alias :name 'VectorFresh :args (list (et--freshen-type (car args)))))
+       (_ (make-et-datatype :name name :args args))))))
+
+(defun et--freshen-type-shallow (type)
+  (et--rec-transform-datatypes
+   type
+   (lambda (name args)
+     (pcase name
+       ('ConsFull
+        (let* ((new-args (list (et--freshen-type (car args)) (et--freshen-type (caddr args)))))
+          (make-et-datatype :name 'ConsFresh :args new-args)))
+       (_ (make-et-datatype :name name :args args))))))
 
 
 ;;; ============================================================

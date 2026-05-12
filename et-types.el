@@ -167,7 +167,7 @@
                (and name (pred symbolp)
                     (let type (et Nil))))
               ;; Add the var to the list
-              (let var (et-new-var name (or type (et-never))))))
+              (let var (et-new-var name (et--unfreshen-type (or type (et-never)))))))
       . ,_body)
 
   (et-with-vars vars
@@ -391,23 +391,27 @@
 ;;;; Sequences
 ;;;;; cons
 
-(et-define-type-checker cons [L R] (Args L R) Cons<L~R>)
+(et-define-type-checker cons [L R] (Args L R) ConsFresh<L~R>)
+
 
 (et-test
- (et-assert-resolve ConsR<Integer~String> (cons 1 "2"))
- (et-assert-no-resolve ConsR<Integer~String> (cons "1" 2))
- (et-assert-resolve ConsR<Integer~ListR<String>> (cons 1 nil))
- (et-assert-resolve ConsR<Integer~ListR<String>> (cons 1 (cons "2" nil)))
+ (et-assert-resolve ConsFresh<Integer~String> (cons 1 "2"))
+ (et-assert-resolve Cons<Integer~String> (cons 1 "2"))
+ (et-assert-no-resolve ConsFresh<Integer~String> (cons "1" 2))
+ (et-assert-no-resolve Cons<Integer~String> (cons "1" 2))
+ (et-assert-resolve ConsFresh<Integer~ListR<String>> (cons 1 nil))
+ (et-assert-resolve Cons<Integer~List<String>> (cons 1 (cons "2" nil)))
 
- (et-assert-resolve ListR<Integer> (cons 1 (cons 2 nil)))
- (et-assert-no-resolve ListR<Integer> (cons 1 (cons "2" nil)))
- (et-assert-no-resolve ListR<Integer> (cons "1" (cons 2 nil)))
- (et-assert-no-resolve ListR<Integer> (cons 1 (cons 2 t))))
+ (et-assert-resolve List<Integer> (cons 1 (cons 2 nil)))
+ (et-assert-no-resolve List<Integer> (cons 1 (cons "2" nil)))
+ (et-assert-no-resolve List<Integer> (cons "1" (cons 2 nil)))
+ (et-assert-no-resolve List<Integer> (cons 1 (cons 2 t))))
 
 
 ;;;;; list
 
-(et-define-type-checker list [T] T T)
+(et-define-arb-checker list (input)
+  (et--freshen-type input))
 
 (et-test
  (et-assert-resolve ConsR<Integer~ListR<String>> (list 1 "2"))
@@ -530,7 +534,13 @@
 
 ;;;;; alists
 
-(et-define-type-checker assq [C] (Args Any ListR<C&Cons>) C|Nil)
+(et-define-type-checker (assq assoc rassq rassoc) [C] (Args Any ListR<C&Cons>) C|Nil)
+(et-define-type-checker alist-get [V] (Args Any ListR<ConsR<Any~V>>) V|Nil)
+
+(et-test
+ (et-assert-call-errors alist-get Integer ConsR<ConsR<1~2>~ConsR<3~Nil>>)
+ (et-assert-call 2|Nil alist-get Integer AList<1~2>)
+ (et-assert-resolve 2|4|Nil (alist-get 4 (list (cons 1 2) (cons 3 4)))))
 
 
 ;;;; Predicates
@@ -578,7 +588,6 @@
          (output-type (et--funcall func-type args-type)))
     (or output-type
         (et-checker-err "Cannot call %s with args %s" (et-pp func-type) (et-pp args-type)))))
-
 
 (et-test
  (et-assert-resolve Integer (funcall (lambda ([x Integer] [y Integer]) x) 1 2))
@@ -968,9 +977,9 @@ function returns nil."
 
 (defun et--cll-accum-type (kind elem-type)
   (pcase kind
-    ('collect  (et-alias 'ListR elem-type))
+    ('collect  (et-alias 'List elem-type))
     ((or 'append 'nconc)
-     (et-alias 'ListR (or (et--cll-infer-list-elem elem-type) (et Any))))
+     (et-alias 'List (or (et--cll-infer-list-elem elem-type) (et Any))))
     ('concat   (et String))
     ('vconcat  (et-alias 'VectorR (or (et--cll-infer-vec-elem elem-type) elem-type)))
     ('count    (et Integer))
