@@ -735,7 +735,7 @@ SCOPED is the list of scoped datatype entries from `et--make-scoped-datatypes'."
         (pcase form
           (`(,(or 'defun 'cl-defun 'et-defun) . ,_rest)
            ;; Macroexpanding will cause the et declare form to run
-           (ignore-errors (macroexpand-all form))))))))
+           (macroexpand-all form)))))))
 
 
 ;;;; Custom declare form
@@ -761,7 +761,9 @@ Each entry is one of:
 
   ;; Typecheck the defun
   (unless et--preprocessing
-    (when-let* ((macroexp-frame (cl-find #'macroexp-macroexpand (backtrace-frames) :key #'cadr))
+    (when-let* ((filename (bound-and-true-p byte-compile-current-file))
+                ((prog1 t (et-preprocess-file filename)))
+                (macroexp-frame (cl-find #'macroexp-macroexpand (backtrace-frames) :key #'cadr))
                 (defun-expr (car (caddr macroexp-frame)))
                 ((eq (car defun-expr) #'defun))
                 (result (et--check defun-expr)))
