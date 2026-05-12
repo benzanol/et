@@ -495,6 +495,170 @@ PATH is the path to the subexpression."
 
 
 ;;; ============================================================
+;;; Preprocessing
+;;;; `cl-defstruct'
+
+(defun et-preprocess-struct (body)
+  "Preprocess a struct with body BODY.
+
+This will assign the `et-struct-slots' property to the struct being
+defined.
+
+The `et-struct-slots' property is an alist from slot names to plists,
+where each plist is (:type TYPE :read-only BOOL). The type is determined
+by parsing the `:et' property of the slot. If `:et' is not specified,
+the type defaults to `Any'.
+
+It will also define type signatures for the functions created by
+`cl-defstruct'."
+
+  (let* (;; Parse NAME-OR-OPTIONS
+         (name-or-opts (car body))
+         (name (if (consp name-or-opts) (car name-or-opts) name-or-opts))
+         (opts (when (consp name-or-opts) (cdr name-or-opts)))
+         ;; Parse options for renamed functions
+         (conc-name
+          (if-let* ((entry (assq :conc-name opts)))
+              (cadr entry)
+            (intern (format "%s-" name))))
+         (constructor
+          (if-let* ((entry (assq :constructor opts)))
+              (cadr entry)
+            (intern (format "make-%s" name))))
+         (copier
+          (if-let* ((entry (assq :copier opts)))
+              (cadr entry)
+            (intern (format "copy-%s" name))))
+         (predicate
+          (if-let* ((entry (assq :predicate opts)))
+              (cadr entry)
+            (intern (format "%s-p" name))))
+         ;; Skip docstring
+         (slot-forms (let ((rest (cdr body)))
+                       (if (stringp (car rest)) (cdr rest) rest)))
+         ;; The struct type
+         (struct-type (et-dt 'Struct name))
+         ;; Parse slots
+         (slots
+          (cl-loop
+           for slot-form in slot-forms
+           for slot-name = (if (consp slot-form) (car slot-form) slot-form)
+           for slot-plist = (when (consp slot-form) (cddr slot-form))
+           for et-spec = (plist-get slot-plist :et)
+           for read-only = (plist-get slot-plist :read-only)
+           for slot-type = (if et-spec (et-parse-type et-spec) (et-any))
+           collect (cons slot-name (list :type slot-type :read-only read-only)))))
+
+    ;; Set et-struct-slots property
+    (put name 'et-struct-slots slots)
+
+    ;; Predicate: (Args Any) -> Boolean with type narrowing
+    (when predicate
+      (let* ((matcher (et-parse-matcher 'Any '(T)))
+             (output-struct
+              (let ((placeholder-struct
+                     (et-parse-structure
+                      '(or (and True (bindsof (and T *placeholder)))
+                           (and Nil (bindsof (subtract T *placeholder))))
+                      nil)))
+                (cl-subst (list 'S:DT 'Struct name)
+                          (list 'S:DT 'Struct 'placeholder)
+                          placeholder-struct
+                          :test #'equal))))
+        (put predicate 'et-function-type
+             (et-dt 'DynFunction matcher output-struct))))
+
+    ;; Accessors: (Args Struct<NAME>) -> SLOT-TYPE
+    (dolist (slot slots)
+      (let* ((slot-name (car slot))
+             (slot-type (plist-get (cdr slot) :type))
+             (accessor-name (if conc-name
+                                (intern (format "%s%s" conc-name slot-name))
+                              slot-name)))
+        (put accessor-name 'et-function-type
+             (et-dt 'Function
+                    (et-alias 'ConsR struct-type (et-literal nil))
+                    slot-type))))
+
+    ;; Constructor: (&key SLOTS...) -> Struct<NAME>
+    (when constructor
+      (let* ((plist-args
+              (cl-loop for (slot-name . plist) in slots
+                       nconc (list (intern (format ":%s" slot-name))
+                                   (plist-get plist :type)))))
+        (put constructor 'et-function-type
+             (et-dt 'Function
+                    (if plist-args
+                        (apply #'et-dt 'PList plist-args)
+                      (et-literal nil))
+                    struct-type))))
+
+    ;; Copier: (Args Struct<NAME>) -> Struct<NAME>
+    (when copier
+      (put copier 'et-function-type
+           (et-dt 'Function
+                  (et-alias 'ConsR struct-type (et-literal nil))
+                  struct-type)))))
+
+
+;;;; `declare'
+
+(defun et-preprocess-declare (body)
+  "Preprocess a top-level (declare ...) form.
+
+Currently supports:
+  (declare (et (@variable NAME TYPE-SPEC))) — declare a global variable type."
+  (let* ((et-decl (alist-get 'et body)))
+    (dolist (entry et-decl)
+      (pcase entry
+        (`(@variable ,(and name (pred symbolp)) ,type-spec)
+         (put name 'et-variable-type (et-parse-type type-spec)))
+
+        (_ (error "Unknown top-level et declaration: %s" entry))))))
+
+
+;;;; Preprocess expression
+
+(defun et-preprocess-expr (expr)
+  (pcase expr
+    ;; Macroexpanding will cause the declare forms to run
+    (`(defun . ,_body) (macroexpand expr))
+
+    (`(cl-defstruct . ,body) (et-preprocess-struct body))
+    (`(declare . ,body) (et-preprocess-declare body))))
+
+
+;;;; Preprocess file
+
+(defun et--read-all (string)
+  "Read all s-expressions from STRING, returning a list."
+  (let* ((pos 0) forms)
+    (condition-case nil
+        (while t
+          (let* ((result (read-from-string string pos)))
+            (push (car result) forms)
+            (setq pos (cdr result))))
+      (end-of-file (nreverse forms)))))
+
+(defvar et--preprocessed-files nil
+  "List of files that have been preprocessed.")
+
+(defvar et--preprocessing nil
+  "Currently performing preprocessing.")
+
+(defun et-preprocess-file (file)
+  (unless (member file et--preprocessed-files)
+    (push file et--preprocessed-files)
+
+    (let* ((et--preprocessing t))
+      (dolist (form (et--read-all (with-temp-buffer (insert-file-contents file) (buffer-string))))
+        (pcase form
+          (`(,(or 'defun 'cl-defun 'et-defun) . ,_rest)
+           ;; Macroexpanding will cause the et declare form to run
+           (macroexpand-all form)))))))
+
+
+;;; ============================================================
 ;;; Function types
 ;;;; Generate input type
 
@@ -676,36 +840,6 @@ SCOPED is the list of scoped datatype entries from `et--make-scoped-datatypes'."
                                         :test #'equal)))
         (et-dt 'DynFunction input output-struct))
     (et-dt 'Function input return-type)))
-
-
-;;;; Pre-processing
-
-(defun et--read-all (string)
-  "Read all s-expressions from STRING, returning a list."
-  (let* ((pos 0) forms)
-    (condition-case nil
-        (while t
-          (let* ((result (read-from-string string pos)))
-            (push (car result) forms)
-            (setq pos (cdr result))))
-      (end-of-file (nreverse forms)))))
-
-(defvar et--preprocessed-files nil
-  "List of files that have been preprocessed.")
-
-(defvar et--preprocessing nil
-  "Currently performing preprocessing.")
-
-(defun et-preprocess-file (file)
-  (unless (member file et--preprocessed-files)
-    (push file et--preprocessed-files)
-
-    (let* ((et--preprocessing t))
-      (dolist (form (et--read-all (with-temp-buffer (insert-file-contents file) (buffer-string))))
-        (pcase form
-          (`(,(or 'defun 'cl-defun 'et-defun) . ,_rest)
-           ;; Macroexpanding will cause the et declare form to run
-           (macroexpand-all form)))))))
 
 
 ;;;; Custom declare form

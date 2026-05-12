@@ -258,7 +258,8 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 (cl-defstruct et-datatype
   "A datatype factor of an `et-type'."
-  name args)
+  (name nil :et Symbol)
+  (args nil :et List<*et-type|Any>))
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
@@ -301,6 +302,10 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                       nconc (list 'CONST 'ISO)))
      :overlap nil
      :intersect et--plist-intersect-args)
+
+    ;; Struct<NAME>
+    (Struct :args (CONST) :overlap nil :intersect nil)
+
     ;; Scoped datatypes occur when you have a function with generics.
     ;; Then, inside of that function you can use the generics provided
     ;; in the function as types. How a scoped datatype interacts with
@@ -1011,6 +1016,9 @@ Matchers only:
      (list 'typeof (or (alist-get (intern (match-string 1 s)) et--test-variables)
                        (error "Invalid test variable: %s" (match-string 1 s))))
      generics))
+
+   ((string-match "^\\*\\(.*\\)$" s)
+    (et-parse-structure (list 'Struct (intern (match-string 1 s))) nil))
 
    ;; Var=Type  ->  Matcher set
    ((string-match "^\\([-a-zA-Z0-9]*\\)=\\(.*\\)$" s)
