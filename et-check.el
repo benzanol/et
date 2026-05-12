@@ -404,9 +404,12 @@ RETURN is a parsable expression for the return type.
   (let* ((gen-vec (when (vectorp (car arguments)) (append (pop arguments) nil)))
          (arglist-spec (car arguments))
          (return-spec (cadr arguments))
-         (matcher (et-parse-matcher arglist-spec gen-vec))
-         (output-struct (et-parse-structure return-spec (et-matcher-generics matcher)))
-         (func-type (et-dt 'DynFunction matcher output-struct)))
+         (func-type
+          (if gen-vec
+              (let* ((matcher (et-parse-matcher arglist-spec gen-vec))
+                     (output-struct (et-parse-structure return-spec (et-matcher-generics matcher))))
+                (et-dt 'DynFunction matcher output-struct))
+            (et-dt 'Function (et-parse-type arglist-spec) (et-parse-type return-spec)))))
     (unless (eq (length arguments) 2)
       (error "Incorrect number of arguments"))
 
