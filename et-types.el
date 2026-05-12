@@ -408,10 +408,15 @@
  (et-assert-no-resolve List<Integer> (cons 1 (cons 2 t))))
 
 
-;;;;; list
+;;;;; list/copy-tree
 
 (et-define-arb-checker list (input)
   (et--freshen-type-shallow input))
+
+(et-define-arb-checker copy-tree (input)
+  (let* ((gens (et--sub-match (et-matcher [T] (Args T)) input)))
+    (if (eq gens 'INVALID) (error "Expected single argument")
+      (et--freshen-type (car gens)))))
 
 (et-test
  (equal (et ConsFresh<Cons<1~2>~ConsFresh<Cons<3~4>~Nil>>)
