@@ -261,6 +261,13 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
   (name nil :et Symbol)
   (args nil :et List<*et-type|Any>))
 
+(declare
+ (et (@alias EtDatatypeRole (Plist :args (or @CONST @CO @CONTRA @ISO @IGNORE)))
+     (@alias EtDatatypeProps
+             (Plist :args List<EtDatatypeRole>
+                    :overlap True|List<Symbol>
+                    :predicate (Function Any True|List<Any>)))
+     (@variable et--datatypes Number)))
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
     ;; Literal<VALUE> is a type matching only the value VALUE
@@ -440,6 +447,15 @@ subtype of super-arg."
       ('(Integer Number) nil)
       ('(Positive Number) nil)
       ('(Negative Number) nil)
+      ('(DynFunction Function)
+       (if-let* ((func-input (car super-args))
+                 (func-output (cadr super-args))
+                 ((and (et-type-p func-input) (et-type-p func-output)))
+                 (dyn-output (et--funcall (apply #'et-dt 'DynFunction sub-args)
+                                          (car super-args)))
+                 ((et-subtype? dyn-output func-output)))
+           (valid-if t)
+         (valid-if nil)))
 
       ('(,_ NonNil)
        (pcase super-name

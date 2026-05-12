@@ -604,16 +604,18 @@ It will also define type signatures for the functions created by
 ;;;; `declare'
 
 (defun et-preprocess-declare (body)
-  "Preprocess a top-level (declare ...) form.
+  "Preprocess a top-level (declare (et FORMS...)) form.
 
-Currently supports:
-  (declare (et (@variable NAME TYPE-SPEC))) — declare a global variable type."
+Supported forms are:
+  (@variable NAME TYPE-SPEC) - declare a global variable type.
+  (@alias NAME TYPE-SPEC) - define a type alias with no parameters."
   (let* ((et-decl (alist-get 'et body)))
     (dolist (entry et-decl)
       (pcase entry
         (`(@variable ,(and name (pred symbolp)) ,type-spec)
          (put name 'et-variable-type (et-parse-type type-spec)))
-
+        (`(@alias ,(and name (pred symbolp)) ,type-spec)
+         (et--define-alias name (lambda () (et-q ,type-spec)) nil))
         (_ (error "Unknown top-level et declaration: %s" entry))))))
 
 
