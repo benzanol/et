@@ -564,15 +564,14 @@
   (or ,tail (ConsFresh ,elem (AppendFresh ,elem ,tail))))
 
 (defun et--append-return-type (input-type)
-  (or
-   (et-checker-infer input-type [] Nil Nil)
-   (et-checker-infer input-type [S] (ConsR S Nil) S)
-   (et-checker-infer
-    input-type [E R] (ConsR List<E> R)
-    (AppendFresh E (eval et--append-return-type R)))))
+  (or (et-checker-infer input-type [] Nil Nil)
+      (et-checker-infer input-type [S] (ConsR S Nil) S)
+      (et-checker-infer input-type [E R] (ConsR List<E> R)
+                        (AppendFresh E (eval et--append-return-type R)))))
 
 (et-define-type-checker append [A] A (eval et--append-return-type A))
 
+(et-define-type-checker nconc [E] ListR<List<E>> List<E>)
 
 (et-test
  (equal (list (et Number))

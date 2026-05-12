@@ -1861,23 +1861,29 @@ returning A itself is a valid approximation."
 
 ;;;; Satisfy constraints
 
+(defun et--type-contains-binds (type)
+  (cl-loop for c in (et-type-cases type)
+           thereis (or (et-type-case-binds c) (et-type-case-typeofs c)
+                       (pcase (et-type-case-value c)
+                         ((cl-struct et-alias args)
+                          (cl-loop for arg in args thereis (et--type-contains-binds arg)))
+                         ((cl-struct et-datatype args)
+                          (cl-loop for arg in args
+                                   thereis (and (et-type-p arg) (et--type-contains-binds arg))))))))
+
 (defun et--sub-match (matcher type)
-  (if (cl-loop for c in (et-type-cases type)
-               thereis (or (et-type-case-binds c) (et-type-case-typeofs c)))
-      (et--sub-match-logic matcher type)
+  (if (et--type-contains-binds type) (et--sub-match-logic matcher type)
     (et-cache (list #'et--sub-match matcher type) (et--sub-match-logic matcher type))))
+
+(defun et--super-match (matcher type)
+  (if (et--type-contains-binds type) (et--super-match-logic matcher type)
+    (et-cache (list #'et--super-match matcher type) (et--sub-match-logic matcher type))))
 
 (defun et--sub-match-logic (matcher type)
   (let ((constraints (append (et--sub-constraints matcher type)
                              (et-matcher-constraints matcher))))
     (et--match-satisfy-constraints-smallest
      (et-matcher-generics matcher) constraints)))
-
-(defun et--super-match (matcher type)
-  (if (cl-loop for c in (et-type-cases type)
-               thereis (or (et-type-case-binds c) (et-type-case-typeofs c)))
-      (et--super-match-logic matcher type)
-    (et-cache (list #'et--super-match matcher type) (et--sub-match-logic matcher type))))
 
 (defun et--super-match-logic (matcher type)
   (let ((constraints (append (et--super-constraints matcher type)
