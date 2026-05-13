@@ -421,7 +421,8 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                                 @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
                                 @Function @DynFunction
                                 @Struct @Scoped))
-     (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
+     (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>)
+     )
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
@@ -479,8 +480,9 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
      :overlap nil
      :intersect et--plist-intersect-args)
 
-    ;; Struct<NAME>
-    (Struct :args (CONST) :overlap nil :intersect nil)
+    ;; Struct<NAME~GENERCIC-PARAMS...>
+    (Struct :args (lambda (args) (cons 'CONST (make-list (length (cdr args)) 'ISO)))
+            :overlap nil :intersect nil)
 
     ;; Scoped datatypes occur when you have a function with generics.
     ;; Then, inside of that function you can use the generics provided
@@ -1153,6 +1155,7 @@ Types only:
 \(`S:BINDS-OF' TYPE)
 \(`S:SUBTRACT' TYPE1 TYPE2)
 \(`S:INFER' GENERICS MATCHER TYPE Y-RESULT N-RESULT)
+\(`S:EXTENDS' SUB SUPER Y-RESULT N-RESULT)
 \(`S:EVAL' FUNC TYPES...)
 
 Matchers only:
@@ -1196,6 +1199,7 @@ Matchers only:
       (`(subtract ,type1 ,type2)
        (et-q (((S:SUBTRACT ,(et-parse-structure type1 generics)
                            ,(et-parse-structure type2 generics))))))
+
       (`(infer ,type ,gens ,matcher ,yes ,no)
        (setq type (et-parse-structure type generics))
        (if (vectorp gens) (setq gens (append gens nil)) (error "Generics must be a vector: %s" gens))
@@ -1203,6 +1207,12 @@ Matchers only:
        (setq yes (et-parse-structure yes (append gens generics)))
        (setq no (et-parse-structure no generics))
        (et-q (((S:INFER ,type ,gens ,matcher ,yes ,no)))))
+      (`(infer . ,_) (error "Incorrect infer format: %s" spec))
+
+      (`(extends? ,sub ,super ,yes ,no)
+       (et-q (((S:EXTENDS ,(funcall parse sub) ,(funcall parse super)
+                          ,(funcall parse yes) ,(funcall parse no))))))
+
       (`(eval ,func . ,types)
        (et-q (((S:EVAL ,func . ,(mapcar parse types))))))
 
@@ -1441,6 +1451,11 @@ which are invalid for types."
                         :dnf (et-structure-to-matcher-dnf matcher gens)))
          (et-type-cases (or (et--infer matcher type yes gen-repls)
                             (et-structure-to-type no))))
+        (`(S:EXTENDS ,sub ,super ,yes ,no)
+         (et-type-cases
+          (if (et-subtype? (funcall to-type sub) (funcall to-type super))
+              (funcall to-type yes) (funcall to-type no))))
+
         (`(S:EVAL ,func . ,types) (et-type-cases (apply func (mapcar to-type types))))
         (_ (error "Invalid structure factor for type: %s" factor)))
       into and-case-lists
