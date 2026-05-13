@@ -509,7 +509,7 @@ subtype of super-arg."
 
       ('(ConsFresh ConsFull) (append (funcall co (car sub-args) (car super-args))
                                      (funcall co (cadr sub-args) (caddr super-args))))
-      ('(VectorFull VectorFresh) (funcall co (car sub-args) (car super-args)))
+      ('(VectorFresh VectorFull) (funcall co (car sub-args) (car super-args)))
 
       (`(DynFunction Function)
        (if-let* ((func-input (car super-args))
@@ -2093,42 +2093,62 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
              into new-cases
              finally return
              (let* ((type (make-et-type :cases new-cases))
+                    (no-binds (et--remove-type-binds type))
                     (alias-type (cdar et--rec-transform-stack)))
                (when alias-type
                  (let* ((alias (et-type-case-value (car (et-type-cases alias-type)))))
-                   (et--define-alias (et-alias-name alias) (lambda () (list :type type)) nil)))
+                   (et--define-alias (et-alias-name alias) (lambda () (list :type no-binds)) nil)))
                type))))
 
 
 (defun et--unfreshen-type (type)
-  (et--rec-transform-datatypes
-   type
-   (lambda (name args)
-     (pcase name
-       ('ConsFresh (make-et-alias :name 'Cons :args (mapcar #'et--unfreshen-type args)))
-       ('VectorFresh (make-et-alias :name 'Vector :args (mapcar #'et--unfreshen-type args)))
-       (_ (make-et-datatype :name name :args args))))))
+  (et--remove-type-binds
+   (et--rec-transform-datatypes
+    type
+    (lambda (name args)
+      (pcase name
+        ('ConsFresh (make-et-alias :name 'Cons :args (mapcar #'et--unfreshen-type args)))
+        ('VectorFresh (make-et-alias :name 'Vector :args (mapcar #'et--unfreshen-type args)))
+        (_ (make-et-datatype :name name :args args)))))))
 
 (defun et--freshen-type (type)
-  (et--rec-transform-datatypes
-   type
-   (lambda (name args)
-     (pcase name
-       ('ConsFull
-        (let* ((new-args (list (et--freshen-type (car args)) (et--freshen-type (caddr args)))))
-          (make-et-datatype :name 'ConsFresh :args new-args)))
-       ('VectorFull (make-et-alias :name 'VectorFresh :args (list (et--freshen-type (car args)))))
-       (_ (make-et-datatype :name name :args args))))))
+  (et--remove-type-binds
+   (et--rec-transform-datatypes
+    type
+    (lambda (name args)
+      (pcase name
+        ('ConsFull
+         (let* ((new-args (list (et--freshen-type (car args)) (et--freshen-type (caddr args)))))
+           (make-et-datatype :name 'ConsFresh :args new-args)))
+        ('VectorFull (make-et-alias :name 'VectorFresh :args (list (et--freshen-type (car args)))))
+        (_ (make-et-datatype :name name :args args)))))))
 
 (defun et--freshen-type-shallow (type)
-  (et--rec-transform-datatypes
-   type
-   (lambda (name args)
-     (pcase name
-       ('ConsFull
-        (let* ((new-args (list (car args) (et--freshen-type-shallow (caddr args)))))
-          (make-et-datatype :name 'ConsFresh :args new-args)))
-       (_ (make-et-datatype :name name :args args))))))
+  (et--remove-type-binds
+   (et--rec-transform-datatypes
+    type
+    (lambda (name args)
+      (pcase name
+        ('ConsFull
+         (let* ((new-args (list (car args) (et--freshen-type-shallow (caddr args)))))
+           (make-et-datatype :name 'ConsFresh :args new-args)))
+        (_ (make-et-datatype :name name :args args)))))))
+
+
+;;;; Deep expand aliases
+
+(defun et-expand-aliases-at-depth (type depth)
+  (if (<= depth 0) type
+    (cl-loop for case in (et-type-cases (et-expand-all-aliases type))
+             for dt = (et-type-case-value case)
+             for new-dt =
+             (make-et-datatype
+              :name (et-datatype-name dt)
+              :args (et--datatype-map-type-args
+                     (et-datatype-name dt) (et-datatype-args dt)
+                     (lambda (type) (et-expand-aliases-at-depth type (1- depth)))))
+             collect (make-et-type-case :value new-dt) into new-cases
+             finally return (make-et-type :cases new-cases))))
 
 
 ;;; ============================================================

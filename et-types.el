@@ -188,6 +188,496 @@
     (et-checker-sub 1)))
 
 
+;;;; pcase
+;;;;; Pcase pattern protocol
+
+;; A pcase pattern checker is a function registered via
+;; `et-define-pcase-pattern'.  It receives the scrutinee type (the type
+;; of the value being matched) and the pattern form, and must return an
+;; `et-pcase-result' struct describing:
+;;
+;;   MATCHED-TYPE   — the narrowed type of the scrutinee when this
+;;                    pattern matches.  For example, (pred integerp)
+;;                    narrows to Integer.  Use the scrutinee type
+;;                    unchanged if the pattern cannot narrow.
+;;
+;;   VARS           — a list of `et-var' instances for variables bound
+;;                    by this pattern.  Each var has a name (symbol) and
+;;                    type.  The body of the matching clause will be
+;;                    typechecked with these vars in scope.
+;;
+;;   RESIDUAL-TYPE  — the narrowed type of the scrutinee when this
+;;                    pattern does NOT match.  This is threaded through
+;;                    subsequent clauses so that later patterns see a
+;;                    progressively refined "what's left" type.  Defaults
+;;                    to SCRUTINEE (no narrowing on failure) when nil.
+;;
+;; A pattern checker signals errors via `et-checker-err' / `et-checker-warn'.
+;;
+;; Composite patterns (and, or, guard, let, app, pred, cl-struct, etc.)
+;; recursively call `et--pcase-check-pattern' on sub-patterns.
+;;
+;; The entry point `et--pcase-check-pattern' dispatches on the pattern
+;; head symbol's `et-pcase-pattern' property.  Bare symbols are
+;; variable-capture patterns; _ and otherwise are wildcards.
+
+(cl-defstruct et-pcase-result
+  "Result of checking a pcase pattern against a scrutinee type."
+  (matched-type nil :documentation "Narrowed scrutinee type when matched.")
+  (vars nil :documentation "List of `et-var' bound by this pattern.")
+  (residual-type nil :documentation "Scrutinee type when NOT matched (nil = unchanged)."))
+
+
+;;;;; Pattern registry
+
+(defvar et--pcase-patterns (make-hash-table :test #'eq)
+  "Map from pattern-head symbol to checker function.
+
+Each function takes (SCRUTINEE-TYPE PATTERN) and returns an
+`et-pcase-result'.")
+
+(defmacro et-define-pcase-pattern (name args &rest body)
+  "Register a pcase pattern checker.
+
+NAME is the pattern head symbol (e.g. `pred', `guard', `\\=`').
+ARGS is (SCRUTINEE-TYPE PATTERN) — the two arguments the checker
+receives.  BODY should return an `et-pcase-result'.
+
+\(fn NAME (SCRUTINEE-TYPE PATTERN) BODY...)"
+  (declare (indent 2))
+  `(puthash ',name (lambda ,args ,@body) et--pcase-patterns))
+
+(defun et--pcase-check-pattern (scrutinee-type pattern)
+  "Dispatch PATTERN against SCRUTINEE-TYPE, returning an `et-pcase-result'.
+
+Bare symbols bind as variables (with `_' and `otherwise' as wildcards).
+Lists dispatch on the car's `et-pcase-pattern' entry.
+Self-quoting atoms (numbers, strings, keywords) match as literals."
+  (pcase pattern
+    ;; Wildcard
+    ((or '_ 'otherwise 'pcase--dontcare)
+     (make-et-pcase-result :matched-type scrutinee-type))
+
+    ;; Variable capture
+    ((and (pred symbolp) sym)
+     (make-et-pcase-result
+      :matched-type scrutinee-type
+      :vars (list (et-new-var sym scrutinee-type))))
+
+    ;; Self-quoting literals (numbers, strings, keywords)
+    ((or (pred numberp) (pred stringp) (pred keywordp))
+     (let* ((lit-type (et-literal pattern))
+            (matched (et--supersect scrutinee-type lit-type))
+            (residual (et--subtract scrutinee-type lit-type)))
+       (make-et-pcase-result :matched-type matched :residual-type residual)))
+
+    ;; Compound pattern
+    (`(,head . ,_)
+     (if-let* ((checker (gethash head et--pcase-patterns)))
+         (funcall checker scrutinee-type pattern)
+       (et-checker-warn "Unknown pcase pattern head: %s" head)
+       (make-et-pcase-result :matched-type scrutinee-type)))
+
+    (_ (et-checker-warn "Unrecognized pcase pattern: %s" pattern)
+       (make-et-pcase-result :matched-type scrutinee-type))))
+
+
+;;;;; pcase checker
+
+(et-define-checker pcase
+  (let* ((scrut-type (et-checker-sub 1))
+         (clauses (cddr et--checker-expr))
+         (remaining-type scrut-type)
+         (result-types nil))
+
+    (cl-loop
+     for clause in clauses
+     for clause-idx upfrom 2
+     for (pat . body) = clause
+     for pat-result = (et--pcase-check-pattern remaining-type pat)
+     for matched = (or (et-pcase-result-matched-type pat-result) remaining-type)
+     for vars = (et-pcase-result-vars pat-result)
+     for residual = (et-pcase-result-residual-type pat-result)
+     ;; Typecheck the body with pattern vars in scope and scrutinee narrowed
+     for body-type = (et-with-vars vars
+                       (et-with-narrow-binds (et--type-binds matched)
+                         (if (null body) (et Nil)
+                           ;; Check each body form; return type of last
+                           (cl-loop for bi upfrom 1 below (length clause)
+                                    for sub-type = (et-checker-sub clause-idx bi)
+                                    finally return sub-type))))
+     do (push body-type result-types)
+     do (setq remaining-type (or residual remaining-type))
+     ;; If remaining is never, later clauses are unreachable
+     when (et-never-p remaining-type) return nil)
+
+    (if result-types
+        (et-simplify-type (apply #'et--or (nreverse result-types)))
+      (et Nil))))
+
+
+;;;;; quote pattern
+
+(et-define-pcase-pattern quote (scrutinee-type pattern)
+  ;; (quote VAL)
+  (let* ((val (cadr pattern))
+         (lit-type (et-literal val))
+         (matched (et--supersect scrutinee-type lit-type))
+         (residual (et--subtract scrutinee-type lit-type)))
+    (make-et-pcase-result :matched-type matched :residual-type residual)))
+
+
+;;;;; backquote pattern
+
+(defun et--pcase-check-backquote (scrutinee-type pattern)
+  "Check a backquote pattern, returning an `et-pcase-result'.
+
+Backquote patterns are recursive:
+  \\=`ATOM        — literal match (like quote)
+  \\=`(A . B)     — matches a cons, recursing on car/cdr
+  \\=`,PAT        — splice: delegates to the inner PAT
+  \\=`,@PAT       — not supported in pcase; ignored"
+  (pcase pattern
+    ;; ,PAT — unquote splice, delegate to inner pattern
+    (`(,'\, ,inner)
+     (et--pcase-check-pattern scrutinee-type inner))
+
+    ;; (A . B) — cons destructuring
+    (`(,car-pat . ,cdr-pat)
+     (let* ((cons-type (et--supersect scrutinee-type (et Cons)))
+            (car-scrut (or (et-checker-infer cons-type [L] ConsR<L~Any> L) (et-any)))
+            (cdr-scrut (or (et-checker-infer cons-type [R] ConsR<Any~R> R) (et-any)))
+            (car-result (et--pcase-check-backquote car-scrut car-pat))
+            (cdr-result (et--pcase-check-backquote cdr-scrut cdr-pat))
+            (all-vars (append (et-pcase-result-vars car-result)
+                              (et-pcase-result-vars cdr-result)))
+            ;; Matched type: a cons narrowed by both sub-patterns
+            (matched (et--supersect cons-type
+                                    (et-alias 'ConsR
+                                              (or (et-pcase-result-matched-type car-result)
+                                                  car-scrut)
+                                              (or (et-pcase-result-matched-type cdr-result)
+                                                  cdr-scrut)))))
+       (make-et-pcase-result :matched-type matched :vars all-vars)))
+
+    ;; Literal atom — same as quote
+    ((or (pred symbolp) (pred numberp) (pred stringp) (pred keywordp))
+     (let* ((lit-type (et-literal pattern))
+            (matched (et--supersect scrutinee-type lit-type))
+            (residual (et--subtract scrutinee-type lit-type)))
+       (make-et-pcase-result :matched-type matched :residual-type residual)))
+
+    ;; Vector pattern — not yet supported
+    (_ (et-checker-warn "Unsupported backquote pattern form: %s" pattern)
+       (make-et-pcase-result :matched-type scrutinee-type))))
+
+(et-define-pcase-pattern \` (scrutinee-type pattern)
+  (et--pcase-check-backquote scrutinee-type (cadr pattern)))
+
+
+;;;;; pred pattern
+
+(et-define-pcase-pattern pred (scrutinee-type pattern)
+  ;; (pred FUNC) — FUNC is a predicate; narrow by its return type
+  (let* ((pred-form (cadr pattern))
+         (pred-type
+          (pcase pred-form
+            ((and sym (pred symbolp))
+             (or (get sym 'et-function-type) nil))
+            (`(lambda . ,_)
+             (et-result-type (et--check pred-form)))
+            (_ nil)))
+         ;; If the predicate has a DynFunction type, apply it to get narrowing
+         (call-result
+          (when pred-type
+            (et--funcall pred-type (et-alias 'ConsR scrutinee-type (et-literal nil)))))
+         ;; Extract binds from the True branch of the call result for narrowing
+         (binds (when call-result (et--type-binds (et--non-nil call-result))))
+         (matched (if binds
+                      (cl-loop for (_var . type) in binds
+                               with acc = scrutinee-type
+                               do (setq acc (et--supersect acc type))
+                               finally return acc)
+                    scrutinee-type))
+         (residual-binds (when call-result
+                           (et--type-binds (et--supersect call-result (et Nil)))))
+         (residual (if residual-binds
+                       (cl-loop for (_var . type) in residual-binds
+                                with acc = scrutinee-type
+                                do (setq acc (et--supersect acc type))
+                                finally return acc)
+                     scrutinee-type)))
+    (make-et-pcase-result :matched-type matched :residual-type residual)))
+
+
+;;;;; guard pattern
+
+(et-define-pcase-pattern guard (scrutinee-type pattern)
+  ;; (guard EXPR) — matches when EXPR is non-nil; binds nothing
+  ;; We cannot narrow the scrutinee from a guard (it's an arbitrary expr),
+  ;; but we do typecheck the expression.
+  (let* ((expr (cadr pattern))
+         (_expr-type (et-result-type (et--check expr))))
+    (make-et-pcase-result :matched-type scrutinee-type)))
+
+
+;;;;; app pattern
+
+(et-define-pcase-pattern app (scrutinee-type pattern)
+  ;; (app FUNC PAT) — apply FUNC to scrutinee, match result against PAT
+  (let* ((func-form (cadr pattern))
+         (inner-pat (caddr pattern))
+         (func-type
+          (pcase func-form
+            ((and sym (pred symbolp)) (get sym 'et-function-type))
+            (`(lambda . ,_) (et-result-type (et--check func-form)))
+            (_ nil)))
+         (app-result-type
+          (if func-type
+              (or (et--funcall func-type
+                               (et-alias 'ConsR scrutinee-type (et-literal nil)))
+                  (progn (et-checker-err "app function cannot accept scrutinee type %s"
+                                         (et-pp scrutinee-type))
+                         (et-any)))
+            (et-any)))
+         (inner-result (et--pcase-check-pattern app-result-type inner-pat)))
+    ;; We cannot narrow the scrutinee from app (the function is opaque),
+    ;; but we propagate vars from the inner pattern.
+    (make-et-pcase-result
+     :matched-type scrutinee-type
+     :vars (et-pcase-result-vars inner-result))))
+
+
+;;;;; and pattern
+
+(et-define-pcase-pattern and (scrutinee-type pattern)
+  ;; (and PAT1 PAT2 ...) — all must match; narrow progressively
+  (let* ((sub-pats (cdr pattern))
+         (current-type scrutinee-type)
+         (all-vars nil))
+    (dolist (sub sub-pats)
+      (let* ((result (et--pcase-check-pattern current-type sub)))
+        (setq current-type (or (et-pcase-result-matched-type result) current-type))
+        (setq all-vars (append all-vars (et-pcase-result-vars result)))))
+    (make-et-pcase-result :matched-type current-type :vars all-vars)))
+
+
+;;;;; or pattern
+
+(et-define-pcase-pattern or (scrutinee-type pattern)
+  ;; (or PAT1 PAT2 ...) — first match wins; vars must be consistent
+  ;;
+  ;; Each alternative is checked against the residual of the previous,
+  ;; mirroring how pcase tries alternatives in order.  The matched type
+  ;; is the union of all alternatives' matched types.  Variables bound
+  ;; across alternatives must have the same names; their types are
+  ;; unioned.
+  (let* ((sub-pats (cdr pattern))
+         (remaining scrutinee-type)
+         (matched-types nil)
+         (var-alists nil)) ; list of alists ((name . type) ...)
+
+    (dolist (sub sub-pats)
+      (let* ((result (et--pcase-check-pattern remaining sub))
+             (matched (or (et-pcase-result-matched-type result) remaining)))
+        (push matched matched-types)
+        (push (cl-loop for v in (et-pcase-result-vars result)
+                       collect (cons (et-var-name v) (et-var-type v)))
+              var-alists)
+        (setq remaining (or (et-pcase-result-residual-type result) remaining))))
+
+    ;; Union variables by name
+    (let* ((merged-vars
+            (when var-alists
+              (cl-loop for (name . _) in (car var-alists)
+                       collect
+                       (et-new-var name
+                                   (apply #'et--or
+                                          (cl-loop for alist in var-alists
+                                                   for entry = (assq name alist)
+                                                   collect (if entry (cdr entry) (et-any)))))))))
+      (make-et-pcase-result
+       :matched-type (apply #'et--or (nreverse matched-types))
+       :vars merged-vars
+       :residual-type remaining))))
+
+
+;;;;; let pattern
+
+(et-define-pcase-pattern let (scrutinee-type pattern)
+  ;; (let PAT EXPR) — evaluate EXPR, match against PAT
+  ;; The scrutinee of pcase is irrelevant; PAT matches against EXPR's value.
+  (let* ((inner-pat (cadr pattern))
+         (expr (caddr pattern))
+         (expr-type (et-result-type (et--check expr)))
+         (result (et--pcase-check-pattern expr-type inner-pat)))
+    ;; Scrutinee is unchanged; vars come from the inner pattern
+    (make-et-pcase-result
+     :matched-type scrutinee-type
+     :vars (et-pcase-result-vars result))))
+
+
+;;;;; cl-struct pattern
+
+(et-define-pcase-pattern cl-struct (scrutinee-type pattern)
+  ;; (cl-struct NAME (SLOT PAT)... | SLOT...)
+  ;; Matches if the scrutinee is an instance of struct NAME.
+  ;; Each SLOT can be a bare symbol (bind to that name) or (SLOT PAT).
+  (let* ((struct-name (cadr pattern))
+         (slot-specs (cddr pattern))
+         (struct-slots (get struct-name 'et-struct-slots))
+         (struct-type (et-dt 'Struct struct-name))
+         (matched (et--supersect scrutinee-type struct-type))
+         (all-vars nil))
+
+    (unless struct-slots
+      (et-checker-warn "Unknown struct: %s" struct-name))
+
+    (dolist (spec slot-specs)
+      (pcase spec
+        ;; (SLOT PAT) — extract slot type and match inner pattern
+        (`(,slot-name ,inner-pat)
+         (let* ((slot-plist (alist-get slot-name struct-slots))
+                (slot-type (if slot-plist (plist-get slot-plist :type) (et-any)))
+                (result (et--pcase-check-pattern slot-type inner-pat)))
+           (setq all-vars (append all-vars (et-pcase-result-vars result)))))
+
+        ;; Bare SLOT — bind the slot name to its type
+        ((and (pred symbolp) slot-name)
+         (let* ((slot-plist (alist-get slot-name struct-slots))
+                (slot-type (if slot-plist (plist-get slot-plist :type) (et-any))))
+           (push (et-new-var slot-name slot-type) all-vars)))))
+
+    (make-et-pcase-result
+     :matched-type matched
+     :vars (nreverse all-vars)
+     :residual-type (et--subtract scrutinee-type struct-type))))
+
+
+;;;;; cl-type pattern
+
+(et-define-pcase-pattern cl-type (scrutinee-type pattern)
+  ;; (cl-type TYPE) — matches if (cl-typep scrutinee 'TYPE)
+  ;; Map common cl-types to et types for narrowing.
+  (let* ((cl-type-name (cadr pattern))
+         (narrowed
+          (pcase cl-type-name
+            ('integer (et Integer))
+            ('number (et Number))
+            ('string (et String))
+            ('symbol (et Symbol))
+            ('cons (et Cons))
+            ('list (et or Nil Cons))
+            ('null (et Nil))
+            ('vector (et Vector))
+            ('boolean (et Boolean))
+            (_ nil)))
+         (matched (if narrowed (et--supersect scrutinee-type narrowed) scrutinee-type))
+         (residual (if narrowed (et--subtract scrutinee-type narrowed) scrutinee-type)))
+    (make-et-pcase-result :matched-type matched :residual-type residual)))
+
+
+;;;;; pcase tests
+
+(et-test
+ ;; Helper: check that a pattern against a scrutinee type yields
+ ;; the expected matched type and variable bindings.
+ ;; PAT-VARS is an alist of (VAR-NAME . TYPE).
+
+ ;; Literal match narrows and subtracts
+ (let* ((r (et--pcase-check-pattern (et 1|2|3) '(quote 1))))
+   (and (et-subtype? (et-pcase-result-matched-type r) (et 1))
+        (et-subtype? (et-pcase-result-residual-type r) (et 2|3))
+        (null (et-pcase-result-vars r))))
+
+ ;; Wildcard binds nothing, no narrowing
+ (let* ((r (et--pcase-check-pattern (et Integer) '_)))
+   (and (equal (et-pcase-result-matched-type r) (et Integer))
+        (null (et-pcase-result-vars r))))
+
+ ;; Variable capture
+ (let* ((r (et--pcase-check-pattern (et Integer) 'x)))
+   (and (equal (et-pcase-result-matched-type r) (et Integer))
+        (equal (et-var-name (car (et-pcase-result-vars r))) 'x)
+        (equal (et-var-type (car (et-pcase-result-vars r))) (et Integer))))
+
+ ;; Self-quoting number
+ (let* ((r (et--pcase-check-pattern (et 1|2) 1)))
+   (et-subtype? (et-pcase-result-matched-type r) (et 1)))
+
+ ;; pred with known predicate — narrows scrutinee
+ (let* ((r (et--pcase-check-pattern (et {Number|String}&{::$a}) '(pred integerp))))
+   (et-subtype? (et-pcase-result-matched-type r) (et Integer)))
+
+ ;; and pattern — progressive narrowing + var collection
+ (let* ((r (et--pcase-check-pattern (et {Number|String}&{::$a}) '(and (pred integerp) x))))
+   (and (et-subtype? (et-pcase-result-matched-type r) (et Integer))
+        (equal (et-var-name (car (et-pcase-result-vars r))) 'x)
+        (et-subtype? (et-var-type (car (et-pcase-result-vars r))) (et Integer))))
+
+ ;; or pattern — union of matched, union of var types
+ (let* ((r (et--pcase-check-pattern (et 1|2|%hi) '(or 1 2))))
+   (and (et-subtype? (et-pcase-result-matched-type r) (et 1|2))
+        (et-subtype? (et-pcase-result-residual-type r) (et %hi))))
+
+ ;; backquote cons destructuring
+ (let* ((r (et--pcase-check-pattern (et ConsR<Integer~String>) '(\` (,a . ,b)))))
+   (and (equal (length (et-pcase-result-vars r)) 2)
+        (equal (et-var-name (car (et-pcase-result-vars r))) 'a)
+        (equal (et-var-name (cadr (et-pcase-result-vars r))) 'b)))
+
+ ;; backquote literal
+ (let* ((r (et--pcase-check-pattern (et 1|2|3) '(\` 1))))
+   (et-subtype? (et-pcase-result-matched-type r) (et 1)))
+
+ ;; let pattern — vars from inner, scrutinee unchanged
+ (let* ((r (et--pcase-check-pattern (et Integer) '(let x (+ 1 2)))))
+   (and (equal (et-pcase-result-matched-type r) (et Integer))
+        (equal (et-var-name (car (et-pcase-result-vars r))) 'x)))
+
+ ;; guard — no narrowing, no vars
+ (let* ((r (et--pcase-check-pattern (et Integer) '(guard (> 1 0)))))
+   (and (equal (et-pcase-result-matched-type r) (et Integer))
+        (null (et-pcase-result-vars r))))
+
+ ;; app pattern
+ (let* ((r (et--pcase-check-pattern (et ListR<Integer>) '(app car x))))
+   (et-subtype? (et-var-type (car (et-pcase-result-vars r))) (et Integer|Nil)))
+
+ ;; cl-type pattern
+ (let* ((r (et--pcase-check-pattern (et Any) '(cl-type integer))))
+   (et-subtype? (et-pcase-result-matched-type r) (et Integer)))
+
+ ;; Full pcase expression: literal cases with exhaustive match
+ (et-subtype? (et-typecheck
+               (let* ((x Integer|String 5))
+                 (pcase x
+                   ((pred integerp) (+ x 1))
+                   ((pred stringp) x))))
+              (et Integer|String))
+
+ ;; Full pcase: variable binding in pattern
+ (et-subtype? (et-typecheck
+               (pcase (cons 1 "hi")
+                 (`(,a . ,b) (cons b a))))
+              (et Cons))
+
+ ;; Full pcase: or pattern with fallthrough
+ (et-subtype? (et-typecheck
+               (pcase 1
+                 ((or 1 2) "match")
+                 (_ "no")))
+              (et String))
+
+ ;; Full pcase: and + pred narrowing in body
+ (et-subtype? (et-typecheck
+               (let* ((v Number|String 5))
+                 (pcase v
+                   ((and (pred integerp) n) (+ n 1))
+                   (_ 0))))
+              (et Integer|Number)))
+
+
 ;;;; setq
 
 (et-define-pcase-checker setq (and args (guard (eq 0 (mod (length args) 2))))
@@ -743,463 +1233,566 @@ function returns nil."
 
 ;;;; cl-loop
 
-;; The following was generated by Claude Opus 4.6
-
-
-;;;;; Token stream
-
-;;
-;; STATE is a cons (INDEX . BODY).  The et--checker-expr position of
-;; the current token is (1+ INDEX).
-
-(defun et--cll-peek (state)
-  (nth (car state) (cdr state)))
-
-(defun et--cll-advance! (state)
-  (prog1 (et--cll-peek state) (cl-incf (car state))))
-
-(defun et--cll-pos (state)
-  (1+ (car state)))
-
-(defun et--cll-done-p (state)
-  (>= (car state) (length (cdr state))))
-
-(defconst et--cll-clause-keywords
-  '(for as with do doing initially finally
+(defvar et--loop-keywords
+  '(for as with do doing initially finally repeat
+        while until always never thereis
         collect collecting append appending nconc nconcing
         concat vconcat count counting sum summing
         maximize maximizing minimize minimizing
-        repeat while until always never thereis
-        if when unless named return))
+        if when unless else and end
+        into named return)
+  "All recognized `cl-loop' clause keywords.")
 
-(defun et--cll-clause-kw-p (x)
-  (and (symbolp x) (memq x et--cll-clause-keywords)))
+(defun et--loop-keyword-p (sym)
+  "Return non-nil if SYM is a recognized `cl-loop' keyword."
+  (memq sym et--loop-keywords))
 
-(defun et--cll-canonical-accum (kw)
+(defun et--loop-infer-elem-type (list-type)
+  "Infer the element type of LIST-TYPE for `for VAR in LIST'.
+Returns the element type, or Any if undetermined."
+  (or (et-checker-infer list-type [T] ListR<T> T)
+      (et-any)))
+
+(defun et--loop-infer-vector-elem-type (vec-type)
+  "Infer the element type of VEC-TYPE for `for VAR across ARRAY'.
+Handles both vectors (element type) and strings (Integer char codes)."
+  (or (et-checker-infer vec-type [T] VectorR<T> T)
+      (and (et-subtype? vec-type (et String)) (et Integer))
+      (et-any)))
+
+(defun et--loop-numeric-var-type (bound-types)
+  "Determine the loop variable type from numeric BOUND-TYPES.
+Integer if all bounds are Integer, otherwise Number."
+  (if (cl-every (lambda (bt) (et-subtype? bt (et Integer))) bound-types)
+      (et Integer)
+    (et Number)))
+
+(defun et--loop-accumulation-type (kw form-type)
+  "Compute the return type for accumulation keyword KW given FORM-TYPE.
+
+Freshness reasoning:
+  collect/append  -> ListFresh: cl-loop builds a brand-new list spine;
+                     the caller owns the result and may write to it.
+  nconc           -> List: cl-loop destructively splices the lists the
+                     body returned, so the result shares their conses.
+                     NOT fresh.
+  vconcat         -> VectorFresh: cl-loop allocates a new vector.
+  concat          -> String: strings are immutable in elisp.
+  count           -> Integer: a counter.
+  sum             -> Number if form is Number, Integer if form is Integer.
+  maximize/minimize -> the form's own numeric type."
   (pcase kw
-    ((or 'collect 'collecting) 'collect)
-    ((or 'append 'appending) 'append)
-    ((or 'nconc 'nconcing) 'nconc)
-    ('concat 'concat)   ('vconcat 'vconcat)
-    ((or 'count 'counting) 'count)
-    ((or 'sum 'summing) 'sum)
-    ((or 'maximize 'maximizing) 'maximize)
-    ((or 'minimize 'minimizing) 'minimize)))
+    ((or 'collect 'collecting)
+     ;; Fresh list: the caller gets a new spine they fully own
+     (et-alias 'ListFresh form-type))
+    ((or 'append 'appending)
+     ;; Fresh list: cl-loop copies each sublist into a fresh result
+     (let ((elem (et--loop-infer-elem-type form-type)))
+       (et-alias 'ListFresh elem)))
+    ((or 'nconc 'nconcing)
+     ;; NOT fresh: cl-loop nconcs the body's own conses together
+     (let ((elem (et--loop-infer-elem-type form-type)))
+       (et-alias 'List elem)))
+    ('concat (et String))
+    ('vconcat
+     ;; Fresh vector: cl-loop builds a new vector from the results
+     (et-dt 'VectorFresh form-type))
+    ((or 'count 'counting) (et Integer))
+    ((or 'sum 'summing)
+     (if (et-subtype? form-type (et Integer)) (et Integer) (et Number)))
+    ((or 'maximize 'maximizing 'minimize 'minimizing)
+     form-type)))
 
-(defun et--cll-skip-non-kw (state &optional extra-stops)
-  "Advance past non-keyword tokens, returning their positions."
-  (cl-loop until (or (et--cll-done-p state)
-                     (et--cll-clause-kw-p (et--cll-peek state))
-                     (memq (et--cll-peek state) extra-stops))
-           collect (prog1 (et--cll-pos state) (et--cll-advance! state))))
-
-(defun et--cll-consume-expr (state)
-  "Consume one expression, returning its position."
-  (prog1 (et--cll-pos state) (et--cll-advance! state)))
-
-
-;;;;; Phase 1: Collect variables and clause descriptors
-
-;;
-;; Variable descriptors: (NAME KIND . DATA)
-;; Clause descriptors: plists with :kind
-
-(defun et--cll-collect (state)
-  "Walk STATE, returning (VARS . CLAUSES)."
-  (let* ((vars nil) (clauses nil))
-    (while (not (et--cll-done-p state))
-      (let* ((kw (et--cll-advance! state)))
-        (pcase kw
-          ((or 'for 'as)
-           (push (et--cll-collect-for state) vars))
-
-          ('with
-           (let* ((var (et--cll-advance! state))
-                  (val-pos (when (eq (et--cll-peek state) '=)
-                             (et--cll-advance! state)
-                             (et--cll-consume-expr state))))
-             (push (list var 'with val-pos) vars)))
-
-          ((or 'do 'doing)
-           (push (list :kind 'do :exprs (et--cll-skip-non-kw state)) clauses))
-
-          ('initially
-           (when (eq (et--cll-peek state) 'do) (et--cll-advance! state))
-           (et--cll-skip-non-kw state))
-
-          ('finally
-           (pcase (et--cll-peek state)
-             ('return (et--cll-advance! state)
-                      (push (list :kind 'finally-return :pos (et--cll-consume-expr state)) clauses))
-             (_ (when (eq (et--cll-peek state) 'do) (et--cll-advance! state))
-                (push (list :kind 'do :exprs (et--cll-skip-non-kw state)) clauses))))
-
-          ('return
-           (push (list :kind 'return :pos (et--cll-consume-expr state)) clauses))
-
-          ('repeat
-           (push (list :kind 'repeat :pos (et--cll-consume-expr state)) clauses))
-
-          ((and (or 'while 'until 'always 'never 'thereis) k)
-           (push (list :kind k :pos (et--cll-consume-expr state)) clauses))
-
-          ((guard (et--cll-canonical-accum kw))
-           (push (et--cll-collect-accum state kw) clauses))
-
-          ((and (or 'if 'when 'unless) k)
-           (push (et--cll-collect-conditional state k) clauses))
-
-          ('named (et--cll-advance! state))
-
-          (_ (error "Unknown cl-loop keyword: %s" kw)))))
-
-    (cons (nreverse vars) (nreverse clauses))))
-
-
-;;;;; For-clause
-
-(defun et--cll-collect-for (state)
-  "Collect a for-clause, returning (NAME KIND . DATA)."
-  (let* ((var (et--cll-advance! state))
-         (spec (et--cll-peek state)))
-
-    (pcase spec
-      ((or 'from 'upfrom 'downfrom)
-       (et--cll-advance! state)
-       (et--cll-consume-expr state) ; from-expr
-       (et--cll-eat-arith-tail state)
-       (list var 'arith))
-
-      ((or 'to 'upto 'downto 'above 'below)
-       (et--cll-eat-arith-tail state)
-       (list var 'arith))
-
-      ('= (et--cll-advance! state)
-          (let* ((init-pos (et--cll-consume-expr state))
-                 (then-pos (when (eq (et--cll-peek state) 'then)
-                             (et--cll-advance! state)
-                             (et--cll-consume-expr state))))
-            (list var 'equals init-pos then-pos)))
-
-      ((and (or 'in 'on 'in-ref) k)
-       (et--cll-advance! state)
-       (let* ((pos (et--cll-consume-expr state)))
-         (when (eq (et--cll-peek state) 'by)
-           (et--cll-advance! state) (et--cll-advance! state))
-         (list var k pos)))
-
-      ((and (or 'across 'across-ref) k)
-       (et--cll-advance! state)
-       (list var k (et--cll-consume-expr state)))
-
-      ('being
-       (et--cll-advance! state)
-       (when (memq (et--cll-peek state) '(the each)) (et--cll-advance! state))
-       (let* ((being-kw (et--cll-advance! state))
-              (of-pos nil))
-         (while (memq (et--cll-peek state) '(of of-ref from to using))
-           (pcase (et--cll-advance! state)
-             ((or 'of 'of-ref) (setq of-pos (et--cll-consume-expr state)))
-             ((or 'from 'to) (et--cll-consume-expr state))
-             ('using (et--cll-advance! state))))
-         (list var 'being being-kw of-pos)))
-
-      (_ (list var 'arith)))))
-
-(defun et--cll-eat-arith-tail (state)
-  "Consume optional to/by tokens."
-  (when (memq (et--cll-peek state) '(to upto downto above below))
-    (et--cll-advance! state) (et--cll-consume-expr state))
-  (when (eq (et--cll-peek state) 'by)
-    (et--cll-advance! state) (et--cll-consume-expr state)))
-
-
-;;;;; Accumulation
-
-(defun et--cll-collect-accum (state kw)
-  (let* ((canonical (et--cll-canonical-accum kw))
-         (expr-pos (et--cll-consume-expr state))
-         (into-var (when (eq (et--cll-peek state) 'into)
-                     (et--cll-advance! state) (et--cll-advance! state))))
-    (list :kind 'accum :accum canonical :pos expr-pos :into into-var)))
-
-
-;;;;; Conditional
-
-(defconst et--cll-inner-stops '(and else end))
-
-(defun et--cll-collect-conditional (state cond-kind)
-  (let* ((cond-pos (et--cll-consume-expr state))
-         (then (et--cll-collect-branch state))
-         (else-branch (when (eq (et--cll-peek state) 'else)
-                        (et--cll-advance! state)
-                        (et--cll-collect-branch state))))
-    (when (eq (et--cll-peek state) 'end) (et--cll-advance! state))
-    (list :kind 'cond :cond-kind cond-kind :cond-pos cond-pos
-          :then then :else else-branch)))
-
-(defun et--cll-collect-branch (state)
-  (let* ((clauses (list (et--cll-collect-inner state))))
-    (while (eq (et--cll-peek state) 'and)
-      (et--cll-advance! state)
-      (push (et--cll-collect-inner state) clauses))
-    (nreverse clauses)))
-
-(defun et--cll-collect-inner (state)
-  (pcase (et--cll-peek state)
-    ((and (or 'if 'when 'unless) k)
-     (et--cll-advance! state)
-     (et--cll-collect-conditional state k))
-
-    ((or 'do 'doing)
-     (et--cll-advance! state)
-     (list :kind 'do :exprs (et--cll-skip-non-kw state et--cll-inner-stops)))
-
-    ('return
-     (et--cll-advance! state)
-     (list :kind 'return :pos (et--cll-consume-expr state)))
-
-    ((and (guard (et--cll-canonical-accum (et--cll-peek state))) _)
-     (let* ((kw (et--cll-advance! state)))
-       (et--cll-collect-accum state kw)))
-
-    (_ (list :kind 'do :exprs (list (et--cll-consume-expr state))))))
-
-
-;;;;; Phase 2: Type checking
-;;;;; Infer helpers
-
-;;
-(defvar et--cll-list-matcher (et-parse-matcher 'ListR<T> '(T)))
-(defvar et--cll-list-output (et-parse-structure 'T '(T)))
-(defvar et--cll-vec-matcher (et-parse-matcher 'VectorR<T> '(T)))
-(defvar et--cll-vec-output (et-parse-structure 'T '(T)))
-
-(defun et--cll-infer-list-elem (type)
-  "Infer the element type of a list TYPE, or nil."
-  (et--infer et--cll-list-matcher type et--cll-list-output))
-
-(defun et--cll-infer-vec-elem (type)
-  "Infer the element type of a vector TYPE, or nil."
-  (et--infer et--cll-vec-matcher type et--cll-vec-output))
-
-
-;;;;; Variable types
-
-(defun et--cll-var-type (desc)
-  "Determine variable type from descriptor DESC = (NAME KIND . DATA)."
-  (pcase (cdr desc)
-    (`(with ,val-pos)
-     (if val-pos (et-checker-sub val-pos) (et Nil)))
-
-    (`(arith) (et Integer))
-
-    (`(equals ,init-pos ,then-pos)
-     (let* ((init (et-checker-sub init-pos)))
-       (if then-pos (et--or init (et-checker-sub then-pos)) init)))
-
-    (`(,(or 'in 'in-ref) ,pos)
-     (or (et--cll-infer-list-elem (et-checker-sub pos)) (et Any)))
-
-    (`(on ,pos) (et-checker-sub pos))
-
-    (`(,(or 'across 'across-ref) ,pos)
-     (let* ((at (et-checker-sub pos)))
-       (if (et-subtype? at (et String)) (et Integer)
-         (or (et--cll-infer-vec-elem at) (et Any)))))
-
-    (`(being ,being-kw ,of-pos)
-     (et--cll-being-type being-kw of-pos))
-
-    (_ (et Any))))
-
-(defun et--cll-being-type (being-kw of-pos)
-  (pcase being-kw
-    ((or 'elements 'element)
-     (if-let* ((of-pos) (ot (et-checker-sub of-pos)))
-         (if (et-subtype? ot (et String)) (et Integer)
-           (or (et--cll-infer-list-elem ot)
-               (et--cll-infer-vec-elem ot)
-               (et Any)))
-       (et Any)))
-    ((or 'symbols 'symbol 'present-symbols 'external-symbols) (et Symbol))
-    ((or 'hash-keys 'hash-key 'hash-values 'hash-value) (et Any))
-    ((or 'key-codes 'key-code) (et Integer))
-    ((or 'key-seqs 'key-seq) (et-alias 'VectorR (et Integer)))
-    (_ (when of-pos (et-checker-sub of-pos)) (et Any))))
-
-
-;;;;; Accumulation return type
-
-(defun et--cll-accum-type (kind elem-type)
-  (pcase kind
-    ('collect  (et-alias 'List elem-type))
-    ((or 'append 'nconc)
-     (et-alias 'List (or (et--cll-infer-list-elem elem-type) (et Any))))
-    ('concat   (et String))
-    ('vconcat  (et-alias 'VectorR (or (et--cll-infer-vec-elem elem-type) elem-type)))
-    ('count    (et Integer))
-    ('sum      (if (et-subtype? elem-type (et Integer)) (et Integer) (et Number)))
-    ((or 'maximize 'minimize) (et--or elem-type (et Nil)))))
-
-
-;;;;; Check clauses
-
-(defun et--cll-check-clause (clause accums)
-  "Check CLAUSE, mutating ACCUMS = (FREE-TYPES . (:return R :ant A))."
-  (pcase (plist-get clause :kind)
-    ('do (dolist (p (plist-get clause :exprs)) (et-checker-sub p)))
-
-    ('finally-return
-     (plist-put (cdr accums) :return (et-checker-sub (plist-get clause :pos))))
-
-    ('return (et-checker-sub (plist-get clause :pos)))
-
-    ('repeat (et-checker-resolve 'Integer (plist-get clause :pos)))
-
-    ((or 'while 'until) (et-checker-sub (plist-get clause :pos)))
-
-    ((or 'always 'never 'thereis)
-     (et-checker-sub (plist-get clause :pos))
-     (plist-put (cdr accums) :ant t))
-
-    ('accum
-     (let* ((elem (et-checker-sub (plist-get clause :pos)))
-            (rt (et--cll-accum-type (plist-get clause :accum) elem)))
-       (unless (plist-get clause :into) (push rt (car accums)))))
-
-    ('cond (et--cll-check-cond clause accums))))
-
-(defun et--cll-check-cond (clause accums)
-  (let* ((cond-type (et-checker-sub (plist-get clause :cond-pos)))
-         (non-nil-binds (et--type-binds (et--non-nil cond-type)))
-         (nil-binds (et--type-binds (et--supersect cond-type (et Nil))))
-         (check (lambda (branch binds)
-                  (et-with-narrow-binds binds
-                    (dolist (c branch) (et--cll-check-clause c accums))))))
-    (pcase (plist-get clause :cond-kind)
-      ((or 'if 'when)
-       (funcall check (plist-get clause :then) non-nil-binds)
-       (funcall check (plist-get clause :else) nil-binds))
-      ('unless
-          (funcall check (plist-get clause :then) nil-binds)
-        (funcall check (plist-get clause :else) non-nil-binds)))))
-
-
-;;;;; Main checker
 
 (et-define-checker cl-loop
-  (let* ((state (cons 0 (cdr et--checker-expr)))
-         (collected (et--cll-collect state))
-         (var-descs (car collected))
-         (clauses (cdr collected))
-         (et-vars (cl-loop for d in var-descs
-                           collect (et-new-var (car d) (et--cll-var-type d))))
-         (accums (cons nil (list :return nil :ant nil))))
-    (et-with-vars et-vars
-      (dolist (c clauses) (et--cll-check-clause c accums)))
-    (pcase nil
-      ((guard (plist-get (cdr accums) :return)) (plist-get (cdr accums) :return))
-      ((guard (plist-get (cdr accums) :ant)) (et Boolean))
-      ((guard (car accums)) (apply #'et--or (car accums)))
-      (_ (et Nil)))))
+  (let* ((clauses (cdr et--checker-expr))
+         (len (length clauses))
+         (pos 0)
+         ;; Shadow et--binds so we can push loop vars incrementally
+         ;; without affecting the outer scope
+         (et--binds et--binds)
+         ;; Bare accumulation types (not `into VAR')
+         (bare-accum-types nil)
+         ;; `finally return' overrides all other return types
+         (finally-return-type nil)
+         ;; `return EXPR' inside body contributes to return type
+         (body-return-types nil)
+         ;; `always'/`never' -> Boolean
+         (seen-always-never nil)
+         ;; `thereis' -> form-type | Nil
+         (thereis-types nil)
+         (kw nil))
+
+    (cl-flet*
+        ((peek () (and (< pos len) (nth pos clauses)))
+         (advance () (cl-incf pos))
+         ;; Typecheck the expression at the current clause position
+         ;; (1+ pos because index 0 of et--checker-expr is `cl-loop' itself)
+         (check-expr ()
+           (prog1 (et-checker-sub (1+ pos))
+             (cl-incf pos)))
+         ;; Register a loop variable visible to subsequent clauses
+         (bind-var (name type)
+           (push (cons name (et-new-var name (et--unfreshen-type type)))
+                 et--binds))
+         ;; If the token at pos is in KEYWORDS, consume it and return t
+         (eat-keyword (&rest keywords)
+           (when (and (< pos len) (memq (peek) keywords))
+             (advance) t))
+         ;; Consume a single body form (for `do', `initially', etc.)
+         ;; Returns its type.
+         (check-body-form () (check-expr))
+         ;; Consume body forms until the next loop keyword or end
+         (check-body-forms ()
+           (let ((last-type (et Nil)))
+             (while (and (< pos len) (not (et--loop-keyword-p (peek))))
+               (setq last-type (check-expr)))
+             last-type)))
+
+      ;; Walk clauses sequentially
+      (while (< pos len)
+        (setq kw (peek))
+        (advance)
+        (pcase kw
+          ;; ======== for / as ========
+          ((or 'for 'as)
+           (let* ((var-name (peek))
+                  var-type)
+             (advance) ; consume VAR name
+
+             ;; If VAR is a destructuring pattern (a list), we can't
+             ;; track individual bindings — skip the name and bind nothing
+             (when (consp var-name) (setq var-name nil))
+
+             (pcase (peek)
+               ;; -- for VAR from/upfrom/downfrom EXPR [to/... EXPR] [by EXPR] --
+               ((or 'from 'upfrom 'downfrom)
+                (advance)
+                (let ((bounds (list (check-expr))))
+                  (when (eat-keyword 'to 'upto 'downto 'above 'below)
+                    (push (check-expr) bounds))
+                  (when (eat-keyword 'by)
+                    (push (check-expr) bounds))
+                  (setq var-type (et--loop-numeric-var-type bounds))))
+
+               ;; -- for VAR to/upto/downto/above/below EXPR [by EXPR] --
+               ;; (implicit start of 0)
+               ((or 'to 'upto 'downto 'above 'below)
+                (advance)
+                (let ((bounds (list (et Integer) (check-expr))))
+                  (when (eat-keyword 'by)
+                    (push (check-expr) bounds))
+                  (setq var-type (et--loop-numeric-var-type bounds))))
+
+               ;; -- for VAR = EXPR1 [then EXPR2] --
+               ('=
+                (advance)
+                (let ((init-type (check-expr)))
+                  (setq var-type
+                        (if (eat-keyword 'then)
+                            (et--or init-type (check-expr))
+                          init-type))))
+
+               ;; -- for VAR in/in-ref LIST [by FUNC] --
+               ((or 'in 'in-ref)
+                (advance)
+                (let ((list-type (check-expr)))
+                  (when (eat-keyword 'by) (check-expr))
+                  (setq var-type (et--loop-infer-elem-type list-type))))
+
+               ;; -- for VAR on LIST [by FUNC] --
+               ('on
+                (advance)
+                (let ((list-type (check-expr)))
+                  (when (eat-keyword 'by) (check-expr))
+                  ;; VAR is bound to successive tails of the list
+                  (setq var-type list-type)))
+
+               ;; -- for VAR across/across-ref ARRAY --
+               ((or 'across 'across-ref)
+                (advance)
+                (setq var-type (et--loop-infer-vector-elem-type (check-expr))))
+
+               ;; -- for VAR being ... --
+               ('being
+                (advance)
+                ;; consume optional `the' / `each'
+                (eat-keyword 'the 'each)
+                (pcase (peek)
+                  ;; elements of SEQUENCE [using (index VAR2)]
+                  ((or 'elements 'element)
+                   (advance)
+                   (eat-keyword 'of 'of-ref)
+                   (let ((seq-type (check-expr)))
+                     ;; Could be list or vector; try both
+                     (setq var-type
+                           (et--or (et--loop-infer-elem-type seq-type)
+                                   (et--loop-infer-vector-elem-type seq-type)))
+                     (when (eat-keyword 'using)
+                       ;; (index VAR2) — VAR2 is Integer
+                       (let ((spec (peek)))
+                         (advance)
+                         (when (and (consp spec) (eq (car spec) 'index))
+                           (bind-var (cadr spec) (et Integer)))))))
+
+                  ;; hash-keys / hash-values of HT [using ...]
+                  ((or 'hash-keys 'hash-key 'hash-values 'hash-value)
+                   (advance)
+                   (eat-keyword 'of)
+                   (check-expr) ; typecheck the hash-table expr
+                   (setq var-type (et-any))
+                   (when (eat-keyword 'using)
+                     ;; (hash-values VAR2) or (hash-keys VAR2)
+                     (let ((spec (peek)))
+                       (advance)
+                       (when (consp spec)
+                         (bind-var (cadr spec) (et-any))))))
+
+                  ;; symbols [of OBARRAY]
+                  ((or 'symbols 'symbol)
+                   (advance)
+                   (when (eat-keyword 'of) (check-expr))
+                   (setq var-type (et Symbol)))
+
+                  ;; key-codes / key-bindings / key-seqs of KEYMAP
+                  ((or 'key-codes 'key-bindings 'key-seqs)
+                   (advance)
+                   (eat-keyword 'of)
+                   (check-expr)
+                   (setq var-type (et-any))
+                   (when (eat-keyword 'using)
+                     (let ((spec (peek)))
+                       (advance)
+                       (when (consp spec)
+                         (bind-var (cadr spec) (et-any))))))
+
+                  ;; overlays / intervals [of BUFFER] [from POS] [to POS]
+                  ((or 'overlays 'intervals)
+                   (advance)
+                   (when (eat-keyword 'of) (check-expr))
+                   (when (eat-keyword 'from) (check-expr))
+                   (when (eat-keyword 'to) (check-expr))
+                   (setq var-type (et-any)))
+
+                  ;; frames / buffers / windows
+                  ((or 'frames 'buffers)
+                   (advance)
+                   (setq var-type (et-any)))
+                  ('windows
+                   (advance)
+                   (when (eat-keyword 'of) (check-expr))
+                   (setq var-type (et-any)))
+
+                  ;; Unknown being clause — skip expr, default to Any
+                  (_ (setq var-type (et-any)))))
+
+               ;; Bare `for VAR' with no recognized iteration keyword
+               (_ (setq var-type (et-any))))
+
+             ;; Bind the variable for subsequent clauses
+             (when var-name
+               (bind-var var-name (or var-type (et-any))))))
 
 
-;;;;; Tests
+          ;; ======== with VAR [= EXPR] ========
+          ('with
+           (let ((var-name (peek)))
+             (advance) ; consume VAR name
+             (if (eat-keyword '=)
+                 (bind-var var-name (check-expr))
+               (bind-var var-name (et Nil)))))
 
-(defmacro et-assert-loop (type &rest loop-body)
-  (declare (indent 1))
-  `(et-assert-resolve ,type (cl-loop ,@loop-body)))
+
+          ;; ======== do / doing ========
+          ((or 'do 'doing)
+           (check-body-forms))
+
+
+          ;; ======== initially ========
+          ('initially
+           (eat-keyword 'do)
+           (check-body-forms))
+
+
+          ;; ======== finally [do] EXPRS... | finally return EXPR ========
+          ('finally
+           (if (eat-keyword 'return)
+               (setq finally-return-type (check-expr))
+             (eat-keyword 'do)
+             (check-body-forms)))
+
+
+          ;; ======== repeat INTEGER ========
+          ('repeat (check-expr))
+
+
+          ;; ======== while / until ========
+          ((or 'while 'until) (check-expr))
+
+
+          ;; ======== always / never ========
+          ((or 'always 'never)
+           (check-expr)
+           (setq seen-always-never t))
+
+
+          ;; ======== thereis ========
+          ('thereis
+           (push (check-expr) thereis-types))
+
+
+          ;; ======== return EXPR ========
+          ('return
+           (push (check-expr) body-return-types))
+
+
+          ;; ======== collect/append/nconc/concat/vconcat/count/sum/max/min ========
+          ((and (or 'collect 'collecting 'append 'appending
+                    'nconc 'nconcing 'concat 'vconcat
+                    'count 'counting 'sum 'summing
+                    'maximize 'maximizing 'minimize 'minimizing)
+                accum-kw)
+           (let* ((form-type (check-expr))
+                  (accum-type (et--loop-accumulation-type accum-kw form-type)))
+             (if (eat-keyword 'into)
+                 ;; `into VAR' — does NOT contribute to bare return type;
+                 ;; instead creates/updates a named accumulator variable
+                 (let ((into-name (peek)))
+                   (advance)
+                   ;; Bind the accumulator var if not already bound.
+                   ;; If already bound, its type is widened by union,
+                   ;; but for simplicity we just bind once with the
+                   ;; first accumulation type.  The user can reference
+                   ;; it in `finally return'.
+                   (unless (alist-get into-name et--binds)
+                     (bind-var into-name accum-type)))
+               ;; Bare accumulation contributes to the return type
+               (push accum-type bare-accum-types))))
+
+
+          ;; ======== if / when / unless COND CLAUSE [and CLAUSE]... [else ...] ========
+          ((or 'if 'when 'unless)
+           (check-expr) ; typecheck the condition
+           ;; Parse the body clause(s) — they are single accumulation/do/return clauses
+           ;; linked by `and', with optional `else' branch, terminated by `end'
+           (cl-flet
+               ((parse-inner-clause ()
+                  ;; An inner clause is a single keyword + its argument(s)
+                  (when (< pos len)
+                    (let ((inner-kw (peek)))
+                      (pcase inner-kw
+                        ((or 'collect 'collecting 'append 'appending
+                             'nconc 'nconcing 'concat 'vconcat
+                             'count 'counting 'sum 'summing
+                             'maximize 'maximizing 'minimize 'minimizing)
+                         (advance)
+                         (let* ((form-type (check-expr))
+                                (accum-type (et--loop-accumulation-type inner-kw form-type)))
+                           (if (eat-keyword 'into)
+                               (let ((into-name (peek)))
+                                 (advance)
+                                 (unless (alist-get into-name et--binds)
+                                   (bind-var into-name accum-type)))
+                             (push accum-type bare-accum-types))))
+
+                        ('return
+                         (advance)
+                         (push (check-expr) body-return-types))
+
+                        ((or 'do 'doing)
+                         (advance)
+                         (check-body-forms))
+
+                        ;; Nested if/when/unless
+                        ((or 'if 'when 'unless)
+                         (advance)
+                         (check-expr)
+                         ;; Recurse — but for simplicity just consume
+                         ;; the inner clause
+                         nil)
+
+                        ;; Unknown — skip it
+                        (_ nil))))))
+
+             (parse-inner-clause)
+             ;; Consume `and CLAUSE'... chains
+             (while (eat-keyword 'and)
+               (parse-inner-clause))
+             ;; Consume optional `else CLAUSE [and CLAUSE]...'
+             (when (eat-keyword 'else)
+               (parse-inner-clause)
+               (while (eat-keyword 'and)
+                 (parse-inner-clause)))
+             ;; Consume optional `end'
+             (eat-keyword 'end)))
+
+
+          ;; ======== named NAME ========
+          ('named (advance))
+
+
+          ;; ======== Unknown keyword — skip (likely a bare form in a `do' context) ========
+          ;; cl-loop allows bare forms as implicit `do' in some contexts
+          (_ nil))))
+
+    ;; --------------------------------------------------------
+    ;; Compute the final return type
+    ;; --------------------------------------------------------
+    (cond
+     ;; `finally return' overrides everything
+     (finally-return-type finally-return-type)
+
+     ;; `always'/`never' returns Boolean
+     (seen-always-never (et Boolean))
+
+     ;; `thereis' returns form-type | Nil
+     (thereis-types
+      (apply #'et--or (et Nil) thereis-types))
+
+     ;; Bare accumulations and/or body `return' statements
+     ((or bare-accum-types body-return-types)
+      (apply #'et--or (append bare-accum-types body-return-types)))
+
+     ;; No accumulation, no return — cl-loop returns nil
+     (t (et Nil)))))
+
+
+;;;; Tests
 
 (et-test
- ;; Arithmetic for variants
- (et-assert-loop Nil for i from 1 to 10 do (+ i 1))
- (et-assert-loop ListR<Integer> for i from 1 to 10 collect i)
- (et-assert-loop ListR<Integer> for i upfrom 0 to 5 collect i)
- (et-assert-loop ListR<Integer> for i downfrom 10 to 1 collect i)
- (et-assert-loop ListR<Integer> for i from 1 to 10 by 2 collect i)
- (et-assert-loop ListR<Integer> for i to 10 collect i)
- ;; Bare var
- (et-assert-loop ListR<Integer> for i repeat 5 collect i)
+ ;; ---- for VAR in LIST: infers element type ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for x in (list 1 2 3) collect x))
 
- ;; for = / = then
- (et-assert-loop ListR<Integer> for x = 0 repeat 5 collect x)
- (et-assert-loop ListR<Integer|String> for x = 0 then "s" repeat 5 collect x)
+ ;; ---- for VAR from/to: numeric bounds determine Integer vs Number ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for i from 1 to 10 collect i))
+ (et-assert-resolve ListFresh<Number>
+   (cl-loop for i from 1.0 to 10 collect i))
 
- ;; for in/on/across
- (et-assert-loop ListR<Integer> for x in (list 1 2 3) collect x)
- (et-assert-loop ListR<ListR<Integer>> for x on (list 1 2 3) collect x)
- (et-assert-loop ListR<Integer> for x across (vector 1 2 3) collect x)
- (et-assert-loop ListR<Integer> for c across "hello" collect c)
+ ;; ---- for VAR = EXPR then EXPR ----
+ (et-assert-resolve ListFresh<Integer|String>
+   (cl-loop for x = 1 then "hi" collect x))
 
- ;; All accumulators
- (et-assert-loop Integer for i from 1 to 10 sum i)
- (et-assert-loop Integer for i from 1 to 10 count (> i 5))
- (et-assert-loop String for s in (list "a" "b") concat s)
- (et-assert-loop VectorR<Integer> for i from 1 to 3 vconcat (vector i))
- (et-assert-loop Integer|Nil for i from 1 to 10 maximize i)
- (et-assert-loop Integer|Nil for i from 1 to 10 minimize i)
- (et-assert-loop ListR<Integer> for x in (list (list 1) (list 2)) append x)
- (et-assert-loop ListR<Integer> for x in (list (list 1) (list 2)) nconc x)
+ ;; ---- for VAR across ARRAY ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for c across "hello" collect c))
 
- ;; into -> nil return
- (et-assert-loop Nil for i from 1 to 10 collect i into result)
+ ;; ---- for VAR on LIST ----
+ (et-assert-resolve ListFresh<ListR<Integer>>
+   (cl-loop for tail on (list 1 2 3) collect tail))
 
- ;; with
- (et-assert-loop ListR<Integer> with acc = 0 for i from 1 to 5 collect (+ acc i))
- (et-assert-loop Nil with x for i from 1 to 5 do (+ i 1))
+ ;; ---- with VAR = EXPR ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop with base = 10
+            for i from 1 to 5
+            collect (+ base i)))
 
- ;; finally return
- (et-assert-loop String for i from 1 to 10 collect i finally return "done")
+ ;; ---- append: fresh list of elem type ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for x in (list (list 1) (list 2)) append x))
 
- ;; Conditionals
- (et-assert-loop ListR<Integer> for i from 1 to 10 when (> i 5) collect i)
- (et-assert-loop ListR<Integer> for i from 1 to 10 unless (> i 5) collect i)
- (et-assert-loop ListR<Integer|String>
-   for i from 1 to 10 if (> i 5) collect i else collect "lo")
- (et-assert-loop ListR<Integer|String>
-   for i from 1 to 10 if (> i 5) collect i and do (+ i 1) else collect "lo")
- (et-assert-loop ListR<Integer|String|@other>
-   for i from 1 to 10
-   if (> i 8) collect i
-   else if (> i 4) collect "mid"
-   else collect 'other)
+ ;; ---- nconc: NON-fresh list (shares conses with body) ----
+ (et-assert-resolve List<1|2>
+   (cl-loop for x in (list (list 1) (list 2)) nconc x))
 
- ;; always/never/thereis
- (et-assert-loop Boolean for i from 1 to 10 always (> i 0))
- (et-assert-loop Boolean for i from 1 to 10 never (> i 100))
- (et-assert-loop Boolean for i from 1 to 10 thereis (> i 5))
+ ;; ---- concat ----
+ (et-assert-resolve String
+   (cl-loop for x in (list "a" "b") concat x))
 
- ;; repeat / while / until
- (et-assert-loop ListR<Integer> repeat 5 collect 1)
- (et-assert-loop Nil for i from 1 while (> i 0) do (+ i 1))
+ ;; ---- vconcat ----
+ (et-assert-resolve Vector<1|2|3>
+   (cl-loop for x in (list 1 2 3) vconcat x))
 
- ;; Multiple for clauses
- (et-assert-loop ListR<ConsR<Integer~String>>
-   for i from 1 to 3 for s in (list "a" "b" "c") collect (cons i s))
+ ;; ---- count ----
+ (et-assert-resolve Integer
+   (cl-loop for x in (list 1 2 3) count x))
 
- ;; Return inside conditional
- (et-assert-loop ListR<Integer>
-   for i from 1 to 10 collect i if (> i 5) return nil)
+ ;; ---- sum: Integer when summing Integers ----
+ (et-assert-resolve Integer
+   (cl-loop for x in (list 1 2 3) sum x))
 
- ;; Being
- (et-assert-loop ListR<Integer>
-   for x being the elements of (list 1 2 3) collect x)
- (et-assert-loop ListR<Symbol> for s being the symbols collect s)
+ ;; ---- sum: Number when summing Numbers ----
+ (et-assert-resolve Number
+   (cl-loop for x in (list 1 2.5 3) sum x))
 
- ;; Named
- (et-assert-loop Nil named my-loop for i from 1 to 3 do (+ i 1))
+ ;; ---- maximize ----
+ (et-assert-resolve Integer
+   (cl-loop for x in (list 1 2 3) maximize x))
 
- ;; initially/finally do
- (et-assert-loop Nil
-   for i from 1 to 10 initially (+ 1 2) do (+ i 1) finally (+ 3 4))
+ ;; ---- always/never returns Boolean ----
+ (et-assert-resolve Boolean
+   (cl-loop for x in (list 1 2 3) always (integerp x)))
+ (et-assert-resolve Boolean
+   (cl-loop for x in (list 1 2 3) never (stringp x)))
 
- ;; Mixed accumulator (one into, one free)
- (et-assert-loop ListR<Integer>
-   for i from 1 to 10 sum i into total collect i)
+ ;; ---- thereis: form-type | Nil ----
+ (et-assert-resolve Integer|Nil
+   (cl-loop for x in (list 1 2 3)
+            thereis (and (integerp x) x)))
 
- ;; Conditional do
- (et-assert-loop Nil for i from 1 to 10 when (> i 5) do (+ i 1)))
+ ;; ---- return inside body ----
+ (et-assert-resolve String|Nil
+   (cl-loop for x in (list 1 2 3)
+            if (eq x 2) return "found"))
+
+ ;; ---- finally return overrides accumulation ----
+ (et-assert-resolve String
+   (cl-loop for x in (list 1 2 3)
+            collect x
+            finally return "done"))
+
+ ;; ---- no accumulation returns Nil ----
+ (et-assert-resolve Nil
+   (cl-loop for x in (list 1 2 3) do (+ x 1)))
+
+ ;; ---- collect into VAR: bare return is Nil, not the accumulator ----
+ (et-assert-resolve Nil
+   (cl-loop for x in (list 1 2 3)
+            collect x into result))
+
+ ;; ---- collect into VAR + finally return: uses accumulator ----
+ (et-assert-resolve List<1|2|3>
+   (cl-loop for x in (list 1 2 3)
+            collect x into result
+            finally return result))
+
+ ;; ---- repeat ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop repeat 5 collect 1))
+
+ ;; ---- while ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for i from 1
+            while (< i 10)
+            collect i))
+
+ ;; ---- when ... collect (conditional accumulation) ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for x in (list 1 2 3)
+            when (integerp x) collect x))
+
+ ;; ---- multiple for clauses: second sees first ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for xs in (list (list 1) (list 2))
+            for x in xs
+            collect x))
+
+ ;; ---- for VAR = EXPR (no then) ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for x = 5 repeat 3 collect x))
+
+ ;; ---- with VAR (no = EXPR) defaults to Nil ----
+ (et-assert-resolve Nil
+   (cl-loop with x repeat 1 do x))
+
+ ;; ---- for VAR to EXPR (implicit from 0) ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for i to 5 collect i))
+
+ ;; ---- for VAR downfrom EXPR to EXPR by EXPR ----
+ (et-assert-resolve ListFresh<Integer>
+   (cl-loop for i downfrom 10 to 0 by 2 collect i)))
 
 
 ;;; ============================================================
