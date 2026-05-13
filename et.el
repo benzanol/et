@@ -161,10 +161,82 @@
 
 ;;; ============================================================
 ;;; Utils
+;;;; Recursive copy
+
+(defun et--recursive-copy (object func)
+  "Return a copy of OBJECT by applying FUNC to every object.
+
+This will start by applying FUNC to OBJECT. If the returned
+result is an atom (not a cons cell,) it is returned. Otherwise,
+what will be returned is the result of repeating this process for
+both sides of the cons cell."
+
+  (setq object (funcall func object))
+  (cond
+   ;; Handle structs
+   ((recordp object)
+    (let* ((entries nil))
+      (dotimes (i (length object))
+        (push (et--recursive-copy (aref object i) func) entries))
+      (apply #'record (nreverse entries))))
+
+   ((atom object) object)
+   ;; We could just do (cons (copy (car object) func) (copy (cdr object) func)),
+   ;; but this would hit the recursion limit for long lists.
+   ;; The current solution is equivalent, but does all elements of a list in the same call.
+   ((prog1 (setq object (cons (et--recursive-copy (car object) func) (funcall func (cdr object))))
+      (while (consp (cdr object))
+        (setcdr object (cons (et--recursive-copy (cadr object) func) (funcall func (cddr object))))
+        (setq object (cdr object)))))))
+
+
+;;;; Substitute with placeholder
+
+(defun et--subst-placeholder (idx)
+  (intern (format "@@et-ph-%s@@" idx)))
+
+(defun et--subst-to-placeholders (object pred)
+  "Substitute certain values in OBJECT with placeholders.
+
+This will return (NEW-OBJECT REPL-LIST) where NEW-OBJECT is OBJECT with
+all values matching PRED replaced by a placeholder. Values that are `eq'
+will get replaced by the same placeholder. REPL-ALIST is a list
+of (VALUE . REPLACEMENT) that were replaced by placeholders."
+  (let* ((repl-alist nil))
+    (cons
+     (et--recursive-copy
+      object
+      (lambda (x)
+        (if (not (funcall pred x)) x
+          (or (alist-get x repl-alist)
+              (cdar (push (cons x (et--subst-placeholder (length repl-alist))) repl-alist))))))
+     repl-alist)))
+
+(defun et--subst-with-placeholders (object repl-alist)
+  (et--recursive-copy object (lambda (x) (or (alist-get x repl-alist) x))))
+
+(defun et--subst-from-placeholders (object repl-alist)
+  (et--recursive-copy
+   object (lambda (x) (if-let* ((entry (rassq x repl-alist))) (car entry) x))))
+
+(et-test
+ (pcase-let* ((`(,new-obj . ,repls)
+               (et--subst-to-placeholders
+                '((1 2 3) (4 5 6))
+                (lambda (x) (and (numberp x) (= 0 (mod x 2)))))))
+   (and (pcase new-obj (`((1 ,(pred symbolp) 3) (,(pred symbolp) 5 ,(pred symbolp))) t))
+        (= 3 (length repls))
+        (equal (et--subst-from-placeholders (list (cadr new-obj) (car new-obj)) repls)
+               '((4 5 6) (1 2 3))))))
+
+
 ;;;; Caching
 
-(defvar et-cache-file "~/.emacs.d/.cache/et.el")
+(defvar et-cache-file "~/.emacs.d/.cache/et-cache.el")
 (defvar et-cache nil)
+
+(defvar et--caching nil
+  "Non-nil when the expression currently being evaluated will be cached.")
 
 (defun et--read-cache ()
   (let* ((hash-table (make-hash-table :test #'equal)))
@@ -192,11 +264,21 @@
                   (file-exists-p et-cache-file)))
   value)
 
-(defmacro et-cache (key &rest body)
-  `(let* ((key ,key))
-     (or (et--cache-retrieve key)
-         (progn (message "Cache miss: %s" key)
-                (et--cache-store key (progn . ,body))))))
+(defmacro et-cache (key ph-pred &rest body)
+  (declare (indent 2))
+  `(pcase-let* ((et--caching t)
+                (`(,key . ,repls) (et--subst-to-placeholders ,key ,ph-pred)))
+     (if-let* ((retrieved (et--cache-retrieve key)))
+         (et--subst-from-placeholders retrieved repls)
+
+       (message "Cache miss: %s" key)
+       (let* ((value (progn . ,body)))
+         (et--cache-store key (et--subst-with-placeholders value repls))
+         value))))
+
+(defun et-clear-cache ()
+  (interactive)
+  (write-region "" nil et-cache-file))
 
 
 ;;;; Quote macro
@@ -389,8 +471,13 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
   "A list of (NAME SCOPED CONSTRAINTS).")
 
 (defun et--make-scoped-datatypes (matcher)
+  (declare (et (matcher *et-matcher)
+               (@return (List (Tuple Symbol Symbol List<EtConstraint>)))))
+
   (cl-loop for name in (when matcher (et-matcher-generics matcher))
            for qs = (cl-loop for q in (et-matcher-constraints matcher)
+                             do (:typeof (car q))
+                             do (:typeof q)
                              when (eq (cadr q) name)
                              collect q)
            collect (list name (gensym (format "scoped-%s@" name)) qs)))
@@ -715,8 +802,10 @@ structure which can be parsed by `et-parse-type'.")
     (_ (error "No tail provided"))))
 
 (et-defalias TupleR (&rest args) ,(et--expand-tuple-spec 'ConsR args))
+(et-defalias Tuple (&rest args) ,(et--expand-tuple-spec 'Cons args))
 (et-defalias Args (&rest args) ,(et--expand-tuple-spec 'ConsR args))
 (et-defalias ArgsWithTail (&rest args) ,(et--expand-tailed-tuple-spec 'ConsR args))
+(et-defalias TupleWithTail (&rest args) ,(et--expand-tailed-tuple-spec 'Cons args))
 
 
 ;;;; Constructors
@@ -755,6 +844,16 @@ a valid `et-type-case-value'."
 ;;; Matching
 ;;;; Matcher struct
 
+(declare
+ (et (@alias EtMatchFactor
+             (or (TupleWithTail @M:DATATYPE EtDatatypeName List<Any>)
+                 (Tuple @M:MATCH Symbol)
+                 (Tuple @M:SET Symbol *et-type)))
+     (@alias EtMatcherDnf List<List<EtMatchFactor>>)
+     (@alias EtConstraint
+             (or (Tuple @Q:NEVER)
+                 (Tuple @Q:EQ|@Q:GEQ|@Q:LEQ Symbol *et-type)))))
+
 (cl-defstruct et-matcher
   "A type pattern which is matched against by a concrete type.
 
@@ -775,7 +874,9 @@ constraint is one of:
   (Q:EQ GENERIC TYPE)
   (Q:LEQ GENERIC TYPE)
   (Q:GEQ GENERIC TYPE)"
-  generics dnf constraints)
+  (generics nil :et List<Symbol>)
+  (dnf nil :et EtMatcherDnf)
+  (constraints nil :et List<EtConstraint>))
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
@@ -783,17 +884,17 @@ constraint is one of:
       (error "Not a matcher: %s" matcher))
 
   (when et-debug
-    (let ((generics (et-matcher-generics matcher)))
+    (let* ((generics (et-matcher-generics matcher)))
       (dolist (generic generics)
         (or (symbolp generic) (error "Generics must be a list of symbols")))
 
-      (dolist (q (et-matcher-constraints matcher))
-        (pcase q
-          (`(Q:NEVER))
-          (`(,(or 'Q:EQ Q:LEQ Q:GEQ)
-             ,(and gen (guard (memq gen generics)))
-             (pred et-type-p)))
-          (_ (error "Invalid constraint: %s" q))))
+      (cl-loop for q in (et-matcher-constraints matcher)
+               do (pcase q
+                    (`(Q:NEVER))
+                    (`(,(or 'Q:EQ 'Q:LEQ 'Q:GEQ)
+                       ,(and gen (guard (memq gen generics)))
+                       (pred et-type-p)))
+                    (_ (error "Invalid constraint: %s" q))))
 
       (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
                                     (error "Not a generic: %s" var))))
@@ -877,7 +978,18 @@ constraint is one of:
     (setq matcher (et--matcher-expand-aliases matcher))
 
     (cl-loop for case in (et-type-cases type)
-             nconc (et--sub-constraints-2 matcher case) into result
+             for binds = (append (et-type-case-binds case)
+                                 (cl-loop for var in (et-type-case-typeofs case)
+                                          collect (cons var (et--remove-type-binds (et-type case)))))
+             for qs-raw = (et--sub-constraints-2 matcher case)
+             for qs-with-binds =
+             (if (not binds) qs-raw
+               (cl-loop for q in qs-raw
+                        if (eq (car q) 'Q:GEQ)
+                        collect (list 'Q:GEQ (cadr q)
+                                      (et--supersect (caddr q) (et--replace-type-binds (et-any) binds)))
+                        else collect q))
+             nconc qs-with-binds into result
              finally return (if (member '(Q:NEVER) result) (et-q ((Q:NEVER)))
                               (delete-dups result)))))
 
@@ -896,7 +1008,14 @@ constraint is one of:
            finally return
            (let ((val (et-type-case-value case)))
              (if (et-alias-p val)
-                 (et--sub-constraints matcher (et-alias-expand val))
+                 (et--sub-constraints
+                  matcher
+                  (cl-loop for c in (et-type-cases (et-alias-expand val))
+                           collect (make-et-type-case
+                                    :value (et-type-case-value c)
+                                    :binds (et-type-case-binds case)
+                                    :typeofs (et-type-case-typeofs case))
+                           into cases finally return (make-et-type :cases cases)))
                (et-q ((Q:NEVER)))))))
 
 (defun et--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
@@ -1872,12 +1991,12 @@ returning A itself is a valid approximation."
                                    thereis (and (et-type-p arg) (et--type-contains-binds arg))))))))
 
 (defun et--sub-match (matcher type)
-  (if (et--type-contains-binds type) (et--sub-match-logic matcher type)
-    (et-cache (list #'et--sub-match matcher type) (et--sub-match-logic matcher type))))
+  (et-cache (list #'et--sub-match matcher type) #'et-var-p
+    (et--sub-match-logic matcher type)))
 
 (defun et--super-match (matcher type)
-  (if (et--type-contains-binds type) (et--super-match-logic matcher type)
-    (et-cache (list #'et--super-match matcher type) (et--sub-match-logic matcher type))))
+  (et-cache (list #'et--super-match matcher type) #'et-var-p
+    (et--sub-match-logic matcher type)))
 
 (defun et--sub-match-logic (matcher type)
   (let ((constraints (append (et--sub-constraints matcher type)
