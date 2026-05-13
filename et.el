@@ -240,17 +240,22 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 
 ;;;; Caching
 
-(defvar et-cache-file "~/.emacs.d/.cache/et-cache.el")
-(defvar et-cache nil)
+(defvar et-cache-file "~/.emacs.d/.cache/et-cache.el"
+  "File to use to store the cache.")
+
+(defvar et-cache nil
+  "Hash table containing the cache.")
 
 (defvar et--caching nil
   "Non-nil when the expression currently being evaluated will be cached.")
 
-(defvar et-cache-hits 'NO)
+(defvar et-cache-hits 'NO
+  "When this is a list, cache hits will be placed here for debugging.")
 
-(defvar et-do-caching t)
+(defvar et-caching-enabled t
+  "Whether to enable caching.")
 
-(defun et--read-cache ()
+(defun et--load-cache ()
   (let* ((hash-table (make-hash-table :test #'equal)))
     ;; Read the file into a hashtable
     (when (and (stringp et-cache-file) (file-exists-p et-cache-file))
@@ -265,14 +270,19 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 
 (defun et--cache-retrieve (key)
   (ignore-errors
-    (et--recursive-copy
-     (gethash key (if (hash-table-p et-cache) et-cache
-                    (setq et-cache (et--read-cache))))
-     #'identity)))
+    (when-let* ((val (gethash key (if (hash-table-p et-cache) et-cache
+                                    (setq et-cache (et--load-cache))))))
+      ;; For debugging
+      (when (listp et-cache-hits)
+        (push (cons key val) et-cache-hits))
+
+      ;; Return a copy
+      (et--recursive-copy val #'identity))))
 
 (defun et--cache-store (key value)
   (ignore-errors
-    (unless (hash-table-p et-cache) (setq et-cache (et--read-cache)))
+    (unless (hash-table-p et-cache) (setq et-cache (et--load-cache)))
+
     (puthash key value et-cache)
     (write-region (format "%s" (prin1-to-string (cons key value))) nil et-cache-file
                   (file-exists-p et-cache-file)))
@@ -281,24 +291,23 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 (defmacro et-cache (key ph-pred &rest body)
   (declare (indent 2))
   `(pcase-let* ((et--caching t)
-                (key ,key)
-                (`(,_subst . ,repls) (et--subst-to-placeholders key ,ph-pred)))
-     (if-let* ((_ et-do-caching)
-               (retrieved (et--cache-retrieve key))
-               (val (et--subst-from-placeholders retrieved repls)))
-         (prog1 val
-           (when (listp et-cache-hits)
-             (push (cons key val) et-cache-hits)))
+                (`(,subst-key . ,repls) (et--subst-to-placeholders ,key ,ph-pred)))
+     (if-let* ((_ et-caching-enabled)
+               (retrieved (et--cache-retrieve subst-key)))
+         (et--subst-from-placeholders retrieved repls) ; Insert placeholders
 
-       (when et-do-caching (message "Cache miss: %s" key))
        (let* ((value (progn . ,body)))
-         (et--cache-store key (et--subst-with-placeholders value repls))
+         (et--cache-store subst-key (et--subst-with-placeholders value repls))
          value))))
 
 (defun et-clear-cache ()
   (interactive)
   (setq et-cache (make-hash-table))
   (write-region "" nil et-cache-file))
+
+(defun et-refresh-cache ()
+  (interactive)
+  (setq et-cache (et--load-cache)))
 
 
 ;;;; Quote macro
@@ -490,13 +499,13 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
   "A list of (NAME SCOPED CONSTRAINTS).")
 
 (defun et--make-scoped-datatypes (matcher)
-  (declare (et (matcher *et-matcher)
-               (@return (List (Tuple Symbol Symbol List<EtConstraint>)))))
+  (declare (et (matcher Nil|*et-matcher)
+               (@return (List (Tuple NonNilSymbol NonNilSymbol List<EtConstraint>)))))
 
   (cl-loop for name in (when matcher (et-matcher-generics matcher))
            for qs = (cl-loop for q in (et-matcher-constraints matcher)
-                             when (eq (:typeof+ (cadr q)) name)
-                             collect (:typeof q))
+                             when (eq (cadr q) name)
+                             collect q)
            collect (list name (gensym (format "scoped-%s@" name)) qs)))
 
 (defmacro et--with-scoped-datatypes (scoped &rest body)
@@ -861,16 +870,17 @@ a valid `et-type-case-value'."
 ;;; Matching
 ;;;; Matcher struct
 
-'(et (@alias EtMatchFactor
+'(et (@alias EtGeneric NonNilSymbol)
+     (@alias EtMatchFactor
              (or (TupleWithTail @M:DATATYPE EtDatatypeName List<Any>)
-                 (Tuple @M:GENERIC Symbol)
+                 (Tuple @M:GENERIC EtGeneric)
                  (Tuple @M:SET EtMatcherDnf *et-type)))
      (@alias EtMatcherDnf List<List<EtMatchFactor>>)
      (@alias EtConstraint
              (or (Tuple @Q:NEVER)
-                 (Tuple @Q:EQ Symbol *et-type)
-                 (Tuple @Q:GEQ Symbol *et-type)
-                 (Tuple @Q:LEQ Symbol *et-type))))
+                 (Tuple @Q:EQ EtGeneric *et-type)
+                 (Tuple @Q:GEQ EtGeneric *et-type)
+                 (Tuple @Q:LEQ EtGeneric *et-type))))
 
 (cl-defstruct et-matcher
   "A type pattern which is matched against by a concrete type.
@@ -892,7 +902,7 @@ constraint is one of:
   (Q:EQ GENERIC TYPE)
   (Q:LEQ GENERIC TYPE)
   (Q:GEQ GENERIC TYPE)"
-  (generics nil :et List<Symbol>)
+  (generics nil :et List<EtGeneric>)
   (dnf nil :et EtMatcherDnf)
   (constraints nil :et List<EtConstraint>))
 
