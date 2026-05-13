@@ -778,13 +778,14 @@ Backquote patterns are recursive:
 
 (et-test
  (equal (et String|Nil)
-        (et-typecheck
-         (let* ((a String|Number 4))
-           (when (stringp a) a))))
- (et-subtype? (et String)
-              (et-typecheck
+        (et--remove-type-binds
+         (et-typecheck
+          (let* ((a String|Number 4))
+            (when (stringp a) a)))))
+ (et-subtype? (et-typecheck
                (let* ((a String|Number 4))
-                 (if (stringp a) a "hello!")))))
+                 (if (stringp a) a "hello!")))
+              (et String)))
 
 
 ;;; ============================================================

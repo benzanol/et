@@ -163,7 +163,7 @@
 ;;; Utils
 ;;;; Recursive copy
 
-(defun et--recursive-copy (object func)
+(defun et--recursive-copy (object func &optional ignore-pred)
   "Return a copy of OBJECT by applying FUNC to every object.
 
 This will start by applying FUNC to OBJECT. If the returned
@@ -173,20 +173,23 @@ both sides of the cons cell."
 
   (setq object (funcall func object))
   (cond
+   ((and ignore-pred (funcall ignore-pred object)) object)
    ;; Handle structs
    ((recordp object)
     (let* ((entries nil))
       (dotimes (i (length object))
-        (push (et--recursive-copy (aref object i) func) entries))
+        (push (et--recursive-copy (aref object i) func ignore-pred) entries))
       (apply #'record (nreverse entries))))
 
    ((atom object) object)
    ;; We could just do (cons (copy (car object) func) (copy (cdr object) func)),
    ;; but this would hit the recursion limit for long lists.
    ;; The current solution is equivalent, but does all elements of a list in the same call.
-   ((prog1 (setq object (cons (et--recursive-copy (car object) func) (funcall func (cdr object))))
+   ((prog1 (setq object (cons (et--recursive-copy (car object) func ignore-pred)
+                              (funcall func (cdr object))))
       (while (consp (cdr object))
-        (setcdr object (cons (et--recursive-copy (cadr object) func) (funcall func (cddr object))))
+        (setcdr object (cons (et--recursive-copy (cadr object) func ignore-pred)
+                             (funcall func (cddr object))))
         (setq object (cdr object)))))))
 
 
@@ -216,8 +219,13 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
   (et--recursive-copy object (lambda (x) (or (alist-get x repl-alist) x))))
 
 (defun et--subst-from-placeholders (object repl-alist)
-  (et--recursive-copy
-   object (lambda (x) (if-let* ((entry (rassq x repl-alist))) (car entry) x))))
+  (let* ((last-inserted nil))
+    (et--recursive-copy
+     object
+     (lambda (x) (if-let* ((entry (rassq x repl-alist)))
+                     (setq last-inserted (car entry))
+                   x))
+     (lambda (x) (eq x last-inserted)))))
 
 (et-test
  (pcase-let* ((`(,new-obj . ,repls)
@@ -238,6 +246,10 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 (defvar et--caching nil
   "Non-nil when the expression currently being evaluated will be cached.")
 
+(defvar et-cache-hits 'NO)
+
+(defvar et-do-caching t)
+
 (defun et--read-cache ()
   (let* ((hash-table (make-hash-table :test #'equal)))
     ;; Read the file into a hashtable
@@ -253,8 +265,10 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 
 (defun et--cache-retrieve (key)
   (ignore-errors
-    (gethash key (if (hash-table-p et-cache) et-cache
-                   (setq et-cache (et--read-cache))))))
+    (et--recursive-copy
+     (gethash key (if (hash-table-p et-cache) et-cache
+                    (setq et-cache (et--read-cache))))
+     #'identity)))
 
 (defun et--cache-store (key value)
   (ignore-errors
@@ -267,12 +281,16 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 (defmacro et-cache (key ph-pred &rest body)
   (declare (indent 2))
   `(pcase-let* ((et--caching t)
-                (`(,subst . ,repls) (et--subst-to-placeholders ,key ,ph-pred))
-                (key (cons subst repls)))
-     (if-let* ((retrieved (ignore (et--cache-retrieve key))))
-         (et--subst-from-placeholders retrieved repls)
+                (key ,key)
+                (`(,_subst . ,repls) (et--subst-to-placeholders key ,ph-pred)))
+     (if-let* ((_ et-do-caching)
+               (retrieved (et--cache-retrieve key))
+               (val (et--subst-from-placeholders retrieved repls)))
+         (prog1 val
+           (when (listp et-cache-hits)
+             (push (cons key val) et-cache-hits)))
 
-       (message "Cache miss: %s" key)
+       (when et-do-caching (message "Cache miss: %s" key))
        (let* ((value (progn . ,body)))
          (et--cache-store key (et--subst-with-placeholders value repls))
          value))))
@@ -1307,6 +1325,7 @@ Depth tracks < > and { } nesting."
     (`(S:BIND ,var ,type-struct) (format "{%s : %s}" (et-var-name var) (et--format-structure type-struct)))
     (`(S:TYPEOF ,var) (format "{typeof %s}" (et-var-name var)))
     (`(S:BINDS-OF ,type-struct) (format "{bindsof %s}" (et--format-structure type-struct)))
+    (`(S:SUBTRACT ,type1 ,type2) (format "{%s - %s}" (et--format-structure type1) (et--format-structure type2)))
     (_ (error "Invalid structure factor: %s" factor))))
 
 (defun et--format-structure-named (name args)
@@ -2128,8 +2147,9 @@ If matching fails, return nil."
       (et-structure-to-type
        output-struct
        (cl-loop for gen in (et-matcher-generics matcher)
-                for gen-type in (append gen-results extra-repls)
-                collect (cons gen gen-type))))))
+                for gen-type in gen-results
+                collect (cons gen gen-type) into new-repls
+                finally return (nconc new-repls extra-repls))))))
 
 
 ;;;; Funcall

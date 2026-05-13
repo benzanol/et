@@ -259,7 +259,7 @@ path."
 (defmacro et-typecheck (body)
   (let* ((result (et--check body)))
     (et-with-error-path '(1) (et-show-result-errors result))
-    (et--remove-type-binds (et-simplify-type (et-result-type result)))))
+    (et-simplify-type (et-result-type result))))
 
 (defmacro et-typecheck-call (func &rest arg-types)
   (cl-loop for type in arg-types
