@@ -977,6 +977,54 @@ Backquote patterns are recursive:
  (et-assert-call-errors car ListR<Integer>|ConsR<String~Nil>|String))
 
 
+;;;;; c[ad][ad][ad]?r
+
+(defun et--car-type (type)
+  (or (et-checker-infer type [L] (or Nil&L=Nil ConsR<L~Any>) L)
+      (error "Can't take car of %s" type)))
+
+(defun et--cdr-type (type)
+  (or (et-checker-infer type [R] (or Nil&R=Nil ConsR<Any~R>) R)
+      (error "Can't take cdr of %s" type)))
+
+(et-define-type-checker caar [T]
+  (Args T) (eval et--car-type (eval et--car-type T)))
+(et-define-type-checker cddr [T]
+  (Args T) (eval et--cdr-type (eval et--cdr-type T)))
+
+(et-define-type-checker cadr [T]
+  (Args T) (eval et--car-type (eval et--cdr-type T)))
+(et-define-type-checker cdar [T]
+  (Args T) (eval et--cdr-type (eval et--car-type T)))
+
+(et-define-type-checker caaar [T]
+  (Args T) (eval et--car-type (eval et--car-type (eval et--car-type T))))
+(et-define-type-checker cdddr [T]
+  (Args T) (eval et--cdr-type (eval et--cdr-type (eval et--cdr-type T))))
+
+(et-define-type-checker cdaar [T]
+  (Args T) (eval et--cdr-type (eval et--car-type (eval et--car-type T))))
+(et-define-type-checker caddr [T]
+  (Args T) (eval et--car-type (eval et--cdr-type (eval et--cdr-type T))))
+
+(et-define-type-checker caadr [T]
+  (Args T) (eval et--car-type (eval et--car-type (eval et--cdr-type T))))
+(et-define-type-checker cddar [T]
+  (Args T) (eval et--cdr-type (eval et--cdr-type (eval et--car-type T))))
+
+(et-define-type-checker cadar [T]
+  (Args T) (eval et--car-type (eval et--cdr-type (eval et--car-type T))))
+(et-define-type-checker cdadr [T]
+  (Args T) (eval et--cdr-type (eval et--car-type (eval et--cdr-type T))))
+
+(et-test
+ (et-assert-resolve 2 (cadr '(1 2 3)))
+ (et-assert-resolve 3 (caddr '(1 2 3)))
+
+ (et-assert-resolve 0 (cadar '((-1 0) 1 2 3)))
+ (et-assert-resolve List<3> (cdddr '((-1 0) 1 2 3))))
+
+
 ;;;;; setcar
 
 (et-define-type-checker setcar [A] (Args A Nil|ConsW<A~Never>) A)
@@ -1655,6 +1703,15 @@ Freshness reasoning:
 
      ;; No accumulation, no return — cl-loop returns nil
      (t (et Nil)))))
+
+
+;;;; Some string/symbol functions
+
+(et-define-type-checker gensym [] Nil|Args<String> Symbol)
+(et-define-type-checker intern [] (Args String) Symbol)
+(et-define-type-checker symbol-name [] (Args Symbol) String)
+(et-define-type-checker format [] (ArgsWithTail String ListR<Any>) String)
+(et-define-type-checker error [] (ArgsWithTail String ListR<Any>) Never)
 
 
 ;;;; Tests
