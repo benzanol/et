@@ -918,9 +918,18 @@ Backquote patterns are recursive:
  (et-assert-no-resolve ListR<Integer> (list 1 "2" 3)))
 
 
-;;;;; car
+;;;;; car/cdr
 
-(et-define-type-checker car [L] (Args (or Nil&L=Nil ConsR<L~Any>)) L)
+(et-defalias MatchCar (car)
+  (or (and Nil (set ,car Nil))
+      (ConsR ,car Any)))
+
+(et-defalias MatchCdr (cdr)
+  (or (and Nil (set ,cdr Nil))
+      (ConsR Any ,cdr)))
+
+(et-define-type-checker car [T] (Args (MatchCar T)) T)
+(et-define-type-checker cdr [T] (Args (MatchCdr T)) T)
 
 (et-test
  (et-assert-resolve Integer (car (list 1 2.2 3)))
@@ -950,11 +959,6 @@ Backquote patterns are recursive:
  (et-assert-error
      (et-root-check-call car ListR<Integer>|ConsR<String~Nil>|String)))
 
-
-;;;;; cdr
-
-(et-define-type-checker cdr [R] (Args (or Nil&R=Nil ConsR<Any~R>)) R)
-
 (et-test
  (et-assert-resolve ListR<Number> (cdr (list 1 2.2 3)))
  (et-assert-resolve ListR<Integer> (cdr (list 1.1 2 3)))
@@ -979,43 +983,23 @@ Backquote patterns are recursive:
 
 ;;;;; c[ad][ad][ad]?r
 
-(defun et--car-type (type)
-  (or (et-checker-infer type [L] (or Nil&L=Nil ConsR<L~Any>) L)
-      (error "Can't take car of %s" type)))
+(et-define-type-checker caar [T] (Args (MatchCar (MatchCar T))) T)
+(et-define-type-checker cddr [T] (Args (MatchCdr (MatchCdr T))) T)
 
-(defun et--cdr-type (type)
-  (or (et-checker-infer type [R] (or Nil&R=Nil ConsR<Any~R>) R)
-      (error "Can't take cdr of %s" type)))
+(et-define-type-checker cadr [T] (Args (MatchCdr (MatchCar T))) T)
+(et-define-type-checker cdar [T] (Args (MatchCar (MatchCdr T))) T)
 
-(et-define-type-checker caar [T]
-  (Args T) (eval et--car-type (eval et--car-type T)))
-(et-define-type-checker cddr [T]
-  (Args T) (eval et--cdr-type (eval et--cdr-type T)))
+(et-define-type-checker caaar [T] (Args (MatchCar (MatchCar (MatchCar T)))) T)
+(et-define-type-checker cdddr [T] (Args (MatchCdr (MatchCdr (MatchCdr T)))) T)
 
-(et-define-type-checker cadr [T]
-  (Args T) (eval et--car-type (eval et--cdr-type T)))
-(et-define-type-checker cdar [T]
-  (Args T) (eval et--cdr-type (eval et--car-type T)))
+(et-define-type-checker caadr [T] (Args (MatchCdr (MatchCar (MatchCar T)))) T)
+(et-define-type-checker cddar [T] (Args (MatchCar (MatchCdr (MatchCdr T)))) T)
 
-(et-define-type-checker caaar [T]
-  (Args T) (eval et--car-type (eval et--car-type (eval et--car-type T))))
-(et-define-type-checker cdddr [T]
-  (Args T) (eval et--cdr-type (eval et--cdr-type (eval et--cdr-type T))))
+(et-define-type-checker caddr [T] (Args (MatchCdr (MatchCdr (MatchCar T)))) T)
+(et-define-type-checker cdaar [T] (Args (MatchCar (MatchCar (MatchCdr T)))) T)
 
-(et-define-type-checker cdaar [T]
-  (Args T) (eval et--cdr-type (eval et--car-type (eval et--car-type T))))
-(et-define-type-checker caddr [T]
-  (Args T) (eval et--car-type (eval et--cdr-type (eval et--cdr-type T))))
-
-(et-define-type-checker caadr [T]
-  (Args T) (eval et--car-type (eval et--car-type (eval et--cdr-type T))))
-(et-define-type-checker cddar [T]
-  (Args T) (eval et--cdr-type (eval et--cdr-type (eval et--car-type T))))
-
-(et-define-type-checker cadar [T]
-  (Args T) (eval et--car-type (eval et--cdr-type (eval et--car-type T))))
-(et-define-type-checker cdadr [T]
-  (Args T) (eval et--cdr-type (eval et--car-type (eval et--cdr-type T))))
+(et-define-type-checker cadar [T] (Args (MatchCar (MatchCdr (MatchCar T)))) T)
+(et-define-type-checker cdadr [T] (Args (MatchCdr (MatchCar (MatchCdr T)))) T)
 
 (et-test
  (et-assert-resolve 2 (cadr '(1 2 3)))
@@ -1750,7 +1734,7 @@ Freshness reasoning:
    (cl-loop for x in (list (list 1) (list 2)) append x))
 
  ;; ---- nconc: NON-fresh list (shares conses with body) ----
- (et-assert-resolve List<1|2>
+ (et-assert-resolve ListR<1|2>
    (cl-loop for x in (list (list 1) (list 2)) nconc x))
 
  ;; ---- concat ----

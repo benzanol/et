@@ -608,10 +608,13 @@ It will also define type signatures for the functions created by
                   struct-type)))))
 
 
-;;;; `declare'
+;;;; `declare'/`quote'
 
 (defun et-preprocess-declare (body)
   "Preprocess a top-level (declare (et FORMS...)) form.
+
+Since flycheck warns against these, you can also replace `declare' with
+`quote', or simply write \\='(et FORMS...).
 
 Supported forms are:
   (@variable NAME TYPE-SPEC) - declare a global variable type.
@@ -634,20 +637,10 @@ Supported forms are:
     (`(defun . ,_body) (macroexpand expr))
 
     (`(cl-defstruct . ,body) (et-preprocess-struct body))
-    (`(declare . ,body) (et-preprocess-declare body))))
+    (`(,(or 'declare 'quote) . ,body) (et-preprocess-declare body))))
 
 
 ;;;; Preprocess file
-
-(defun et--read-all (string)
-  "Read all s-expressions from STRING, returning a list."
-  (let* ((pos 0) forms)
-    (condition-case nil
-        (while t
-          (let* ((result (read-from-string string pos)))
-            (push (car result) forms)
-            (setq pos (cdr result))))
-      (end-of-file (nreverse forms)))))
 
 (defvar et--preprocessed-files nil
   "List of files that have been preprocessed.")
@@ -655,14 +648,22 @@ Supported forms are:
 (defvar et--preprocessing nil
   "Currently performing preprocessing.")
 
+(defun et-preprocess-buffer ()
+  (interactive)
+  (let* ((et--preprocessing t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (when-let* ((expr (ignore-errors (read (current-buffer)))))
+               (ignore-errors (et-preprocess-expr expr))
+               t)))))
+
 (defun et-preprocess-file (file)
   (unless (member file et--preprocessed-files)
     (push file et--preprocessed-files)
 
-    (let* ((et--preprocessing t))
-      (dolist (form (et--read-all (with-temp-buffer (insert-file-contents file) (buffer-string))))
-        (condition-case err (et-preprocess-expr form)
-          (error (byte-compile-warn "Preprocessing error: %s" err)))))))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (et-preprocess-buffer))))
 
 
 ;;; ============================================================
@@ -950,6 +951,12 @@ generics)."
     (:success (et-checker-err "Didn't error"))))
 
 (et-define-pcase-checker :typeof `(,_expr)
+  (let ((type (et-checker-sub 1)))
+    (et-checker-warn (et-pp (et--remove-type-binds type)))
+    (setq et--checker-expr (cadr et--checker-expr))
+    type))
+
+(et-define-pcase-checker :typeof+ `(,_expr)
   (let ((type (et-checker-sub 1)))
     (et-checker-warn (et-pp type))
     (setq et--checker-expr (cadr et--checker-expr))
