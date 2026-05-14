@@ -78,7 +78,7 @@
            collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
            finally return (string-join strs (or sep "\\n"))))
 
-(defvar et-display-narrows t
+(defvar et-display-narrows nil
   "Whether to display narrowed types on if/when/etc blocks.")
 
 (defun et-checker-hint-narrows (path &rest types)
@@ -524,27 +524,21 @@ It will also define type signatures for the functions created by
          (name (if (consp name-or-opts) (car name-or-opts) name-or-opts))
          (opts (when (consp name-or-opts) (cdr name-or-opts)))
          ;; Parse options for renamed functions
-         (conc-name
-          (if-let* ((entry (assq :conc-name opts)))
-              (cadr entry)
-            (intern (format "%s-" name))))
-         (constructor
-          (if-let* ((entry (assq :constructor opts)))
-              (cadr entry)
-            (intern (format "make-%s" name))))
-         (copier
-          (if-let* ((entry (assq :copier opts)))
-              (cadr entry)
-            (intern (format "copy-%s" name))))
-         (predicate
-          (if-let* ((entry (assq :predicate opts)))
-              (cadr entry)
-            (intern (format "%s-p" name))))
+         (conc-name (if-let* ((entry (assq :conc-name opts)))
+                        (cadr entry) (intern (format "%s-" name))))
+         (constructor (if-let* ((entry (assq :constructor opts)))
+                          (cadr entry) (intern (format "make-%s" name))))
+         (copier (if-let* ((entry (assq :copier opts)))
+                     (cadr entry) (intern (format "copy-%s" name))))
+         (predicate (if-let* ((entry (assq :predicate opts)))
+                        (cadr entry) (intern (format "%s-p" name))))
          ;; Skip docstring
          (slot-forms (let ((rest (cdr body)))
                        (if (stringp (car rest)) (cdr rest) rest)))
          ;; The struct type
          (struct-type (et-dt 'Struct name))
+         ;; Generics must be defined in the first slot
+         (gen-vec (plist-get (car slot-forms) :et-generics))
          ;; Parse slots
          (slots
           (cl-loop
@@ -734,7 +728,7 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
           ConsR<T~PList<:scale~Number~:flag~Any>>)))
 
 
-;;;; `declare' -> `et-func-sig'
+;;;; declare -> et-func-sig
 
 (cl-defstruct et-func-sig
   "Parsed function signature.
@@ -926,6 +920,51 @@ generics)."
 (et-define-pcase-checker defun `(,name . ,_body)
   (when-let* ((sig (get name 'et-function-signature)))
     (et-checker-function-body sig 2)))
+
+
+;;;; et-defun
+
+(defun et--process-funcdef-header (body)
+  (let* ((gen-vec (when (vectorp (car body)) (pop body)))
+         (args-alist
+          (cl-loop for tail on (car body)
+                   for entry = (pcase (car tail) (`[,param ,spec] (cons param spec)))
+                   ;; Replace the entry with just the parameter
+                   when entry do (setcar tail (car entry))
+                   and collect entry))
+         (ret (when (eq (cadr body) '->) (pop (cdr body)) (pop (cdr body)))))
+    (list body gen-vec args-alist ret)))
+
+(defun et--funcdef-inline-to-declare (body)
+  (pcase-let*
+      ((`(,new-body ,gen-vec ,args-alist ,ret) (et--process-funcdef-header body))
+       ;; Find the declare form, or add one
+       (decl-form (or (assq 'declare new-body)
+                      (car (if (stringp (cadr new-body))
+                               (push (list 'declare) (cddr new-body))
+                             (push (list 'declare) (cdr new-body))))))
+       ;; Find the et declarations in the declare block, or add it
+       (et-decl (or (cl-find #'et decl-form :key #'car-safe)
+                    (car (push (list 'et) (cdr decl-form)))))
+       (add (lambda (key val)
+              (when (alist-get key et-decl)
+                (error "`%s' specified in both arglist and declare block" key))
+              (push (list key val) (cdr et-decl)))))
+    ;; Add return to the declare block
+    (when ret (funcall add '@return ret))
+    ;; Add params to the declare block
+    (dolist (pair args-alist) (funcall add (car pair) (cdr pair)))
+    ;; Add generics to the declare block
+    (when gen-vec (funcall add '@generics (append gen-vec nil)))
+
+    new-body))
+
+(defmacro et-defun (name &rest body)
+  (let* ((expr `(defun ,name . ,(et--funcdef-inline-to-declare (copy-tree body))))
+         (result (et--check expr))
+         (offset (- (length body) (length (cddr expr)))))
+    (et-show-result-errors result nil offset)
+    expr))
 
 
 ;;; ============================================================

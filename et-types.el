@@ -1692,7 +1692,7 @@ Freshness reasoning:
 
 ;;;; Some string/symbol functions
 
-(et-define-type-checker gensym [] Nil|Args<String> Symbol)
+(et-define-type-checker gensym [] Nil|Args<String> NonNilSymbol)
 (et-define-type-checker intern [] (Args String) Symbol)
 (et-define-type-checker symbol-name [] (Args Symbol) String)
 (et-define-type-checker format [] (ArgsWithTail String ListR<Any>) String)
@@ -1835,6 +1835,30 @@ Freshness reasoning:
  ;; ---- for VAR downfrom EXPR to EXPR by EXPR ----
  (et-assert-resolve ListFresh<Integer>
    (cl-loop for i downfrom 10 to 0 by 2 collect i)))
+
+
+;;; ============================================================
+;;; et macros
+
+(et-define-pcase-checker et? `(,type-spec ,_expr)
+  (let* ((actual (et-checker-sub 1))
+         (declared (et-parse-type type-spec)))
+    (unless (et-subtype? actual declared)
+      (et-checker-err 0 "Expected %s, found %s" (et-pp declared) (et-pp actual)))
+    actual))
+
+(et-define-pcase-checker et! `(,type-spec ,_expr)
+  (let* ((actual (et-checker-sub 1))
+         (declared (et-parse-type type-spec)))
+    (when (et-never-p (et--supersect actual declared))
+      (et-checker-err 0 "Types %s and %s have no overlap. Use et!! to supress this warning."
+                      (et-pp declared) (et-pp actual)))
+    actual))
+
+(et-define-pcase-checker et!! `(,type-spec ,_expr)
+  (let* ((actual (et-checker-sub 1))
+         (declared (et-parse-type type-spec)))
+    actual))
 
 
 ;;; ============================================================

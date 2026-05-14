@@ -22,6 +22,7 @@
 ;;; Commentary:
 ;;; Code:
 
+(require 'et-macros)
 (require 'flycheck)
 (require 'seq)
 
@@ -408,7 +409,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 (cl-defstruct et-datatype
   "A datatype factor of an `et-type'."
-  (name nil :et Symbol)
+  (name nil :et-generics [A B] :et Symbol)
   (args nil :et List<*et-type|Any>))
 
 '(et (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
@@ -421,8 +422,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                                 @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
                                 @Function @DynFunction
                                 @Struct @Scoped))
-     (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>)
-     )
+     (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
@@ -505,7 +505,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                (@return (List (Tuple NonNilSymbol NonNilSymbol List<EtConstraint>)))))
 
   (cl-loop for name in (when matcher (et-matcher-generics matcher))
-           for qs = (cl-loop for q in (et-matcher-constraints matcher)
+           for qs = (cl-loop for q in (when matcher (et-matcher-constraints matcher))
                              when (eq (cadr q) name)
                              collect q)
            collect (list name (gensym (format "scoped-%s@" name)) qs)))
@@ -727,19 +727,28 @@ FUNC is called with one argument, the current argument"
 
 ;;;; Aliases
 
-(cl-defstruct et-alias "A type alias factor of an `et-type'." name args)
-
 (defvar et-aliases nil
   "An alist where each entry is (NAME-SYMBOL TYPE-FN PROPS...).
 
 TYPE-FN is a function which takes the alias arguments and returns a
 structure which can be parsed by `et-parse-type'.")
 
-(defmacro et-defalias (symbol arglist &rest body)
-  "Alias SYMBOL types to return a specific type."
+'(et (@alias EtAliasDefinitionPlist
+             (Plist @:custom (or Nil (Function Args<List<Any>> EtStructure))
+                    @:generics List<NonNilSymbol>
+                    @:constraints List<EtConstraint>
+                    @:type (or Nil *et-type)
+                    @:structure (or Nil EtStructure))))
+
+(cl-defstruct et-alias "A type alias factor of an `et-type'." name args)
+
+(defmacro et-defalias (name &rest body)
+  "Alias SYMBOL types to return a specific type.
+
+\(fn NAME [GENERIC-VECTOR] BODY...)"
   (declare (indent 2))
-  (cl-assert (symbolp symbol))
-  (cl-assert (string-match-p "^[A-Z]" (symbol-name symbol)))
+  (cl-assert (symbolp name))
+  (cl-assert (string-match-p "^[A-Z]" (symbol-name name)))
   (cl-assert (listp arglist))
 
   (let ((plist nil))
@@ -749,7 +758,7 @@ structure which can be parsed by `et-parse-type'.")
     (cl-assert (eq (length body) 1))
 
     `(et--define-alias
-      ',symbol
+      ',name
       ,`(lambda . ,(cl--transform-lambda
                     (list arglist (list #'et-q (car body)))
                     (format "et-alias%s" symbol)))
@@ -1161,8 +1170,6 @@ Types only:
 Matchers only:
 \(`S:MATCHER-DNF' LITERAL-MATCHER-DNF) - an already compiled matcher dnf
 \(`S:SET' MATCHER TYPE)"
-
-
   (let* ((case-fold-search nil)
          (parse (lambda (arg) (et-parse-structure arg generics))))
 
@@ -1281,20 +1288,24 @@ Matchers only:
                        (error "Invalid test variable: %s" (match-string 1 s))))
      generics))
 
-   ((string-match "^\\*\\(.*\\)$" s)
-    (et-parse-structure (list 'Struct (intern (match-string 1 s))) nil))
-
    ;; Var=Type  ->  Matcher set
    ((string-match "^\\([-a-zA-Z0-9]*\\)=\\(.*\\)$" s)
     (let ((var (intern (match-string 1 s)))
           (expr (match-string 2 s)))
       (et-parse-structure (list 'set var (list :parse expr)) generics)))
 
-   ;; Name or Name<...>
-   ((string-match "^\\([-a-zA-Z0-9:]+\\)\\(?:<\\(.*\\)>\\)?$" s)
-    (let* ((name (intern (match-string 1 s)))
+   ;; Name or Name<...> or *struct or *struct<...>
+   ((string-match "^\\*?\\([-a-zA-Z0-9:]+\\)\\(?:<\\(.*\\)>\\)?$" s)
+    (let* ((is-struct (string-match-p "^\\*" s))
+           (name (intern (match-string 1 s)))
            (inner (match-string 2 s))
            (arg-strs (when inner (et--split-at-depth inner ?~))))
+
+      ;; Force the arg name to get parsed as a constant symbol
+      (when is-struct
+        (push (format "@%s" name) arg-strs)
+        (setq name 'Struct))
+
       (cl-loop for s in arg-strs
                for role in (if (et--datatype-name? name) (et--datatype-arg-roles name arg-strs)
                              (make-list (length arg-strs) nil))
@@ -1352,6 +1363,10 @@ Depth tracks < > and { } nesting."
   (pcase (cons name args)
     (`(Literal ,val)
      (format "`%s'" (prin1-to-string val)))
+
+    (`(Struct ,name . ,args)
+     (if (null args) (format "*%s" name)
+       (format "*%s<%s>" name (string-join (mapcar #'et--format-structure args) " "))))
 
     ((or `(ConsFull ,left-sub ,_1 ,right-sub ,_2)
          `(,(or 'ConsR 'ConsW 'ConsRW 'ConsWR) ,left-sub ,right-sub))
@@ -1629,6 +1644,13 @@ which are invalid for types."
   (or (vectorp generics) (error "Write the generics as a vector"))
   `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
                      (et-q ,(append generics nil))))
+
+(defun et-parse-gen-vec (gen-vec)
+  "Parse a generic vector to a list of generics and constraints."
+  (declare (et (gen-vec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
+               (@return (Cons List<EtGeneric> List<EtConstraint>))))
+  (let* ((generics )))
+  )
 
 (defun et-parse-matcher (spec generics-spec)
   "Parse SPEC as an `et-matcher' with GENERICS-SPEC.
