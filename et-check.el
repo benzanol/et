@@ -494,9 +494,10 @@ PATH is the path to the subexpression."
 ;;;; Infer
 
 (defmacro et-checker-infer (type gen-vec matcher-spec output-spec)
-  (pcase-let* ((`(,gens . ,constraints) (et--parse-gen-vec gen-vec)))
+  (pcase-let* ((gens (et--gen-vec-generics gen-vec)))
     `(et--infer ,(make-et-matcher
-                  :generics gens :constraints constraints
+                  :generics gens
+                  :constraints (et--gen-vec-constraints gen-vec)
                   :dnf (et--parse-struct matcher-spec gens 'MATCHER))
                 ,type
                 (et-q ,(et--parse-struct output-spec gens 'TYPE)))))
@@ -601,7 +602,7 @@ element."
           (when rest-param (list rest-param)))))
 
 
-;;;; Preprocess struct
+;;;; Preprocess cl-defstruct
 
 (defun et--preprocess-cl-defstruct (body)
   "Preprocess a `cl-defstruct' expression."
@@ -644,6 +645,8 @@ element."
            (push (list et--preprocessing-path name default) slots)))
 
         (_ (error "Invalid slot format"))))
+
+    (put name 'et-struct (list :generics (et--gen-vec-generics gen-vec)))
 
     (list orig-path name gen-vec slots
           (list conc-name constructor copier predicate))))
