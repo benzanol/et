@@ -504,43 +504,51 @@ PATH is the path to the subexpression."
 
 ;;; ============================================================
 ;;; Preprocessing
-;;;; Define all aliases names first
+
+(defvar et--preprocessing-path nil)
+
+
 ;;;; Preprocess defun
 
-(defun et--preprocess-defun (path name arglist args)
+(defun et--preprocess-defun (name arglist args)
   (declare
-   (et (@return (Tuple Cons<List<Integer>~String> ; Name
-                       (or Nil (Cons List<Integer> Vector)) ; Generics
-                       (Cons List<Integer> Any) ; Return
-                       (List Any) ; Extra props
-                       (List (Tuple List<Integer> Symbol Any)) ; Required
-                       (List (Tuple List<Integer> Symbol Any)) ; Optional
-                       (List (Tuple List<Integer> Symbol Any)) ; Key
-                       (List (Tuple List<Integer> Symbol Any)))))) ; Rest
+   (et (@return (or Nil
+                    (Tuple List<Integer> ; Path
+                           Symbol ; Name
+                           (or Nil (Cons List<Integer> Vector)) ; Generics
+                           (Cons List<Integer> Any) ; Return
+                           (List Any) ; Extra props
+                           (List (Tuple List<Integer> Symbol Any)) ; Required
+                           (List (Tuple List<Integer> Symbol Any)) ; Optional
+                           (List (Tuple List<Integer> Symbol Any)) ; Key
+                           (List (Tuple List<Integer> Symbol Any))))))) ; Rest
 
-  (when-let* ((orig-path (append path nil))
+  (when-let* ((orig-path et--preprocessing-path)
               (declare-pos (cl-position 'declare args :key #'car))
               (declare-block (nth declare-pos args))
               (et-pos (cl-position 'et declare-block :key #'car))
-              (et-block (nth et-pos declare-block))
-              ((nconc path (list (+ declare-pos 3) et-pos))))
+              (et-block (nth et-pos declare-block)))
+    (cl-callf append et--preprocessing-path (list (+ declare-pos 3) et-pos))
 
-    (let* ((base-path-cdr (cdr path))
+    (let* ((et-block-path et--preprocessing-path)
            (params (et--parse-arglist-params arglist))
            (param-types (list nil nil nil nil))
            return gens-qs props)
 
       (dotimes (form-idx (length et-block))
-        (setcdr path (append base-path-cdr (list form-idx)))
+        (setq et--preprocessing-path (append et-block-path (list form-idx)))
+
         (pcase (nth form-idx et-block)
+          ((guard (eq 0 form-idx))) ; Skip the `et' symbol
+
           (`(@return ,spec)
            (when return (error "Multiple @return clauses"))
-           (setq return (cons (append path nil) spec)))
+           (setq return (cons et--preprocessing-path spec)))
           (`(@return . ,_) (error "Expected (@return TYPE)"))
 
           (`(@generics ,(and gen-vec (pred vectorp)))
            (when gens-qs (error "Multiple @generic clauses"))
-           (setq gens-qs (cons (append path nil) gen-vec)))
+           (setq gens-qs (cons et--preprocessing-path gen-vec)))
           (`(@generics . ,_) (error "Expected (@generics [...])"))
 
           (`(@skip)
@@ -550,13 +558,13 @@ PATH is the path to the subexpression."
 
           (`(,(and name (pred symbolp)) ,spec)
            (if-let* ((idx (cl-position name params :test #'memq)))
-               (push (list (append path nil) name spec) (nth idx param-types))
+               (push (list et--preprocessing-path name spec) (nth idx param-types))
              (error "Not a parameter: %s" name)))
 
           (_ (error "Invalid format"))))
 
       (when return
-        (cl-list* (cons (append orig-path (list 1)) name)
+        (cl-list* orig-path name
                   gens-qs return props
                   param-types)))))
 
@@ -591,10 +599,10 @@ element."
 
 ;;;; Preprocess struct
 
-(defun et--preprocess-cl-defstruct (path body)
+(defun et--preprocess-cl-defstruct (body)
   "Preprocess a `cl-defstruct' expression."
 
-  (let* ((orig-path (append path nil))
+  (let* ((orig-path et--preprocessing-path)
          (name-or-opts (car body))
          (name (if (consp name-or-opts) (car name-or-opts) name-or-opts))
          (opts (when (consp name-or-opts) (cdr name-or-opts)))
@@ -614,81 +622,27 @@ element."
          slots gen-vec)
 
     (dotimes (slot-idx (length slot-forms))
-      (setcdr path (append (cdr orig-path) (list (+ slots-start slot-idx))))
+      (setq et--preprocessing-path (append orig-path (list (+ slots-start slot-idx))))
 
       (pcase (nth slot-idx slot-forms)
-        ((and name (pred symbolp)) (push (list path name) slots))
+        ((and name (pred symbolp)) (push (list et--preprocessing-path name) slots))
 
         (`(,(and name (pred symbolp)) ,default . ,plist)
-         (when-let* ((gv (plist-get plist :et-generics)))
-           (if (= 0 slot-idx) (setq gen-vec gv) (error "Generics must be set in the first slot")))
-         (push (cl-list* path name :default default plist) slots))
+         (when-let* ((gv-pos (cl-position :et-generics plist)) ((= 0 (mod gv-pos 2))))
+           (if (/= 0 slot-idx) (error "Generics must be set in the first slot")
+             (setq gen-vec (cons (append et--preprocessing-path (list (1+ gv-pos)))
+                                 (nth (1+ gv-pos) plist)))))
+
+         (if-let* ((type-pos (cl-position :et plist)) ((= 0 (mod type-pos 2))))
+             (push (list et--preprocessing-path name default
+                         (cons (append et--preprocessing-path type-pos) (nth (1+ type-pos) plist)))
+                   slots)
+           (push (list et--preprocessing-path name default) slots)))
 
         (_ (error "Invalid slot format"))))
 
     (list orig-path name gen-vec slots
           (list conc-name constructor copier predicate))))
-
-
-;;;; Preprocess block
-
-(defun et--preprocess-alias-def (path args)
-  (if-let* ((spec-pos (length args))
-            (name (pop args))
-            ((symbolp name))
-            (gen-vec (when (vectorp (car args)) (pop args)))
-            (pb (ignore-errors (et--props-and-body args))))
-      ;; Just declare the alias, don't ensure its validity by parsing yet
-      (progn (apply #'et--declare-alias name gen-vec (cdr pb) (car pb))
-             (list (append path (list spec-pos)) name))
-
-    (nconc path (list 0))
-    (error "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)")))
-
-(defun et--preprocess-variable-def (path args)
-  (pcase args
-    (`(,(and name (pred symbolp)) ,spec)
-     (list path name spec))
-
-    (_ (nconc path (list 0))
-       (error "Expected format (@variable NAME TYPE)"))))
-
-(defun et--preprocess (exprs)
-  (let* ((declared-aliases nil) ; List<(Spec-path Symbol)>
-         (declared-vars nil) ; List<(Expr-path Symbol Spec)>
-         (declared-defuns nil)
-         (declared-structs nil)
-         (errors nil)
-         (path nil))
-
-    ;; Process all exprs, collecting things that were declared without parsing anything
-    (dotimes (expr-idx (length exprs))
-      (setq path (list expr-idx))
-      (condition-case err
-          (pcase (nth expr-idx exprs)
-            ;; Process a root declaration block
-            (`[et .. ,forms]
-             (dotimes (form-idx forms)
-               (setq path (list expr-idx (1+ form-idx)))
-               (condition-case err
-                   (pcase (nth form-idx forms)
-                     (`(@alias . ,args) (push (et--preprocess-alias-def path args) declared-aliases))
-                     (`(@variable . ,args) (push (et--preprocess-variable-def path args) declared-vars)))
-                 (error (push (cons path (error-message-string err)) errors)))))
-            ;; Process a defun
-            (`(defun ,(and name (pred symbolp)) ,(and arglist (pred listp)) . ,args)
-             (when-let* ((decl (et--preprocess-defun path name arglist args))) (push decl declared-defuns)))
-            ;; Process a struct
-            (`(cl-defstruct . ,body)
-             (push (et--preprocess-cl-defstruct path body) declared-structs)))
-
-        (error (push (cons path (error-message-string err)) errors))))
-
-    (list errors
-          (nreverse declared-aliases)
-          (nreverse declared-vars)
-          (nreverse declared-defuns)
-          (nreverse declared-structs))))
 
 
 ;;;; Postprocess struct
@@ -744,6 +698,65 @@ element."
          (et-dt 'Function
                 (et-alias 'ConsR struct-type (et-literal nil))
                 struct-type))))
+
+
+;;;; Preprocess block
+
+(defun et--preprocess-alias-def (args)
+  (if-let* ((spec-pos (length args))
+            (name (pop args))
+            ((symbolp name))
+            (gen-vec (when (vectorp (car args)) (pop args)))
+            (pb (ignore-errors (et--props-and-body args))))
+      ;; Just declare the alias, don't ensure its validity by parsing yet
+      (progn (apply #'et--declare-alias name gen-vec (cdr pb) (car pb))
+             (list (append et--preprocessing-path (list spec-pos)) name))
+
+    (cl-callf append et--preprocessing-path (list 0))
+    (error "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)")))
+
+(defun et--preprocess-variable-def (args)
+  (pcase args
+    (`(,(and name (pred symbolp)) ,spec)
+     (list et--preprocessing-path name spec))
+
+    (_ (cl-callf append et--preprocessing-path (list 0))
+       (error "Expected format (@variable NAME TYPE)"))))
+
+(defun et--preprocess (exprs)
+  (let* ((declared-aliases nil) ; List<(Spec-path Symbol)>
+         (declared-vars nil) ; List<(Expr-path Symbol Spec)>
+         (declared-defuns nil)
+         (declared-structs nil)
+         (errors nil)
+         (et--preprocessing-path nil))
+
+    ;; Process all exprs, collecting things that were declared without parsing anything
+    (dotimes (expr-idx (length exprs))
+      (setq et--preprocessing-path (list expr-idx))
+      (condition-case err
+          (pcase (nth expr-idx exprs)
+            ;; Process a root declaration block
+            (`[et .. ,forms]
+             (dotimes (form-idx forms)
+               (setq et--preprocessing-path (list expr-idx (1+ form-idx)))
+               (pcase (nth form-idx forms)
+                 (`(@alias . ,args) (push (et--preprocess-alias-def args) declared-aliases))
+                 (`(@variable . ,args) (push (et--preprocess-variable-def args) declared-vars)))))
+            ;; Process a defun
+            (`(defun ,(and name (pred symbolp)) ,(and arglist (pred listp)) . ,args)
+             (when-let* ((decl (et--preprocess-defun name arglist args))) (push decl declared-defuns)))
+            ;; Process a struct
+            (`(cl-defstruct . ,body)
+             (push (et--preprocess-cl-defstruct body) declared-structs)))
+
+        (error (push (cons et--preprocessing-path (error-message-string err)) errors))))
+
+    (list errors
+          (nreverse declared-aliases)
+          (nreverse declared-vars)
+          (nreverse declared-defuns)
+          (nreverse declared-structs))))
 
 
 ;;;; `declare'/`quote'
