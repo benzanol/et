@@ -504,6 +504,143 @@ PATH is the path to the subexpression."
 
 ;;; ============================================================
 ;;; Preprocessing
+;;;; Define all aliases names first
+;;;; Preprocess defun
+
+(defun et--preprocess-defun (path name arglist args)
+  (declare
+   (et (@return (Tuple Cons<List<Integer>~String> ; Name
+                       (or Nil (Cons List<Integer> Vector)) ; Generics
+                       (Cons List<Integer> Any) ; Return
+                       (List Any) ; Extra props
+                       (List (Tuple List<Integer> Symbol Any)) ; Required
+                       (List (Tuple List<Integer> Symbol Any)) ; Optional
+                       (List (Tuple List<Integer> Symbol Any)) ; Key
+                       (List (Tuple List<Integer> Symbol Any)))))) ; Rest
+
+  (when-let* ((orig-path (append path nil))
+              (declare-pos (cl-position 'declare args :key #'car))
+              (declare-block (nth declare-pos args))
+              (et-pos (cl-position 'et declare-block :key #'car))
+              (et-block (nth et-pos declare-block))
+              ((nconc path (list (+ declare-pos 3) et-pos))))
+
+    (let* ((base-path-cdr (cdr path))
+           (params (et--parse-arglist-params arglist))
+           (param-types (list nil nil nil nil))
+           return gens-qs props)
+
+      (dotimes (form-idx (length et-block))
+        (setcdr path (append base-path-cdr (list form-idx)))
+        (pcase (nth form-idx et-block)
+          (`(@return ,spec)
+           (when return (error "Multiple @return clauses"))
+           (setq return (cons (append path nil) spec)))
+          (`(@return . ,_) (error "Expected (@return TYPE)"))
+
+          (`(@generics ,(and gen-vec (pred vectorp)))
+           (when gens-qs (error "Multiple @generic clauses"))
+           (setq gens-qs (cons (append path nil) gen-vec)))
+          (`(@generics . ,_) (error "Expected (@generics [...])"))
+
+          (`(@skip)
+           (when (plist-get props :skip) (error "Multiple @skip clauses"))
+           (setq props (cl-list* :skip t props)))
+          (`(@skip . ,_) (error "Expected (@skip)"))
+
+          (`(,(and name (pred symbolp)) ,spec)
+           (if-let* ((idx (cl-position name params :test #'memq)))
+               (push (list (append path nil) name spec) (nth idx param-types))
+             (error "Not a parameter: %s" name)))
+
+          (_ (error "Invalid format"))))
+
+      (when return
+        (cl-list* (cons (append orig-path (list 1)) name)
+                  gens-qs return props
+                  param-types)))))
+
+(defun et--parse-arglist-params (arglist)
+  "Parse ARGLIST into (REQUIRED OPTIONAL KEY REST).
+
+ARGLIST is a plain parameter list with no type annotations — just
+symbols and default-value forms. REQUIRED, OPTIONAL, KEY, and REST are
+each lists of parameter name symbols. The list REST has at most 1
+element."
+  (let ((required nil)
+        (optional nil)
+        (key-params nil)
+        (rest-param nil)
+        (state 'required))
+    (dolist (elt arglist)
+      (pcase elt
+        ('&optional (setq state 'optional))
+        ('&rest     (setq state 'rest))
+        ('&key      (setq state 'key))
+        ((or `(,name . ,_) name)
+         (pcase state
+           ('required (push name required))
+           ('optional (push name optional))
+           ('key      (push name key-params))
+           ('rest     (setq rest-param name))))))
+    (list (nreverse required)
+          (nreverse optional)
+          (nreverse key-params)
+          (when rest-param (list rest-param)))))
+
+
+;;;; Preprocess block
+
+(defun et--preprocess-alias-def (path args)
+  (if-let* ((spec-pos (length args))
+            (name (pop args))
+            ((symbolp name))
+            (gen-vec (when (vectorp (car args)) (pop args)))
+            (pb (ignore-errors (et--props-and-body args))))
+      ;; Just declare the alias, don't ensure its validity by parsing yet
+      (progn (apply #'et--declare-alias name gen-vec (cdr pb) (car pb))
+             (list (append path (list spec-pos)) name))
+
+    (nconc path (list 0))
+    (error "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)")))
+
+(defun et--preprocess-variable-def (path args)
+  (pcase args
+    (`(,(and name (pred symbolp)) ,spec)
+     (list path name spec))
+
+    (_ (nconc path (list 0))
+       (error "Expected format (@variable NAME TYPE)"))))
+
+(defun et-preprocess (exprs)
+  (let* ((declared-aliases nil) ; List<(Spec-path Symbol)>
+         (declared-vars nil) ; List<(Expr-path Symbol Spec)>
+         (declared-defuns nil) ; List<((Path . Name) Arglist (Path . GenVec)? (Path . Return) List<(Path Param Spec)>)>
+         (errors nil)
+         (path nil))
+
+    ;; Process all exprs, collecting things that were declared without parsing anything
+    (dotimes (expr-idx (length exprs))
+      (setq path (list expr-idx))
+      (condition-case err
+          (pcase (nth expr-idx exprs)
+            ;; Process a root declaration block
+            (`[et .. ,forms]
+             (dotimes (form-idx forms)
+               (setq path (list expr-idx (1+ form-idx)))
+               (condition-case err
+                   (pcase (nth form-idx forms)
+                     (`(@alias . ,args) (push (et--preprocess-alias-def path args) declared-aliases))
+                     (`(@variable . ,args) (push (et--preprocess-variable-def path args) declared-vars)))
+                 (error (push (cons path (error-message-string err)) errors)))))
+            ;; Process a defun
+            (`(defun ,(and name (pred symbolp)) ,(and arglist (pred listp)) . ,args)
+             (when-let* ((decl (et--preprocess-defun path name arglist args))) (push decl declared-defuns))))
+
+        (error (push (cons path (error-message-string err)) errors))
+        ))))
+
+
 ;;;; `cl-defstruct'
 
 (defun et-preprocess-struct (body)
@@ -755,6 +892,7 @@ stripped (just symbols and default-value forms).
 
 ET-DECL is the contents of the (et ...) declare form — a list of
 entries.  Each entry is one of:
+
   (@generics GEN...)    — generic type variables
   (@return TYPE-SPEC)   — return type
   (PARAM TYPE-SPEC)     — type for parameter PARAM"
