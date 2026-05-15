@@ -554,7 +554,11 @@ PATH is the path to the subexpression."
           (`(@skip)
            (when (plist-get props :skip) (error "Multiple @skip clauses"))
            (setq props (cl-list* :skip t props)))
-          (`(@skip . ,_) (error "Expected (@skip)"))
+
+          ;; Can contain `narrows', `vars', `all'
+          (`(@show . ,show)
+           (when (plist-get props :show) (error "Multiple @show clauses"))
+           (setq props (cl-list* :skip show props)))
 
           (`(,(and name (pred symbolp)) ,spec)
            (if-let* ((idx (cl-position name params :test #'memq)))
@@ -757,38 +761,6 @@ element."
           (nreverse declared-vars)
           (nreverse declared-defuns)
           (nreverse declared-structs))))
-
-
-;;;; `declare'/`quote'
-
-(defun et-preprocess-declare (body)
-  "Preprocess a top-level (declare (et FORMS...)) form.
-
-Since flycheck warns against these, you can also replace `declare' with
-`quote', or simply write \\='(et FORMS...).
-
-Supported forms are:
-  (@variable NAME TYPE-SPEC) - declare a global variable type.
-  (@alias NAME TYPE-SPEC) - define a type alias with no parameters."
-  (let* ((et-decl (alist-get 'et body)))
-    (dolist (entry et-decl)
-      (pcase entry
-        (`(@variable ,(and name (pred symbolp)) ,type-spec)
-         (put name 'et-variable-type (et-parse-type type-spec)))
-        (`(@alias ,(and name (pred symbolp)) ,type-spec)
-         (et--define-alias name (lambda () (et-q ,type-spec)) nil))
-        (_ (error "Unknown top-level et declaration: %s" entry))))))
-
-
-;;;; Preprocess expression
-
-(defun et-preprocess-expr (expr)
-  (pcase expr
-    ;; Macroexpanding will cause the declare forms to run
-    (`(defun . ,_body) (macroexpand expr))
-
-    (`(cl-defstruct . ,body) (et-preprocess-struct body))
-    (`(,(or 'declare 'quote) . ,body) (et-preprocess-declare body))))
 
 
 ;;;; Preprocess file
