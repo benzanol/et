@@ -413,7 +413,12 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 ;;;; Datatypes
 
-'(et (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
+'(et (@alias EtConstraint
+             (or (Tuple @Q:NEVER)
+                 (Tuple @Q:EQ EtGeneric *et-type)
+                 (Tuple @Q:GEQ EtGeneric *et-type)
+                 (Tuple @Q:LEQ EtGeneric *et-type)))
+     (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
      (@alias EtDatatypeProps
              (PList :args List<EtDatatypeRole>
                     :overlap True|List<Symbol>
@@ -1144,12 +1149,7 @@ DNF is the struct representing the matcher."
 ;;; Structure
 ;;;; Documentation
 
-'(et (@alias EtConstraint
-             (or (Tuple @Q:NEVER)
-                 (Tuple @Q:EQ EtGeneric *et-type)
-                 (Tuple @Q:GEQ EtGeneric *et-type)
-                 (Tuple @Q:LEQ EtGeneric *et-type)))
-     (@alias EtBothStructureFactor
+'(et (@alias EtBothStructureFactor
              (or (TupleStar @S:DT EtDatatypeName List<Any>)
                  (TupleStar @S:ALIAS EtAliasName List<*et-type>)
                  (Tuple @S:GENERIC EtGeneric)))
@@ -1216,6 +1216,7 @@ DNF is the struct representing the matcher."
     (cond
      ((and (consp spec) (symbolp (car spec)))
       (et--parse-spec-factor (car spec) (cdr spec)))
+     ((et-type-p spec) spec)
      ((symbolp spec) (et--parse-string (symbol-name spec)))
      ((stringp spec) (et--parse-string spec))
      ((numberp spec) (et--parse-sub (list 'literal spec)))
@@ -1401,8 +1402,9 @@ which are invalid for types."
                     collect
                     (pcase factor
                       (`(S:GENERIC ,var)
-                       (or (alist-get var gen-repls)
-                           (error "Replacement for %s not provided" var)))
+                       ;; Don't use alist-get, because the value of the replacement can be nil
+                       (if-let* ((entry (assq var gen-repls))) (cdr entry)
+                         (error "Replacement for %s not provided" var)))
                       (`(S:DT ,name . ,args)
                        (et-q (((S:DT ,name . ,(et--datatype-map-type-args name args sub))))))
                       (`(S:ALIAS ,name . ,args)
@@ -1576,7 +1578,7 @@ which are invalid for types."
   :print (format "@%s" var))
 
 (et--define-struct-segment S:SET set (dnf type)
-  :parse (list (et--parse-sub dnf) (et--parse-sub type))
+  :parse (list (et--parse-sub dnf) (et-parse-type type))
   :print (format "{match %s to %s}" (et--print-sub dnf) (et--print-sub type)))
 
 (et--define-struct-segment S:DT dt (name &rest args)
@@ -2328,7 +2330,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
                     (alias-type (cdar et--rec-transform-stack)))
                (when alias-type
                  (let* ((alias (et-type-case-value (car (et-type-cases alias-type)))))
-                   (et--define-alias (et-alias-name alias) (lambda () (list :type no-binds)) nil)))
+                   (et--define-alias (et-alias-name alias) [] no-binds :type-only t)))
                type))))
 
 

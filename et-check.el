@@ -403,13 +403,13 @@ RETURN is a parsable expression for the return type.
 \(fn FUNC [GENERICS] ARGLIST RETURN)"
   (declare (indent 2))
 
-  (let* ((gen-vec (when (vectorp (car arguments)) (append (pop arguments) nil)))
+  (let* ((gen-vec (when (vectorp (car arguments)) (pop arguments)))
          (arglist-spec (car arguments))
          (return-spec (cadr arguments))
          (func-type
           (if gen-vec
               (let* ((matcher (et-parse-matcher arglist-spec gen-vec))
-                     (output-struct (et--parse-struct return-spec (et-matcher-generics matcher))))
+                     (output-struct (et--parse-struct return-spec (et-matcher-generics matcher) 'TYPE)))
                 (et-dt 'DynFunction matcher output-struct))
             (et-dt 'Function (et-parse-type arglist-spec) (et-parse-type return-spec)))))
     (unless (eq (length arguments) 2)
@@ -493,12 +493,13 @@ PATH is the path to the subexpression."
 
 ;;;; Infer
 
-(defmacro et-checker-infer (type gens matcher-spec output-spec)
-  (cl-assert (vectorp gens))
-  (setq gens (append gens nil))
-  `(et--infer ,(et-parse-matcher matcher-spec gens)
-              ,type
-              (et-q ,(et--parse-struct output-spec gens))))
+(defmacro et-checker-infer (type gen-vec matcher-spec output-spec)
+  (pcase-let* ((`(,gens . ,constraints) (et--parse-gen-vec gen-vec)))
+    `(et--infer ,(make-et-matcher
+                  :generics gens :constraints constraints
+                  :dnf (et--parse-struct matcher-spec gens 'MATCHER))
+                ,type
+                (et-q ,(et--parse-struct output-spec gens 'TYPE)))))
 
 
 ;;; ============================================================
@@ -561,7 +562,7 @@ It will also define type signatures for the functions created by
                      (et--parse-struct
                       '(or (and True (bindsof (and T *placeholder)))
                            (and Nil (bindsof (subtract T *placeholder))))
-                      nil)))
+                      nil 'TYPE)))
                 (cl-subst (list 'S:DT 'Struct name)
                           (list 'S:DT 'Struct 'placeholder)
                           placeholder-struct

@@ -921,13 +921,13 @@ Backquote patterns are recursive:
 
 ;;;;; car/cdr
 
-(et-defalias MatchCar (car)
-  (or (and Nil (set ,car Nil))
-      (ConsR ,car Any)))
+(et-defalias MatchCar [T]
+  (or (and Nil (set T Nil))
+      (ConsR T Any)))
 
-(et-defalias MatchCdr (cdr)
-  (or (and Nil (set ,cdr Nil))
-      (ConsR Any ,cdr)))
+(et-defalias MatchCdr [T]
+  (or (and Nil (set T Nil))
+      (ConsR Any T)))
 
 (et-define-type-checker car [T] (Args (MatchCar T)) T)
 (et-define-type-checker cdr [T] (Args (MatchCdr T)) T)
@@ -1083,8 +1083,8 @@ Backquote patterns are recursive:
 
 ;;;;; append/nconc
 
-(et-defalias AppendFresh (elem tail)
-  (or ,tail (ConsFresh ,elem (AppendFresh ,elem ,tail))))
+(et-defalias AppendFresh [E R]
+  (or R (ConsFresh E (AppendFresh E R))))
 
 (defun et--append-return-type (input-type)
   (or (et-checker-infer input-type [] Nil Nil)
@@ -1840,25 +1840,27 @@ Freshness reasoning:
 ;;; ============================================================
 ;;; et macros
 
-(et-define-pcase-checker et? `(,type-spec ,_expr)
+(et-define-pcase-checker et: `(,_expr ,type-spec)
   (let* ((actual (et-checker-sub 1))
          (declared (et-parse-type type-spec)))
     (unless (et-subtype? actual declared)
       (et-checker-err 0 "Expected %s, found %s" (et-pp declared) (et-pp actual)))
-    actual))
+    declared))
 
-(et-define-pcase-checker et! `(,type-spec ,_expr)
+(et-define-pcase-checker et! `(,_expr ,type-spec)
   (let* ((actual (et-checker-sub 1))
          (declared (et-parse-type type-spec)))
-    (when (et-never-p (et--supersect actual declared))
+    (when (and (not (et-never-p actual))
+               (not (et-never-p declared))
+               (et-never-p (et--supersect actual declared)))
       (et-checker-err 0 "Types %s and %s have no overlap. Use et!! to supress this warning."
                       (et-pp declared) (et-pp actual)))
-    actual))
+    declared))
 
-(et-define-pcase-checker et!! `(,type-spec ,_expr)
-  (let* ((actual (et-checker-sub 1))
+(et-define-pcase-checker et!! `(,_expr ,type-spec)
+  (let* ((_actual (et-checker-sub 1))
          (declared (et-parse-type type-spec)))
-    actual))
+    declared))
 
 
 ;;; ============================================================
