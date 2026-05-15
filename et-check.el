@@ -409,7 +409,7 @@ RETURN is a parsable expression for the return type.
          (func-type
           (if gen-vec
               (let* ((matcher (et-parse-matcher arglist-spec gen-vec))
-                     (output-struct (et-parse-structure return-spec (et-matcher-generics matcher))))
+                     (output-struct (et--parse-struct return-spec (et-matcher-generics matcher))))
                 (et-dt 'DynFunction matcher output-struct))
             (et-dt 'Function (et-parse-type arglist-spec) (et-parse-type return-spec)))))
     (unless (eq (length arguments) 2)
@@ -498,7 +498,7 @@ PATH is the path to the subexpression."
   (setq gens (append gens nil))
   `(et--infer ,(et-parse-matcher matcher-spec gens)
               ,type
-              (et-q ,(et-parse-structure output-spec gens))))
+              (et-q ,(et--parse-struct output-spec gens))))
 
 
 ;;; ============================================================
@@ -538,7 +538,7 @@ It will also define type signatures for the functions created by
          ;; The struct type
          (struct-type (et-dt 'Struct name))
          ;; Generics must be defined in the first slot
-         (gen-vec (plist-get (car slot-forms) :et-generics))
+         (_gen-vec (plist-get (car slot-forms) :et-generics))
          ;; Parse slots
          (slots
           (cl-loop
@@ -558,7 +558,7 @@ It will also define type signatures for the functions created by
       (let* ((matcher (et-parse-matcher 'Any '(T)))
              (output-struct
               (let ((placeholder-struct
-                     (et-parse-structure
+                     (et--parse-struct
                       '(or (and True (bindsof (and T *placeholder)))
                            (and Nil (bindsof (subtract T *placeholder))))
                       nil)))
@@ -672,7 +672,7 @@ REQUIRED, OPTIONAL, KEY-PARAMS are alists of (SYMBOL . TYPE-SPEC-OR-NIL).
 REST-PARAM is either nil or a single (SYMBOL . TYPE-SPEC-OR-NIL) cons.
 
 Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
-  (let* ((parse (lambda (spec) (et-parse-structure (or spec 'Any) generics)))
+  (let* ((parse (lambda (spec) (et--parse-struct (or spec 'Any) generics 'MATCHER)))
          (required-structs (mapcar (lambda (p) (funcall parse (cdr p))) required))
          (optional-structs (mapcar (lambda (p) (funcall parse (cdr p))) optional))
          (tail (pcase rest-param
@@ -689,7 +689,7 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
     (if generics
         (make-et-matcher
          :generics generics
-         :dnf (et-structure-to-matcher-dnf struct generics))
+         :dnf struct)
       (et-structure-to-type struct))))
 
 (defun et--func-sig-required-chain (structs tail)
@@ -866,14 +866,15 @@ Each entry is one of:
     (put name 'et-function-type func-type))
 
   ;; Typecheck the defun
-  (unless et--preprocessing
-    (when-let* ((filename (bound-and-true-p byte-compile-current-file))
-                ((prog1 t (et-preprocess-file filename)))
-                (macroexp-frame (cl-find #'macroexp-macroexpand (backtrace-frames) :key #'cadr))
-                (defun-expr (car (caddr macroexp-frame)))
-                ((eq (car defun-expr) #'defun))
-                (result (et--check defun-expr)))
-      (et-show-result-errors result)))
+  (when-let* (((not et--preprocessing))
+              ((not (car (alist-get '@skip entries))))
+              (filename (bound-and-true-p byte-compile-current-file))
+              ((prog1 t (et-preprocess-file filename)))
+              (macroexp-frame (cl-find #'macroexp-macroexpand (backtrace-frames) :key #'cadr))
+              (defun-expr (car (caddr macroexp-frame)))
+              ((eq (car defun-expr) #'defun))
+              (result (et--check defun-expr)))
+    (et-show-result-errors result))
 
   ;; Return nil — no forms to splice into the defun body
   nil)
