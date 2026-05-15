@@ -589,6 +589,47 @@ element."
           (when rest-param (list rest-param)))))
 
 
+;;;; Preprocess struct
+
+(defun et--preprocess-cl-defstruct (path body)
+  "Preprocess a `cl-defstruct' expression."
+
+  (let* ((orig-path (append path nil))
+         (name-or-opts (car body))
+         (name (if (consp name-or-opts) (car name-or-opts) name-or-opts))
+         (opts (when (consp name-or-opts) (cdr name-or-opts)))
+         ;; Parse options for renamed functions
+         (conc-name (if-let* ((entry (assq :conc-name opts)))
+                        (cadr entry) (intern (format "%s-" name))))
+         (constructor (if-let* ((entry (assq :constructor opts)))
+                          (cadr entry) (intern (format "make-%s" name))))
+         (copier (if-let* ((entry (assq :copier opts)))
+                     (cadr entry) (intern (format "copy-%s" name))))
+         (predicate (if-let* ((entry (assq :predicate opts)))
+                        (cadr entry) (intern (format "%s-p" name))))
+
+         ;; Skip docstring
+         (slots-start (if (stringp (cadr body)) 2 1))
+         (slot-forms (nthcdr slots-start body))
+         slots gen-vec)
+
+    (dotimes (slot-idx (length slot-forms))
+      (setcdr path (append (cdr orig-path) (list (+ slots-start slot-idx))))
+
+      (pcase (nth slot-idx slot-forms)
+        ((and name (pred symbolp)) (push (list path name) slots))
+
+        (`(,(and name (pred symbolp)) ,default . ,plist)
+         (when-let* ((gv (plist-get plist :et-generics)))
+           (if (= 0 slot-idx) (setq gen-vec gv) (error "Generics must be set in the first slot")))
+         (push (cl-list* path name :default default plist) slots))
+
+        (_ (error "Invalid slot format"))))
+
+    (list orig-path name gen-vec slots
+          (list conc-name constructor copier predicate))))
+
+
 ;;;; Preprocess block
 
 (defun et--preprocess-alias-def (path args)
@@ -612,10 +653,11 @@ element."
     (_ (nconc path (list 0))
        (error "Expected format (@variable NAME TYPE)"))))
 
-(defun et-preprocess (exprs)
+(defun et--preprocess (exprs)
   (let* ((declared-aliases nil) ; List<(Spec-path Symbol)>
          (declared-vars nil) ; List<(Expr-path Symbol Spec)>
-         (declared-defuns nil) ; List<((Path . Name) Arglist (Path . GenVec)? (Path . Return) List<(Path Param Spec)>)>
+         (declared-defuns nil)
+         (declared-structs nil)
          (errors nil)
          (path nil))
 
@@ -635,109 +677,73 @@ element."
                  (error (push (cons path (error-message-string err)) errors)))))
             ;; Process a defun
             (`(defun ,(and name (pred symbolp)) ,(and arglist (pred listp)) . ,args)
-             (when-let* ((decl (et--preprocess-defun path name arglist args))) (push decl declared-defuns))))
+             (when-let* ((decl (et--preprocess-defun path name arglist args))) (push decl declared-defuns)))
+            ;; Process a struct
+            (`(cl-defstruct . ,body)
+             (push (et--preprocess-cl-defstruct path body) declared-structs)))
 
-        (error (push (cons path (error-message-string err)) errors))
-        ))))
+        (error (push (cons path (error-message-string err)) errors))))
+
+    (list errors
+          (nreverse declared-aliases)
+          (nreverse declared-vars)
+          (nreverse declared-defuns)
+          (nreverse declared-structs))))
 
 
-;;;; `cl-defstruct'
+;;;; Postprocess struct
 
-(defun et-preprocess-struct (body)
-  "Preprocess a struct with body BODY.
+(defun et--postprocess-struct ()
+  ;; Set et-struct-slots property
+  (put name 'et-struct-slots slots)
 
-This will assign the `et-struct-slots' property to the struct being
-defined.
+  ;; Predicate: (Args Any) -> Boolean with type narrowing
+  (when predicate
+    (let* ((matcher (et-parse-matcher 'Any '(T)))
+           (output-struct
+            (let ((placeholder-struct
+                   (et--parse-struct
+                    '(or (and True (bindsof (and T *placeholder)))
+                         (and Nil (bindsof (subtract T *placeholder))))
+                    nil 'TYPE)))
+              (cl-subst (list 'S:DT 'Struct name)
+                        (list 'S:DT 'Struct 'placeholder)
+                        placeholder-struct
+                        :test #'equal))))
+      (put predicate 'et-function-type
+           (et-dt 'DynFunction matcher output-struct))))
 
-The `et-struct-slots' property is an alist from slot names to plists,
-where each plist is (:type TYPE :read-only BOOL). The type is determined
-by parsing the `:et' property of the slot. If `:et' is not specified,
-the type defaults to `Any'.
-
-It will also define type signatures for the functions created by
-`cl-defstruct'."
-
-  (let* (;; Parse NAME-OR-OPTIONS
-         (name-or-opts (car body))
-         (name (if (consp name-or-opts) (car name-or-opts) name-or-opts))
-         (opts (when (consp name-or-opts) (cdr name-or-opts)))
-         ;; Parse options for renamed functions
-         (conc-name (if-let* ((entry (assq :conc-name opts)))
-                        (cadr entry) (intern (format "%s-" name))))
-         (constructor (if-let* ((entry (assq :constructor opts)))
-                          (cadr entry) (intern (format "make-%s" name))))
-         (copier (if-let* ((entry (assq :copier opts)))
-                     (cadr entry) (intern (format "copy-%s" name))))
-         (predicate (if-let* ((entry (assq :predicate opts)))
-                        (cadr entry) (intern (format "%s-p" name))))
-         ;; Skip docstring
-         (slot-forms (let ((rest (cdr body)))
-                       (if (stringp (car rest)) (cdr rest) rest)))
-         ;; The struct type
-         (struct-type (et-dt 'Struct name))
-         ;; Generics must be defined in the first slot
-         (_gen-vec (plist-get (car slot-forms) :et-generics))
-         ;; Parse slots
-         (slots
-          (cl-loop
-           for slot-form in slot-forms
-           for slot-name = (if (consp slot-form) (car slot-form) slot-form)
-           for slot-plist = (when (consp slot-form) (cddr slot-form))
-           for et-spec = (plist-get slot-plist :et)
-           for read-only = (plist-get slot-plist :read-only)
-           for slot-type = (if et-spec (et-parse-type et-spec) (et-any))
-           collect (cons slot-name (list :type slot-type :read-only read-only)))))
-
-    ;; Set et-struct-slots property
-    (put name 'et-struct-slots slots)
-
-    ;; Predicate: (Args Any) -> Boolean with type narrowing
-    (when predicate
-      (let* ((matcher (et-parse-matcher 'Any '(T)))
-             (output-struct
-              (let ((placeholder-struct
-                     (et--parse-struct
-                      '(or (and True (bindsof (and T *placeholder)))
-                           (and Nil (bindsof (subtract T *placeholder))))
-                      nil 'TYPE)))
-                (cl-subst (list 'S:DT 'Struct name)
-                          (list 'S:DT 'Struct 'placeholder)
-                          placeholder-struct
-                          :test #'equal))))
-        (put predicate 'et-function-type
-             (et-dt 'DynFunction matcher output-struct))))
-
-    ;; Accessors: (Args Struct<NAME>) -> SLOT-TYPE
-    (dolist (slot slots)
-      (let* ((slot-name (car slot))
-             (slot-type (plist-get (cdr slot) :type))
-             (accessor-name (if conc-name
-                                (intern (format "%s%s" conc-name slot-name))
-                              slot-name)))
-        (put accessor-name 'et-function-type
-             (et-dt 'Function
-                    (et-alias 'ConsR struct-type (et-literal nil))
-                    slot-type))))
-
-    ;; Constructor: (&key SLOTS...) -> Struct<NAME>
-    (when constructor
-      (let* ((plist-args
-              (cl-loop for (slot-name . plist) in slots
-                       nconc (list (intern (format ":%s" slot-name))
-                                   (plist-get plist :type)))))
-        (put constructor 'et-function-type
-             (et-dt 'Function
-                    (if plist-args
-                        (apply #'et-dt 'PList plist-args)
-                      (et-literal nil))
-                    struct-type))))
-
-    ;; Copier: (Args Struct<NAME>) -> Struct<NAME>
-    (when copier
-      (put copier 'et-function-type
+  ;; Accessors: (Args Struct<NAME>) -> SLOT-TYPE
+  (dolist (slot slots)
+    (let* ((slot-name (car slot))
+           (slot-type (plist-get (cdr slot) :type))
+           (accessor-name (if conc-name
+                              (intern (format "%s%s" conc-name slot-name))
+                            slot-name)))
+      (put accessor-name 'et-function-type
            (et-dt 'Function
                   (et-alias 'ConsR struct-type (et-literal nil))
-                  struct-type)))))
+                  slot-type))))
+
+  ;; Constructor: (&key SLOTS...) -> Struct<NAME>
+  (when constructor
+    (let* ((plist-args
+            (cl-loop for (slot-name . plist) in slots
+                     nconc (list (intern (format ":%s" slot-name))
+                                 (plist-get plist :type)))))
+      (put constructor 'et-function-type
+           (et-dt 'Function
+                  (if plist-args
+                      (apply #'et-dt 'PList plist-args)
+                    (et-literal nil))
+                  struct-type))))
+
+  ;; Copier: (Args Struct<NAME>) -> Struct<NAME>
+  (when copier
+    (put copier 'et-function-type
+         (et-dt 'Function
+                (et-alias 'ConsR struct-type (et-literal nil))
+                struct-type))))
 
 
 ;;;; `declare'/`quote'
