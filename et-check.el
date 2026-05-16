@@ -536,8 +536,13 @@ PATH is the path to the subexpression."
     (let* ((source (cons (append orig-path (list (+ 4 declare-pos)))
                          (nthcdr (1+ declare-pos) args)))
            (et-block-path et--processing-path)
-           (params (et--parse-arglist-params arglist))
-           (param-types (list nil nil nil nil))
+           (params
+            (cl-loop for group in (et--parse-arglist-params arglist)
+                     for group-idx upfrom 0
+                     collect
+                     (cl-loop for name in group
+                              for spec = (if (eq 3 group-idx) 'ListR<Any> 'Any)
+                              collect (list nil name spec))))
            return gen-vec props)
 
       (dotimes (form-idx (length et-block))
@@ -566,9 +571,13 @@ PATH is the path to the subexpression."
            (setq props (cl-list* :skip show props)))
 
           (`(,(and name (pred symbolp)) ,spec)
-           (if-let* ((idx (cl-position name params :test #'memq)))
-               (push (list et--processing-path name spec) (nth idx param-types))
-             (error "Not a parameter: %s" name)))
+           (cl-loop for group in params
+                    for entry = (cl-find name group :key #'cadr)
+                    when entry
+                    do (progn (setcar entry et--processing-path)
+                              (setf (caddr entry) spec)
+                              (cl-return nil))
+                    finally do (error "Not a parameter: %s" name)))
 
           (_ (error "Invalid format"))))
 
@@ -576,7 +585,7 @@ PATH is the path to the subexpression."
         (list orig-path name
               gen-vec return source
               props
-              param-types)))))
+              params)))))
 
 (defun et--parse-arglist-params (arglist)
   "Parse ARGLIST into (REQUIRED OPTIONAL KEY REST).
