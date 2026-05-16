@@ -553,12 +553,12 @@ PATH is the path to the subexpression."
 
           (`(@return ,spec)
            (when return (error "Multiple @return clauses"))
-           (setq return (cons et--processing-path spec)))
+           (setq return (cons (append et--processing-path (list 1)) spec)))
           (`(@return . ,_) (error "Expected (@return TYPE)"))
 
           (`(@generics ,(and gv (pred vectorp)))
            (when gen-vec (error "Multiple @generic clauses"))
-           (setq gen-vec (cons et--processing-path gv)))
+           (setq gen-vec (cons (append et--processing-path (list 1)) gv)))
           (`(@generics . ,_) (error "Expected (@generics [...])"))
 
           (`(@skip)
@@ -574,7 +574,7 @@ PATH is the path to the subexpression."
            (cl-loop for group in params
                     for entry = (cl-find name group :key #'cadr)
                     when entry
-                    do (progn (setcar entry et--processing-path)
+                    do (progn (setcar entry (append et--processing-path (list 1)))
                               (setf (caddr entry) spec)
                               (cl-return nil))
                     finally do (error "Not a parameter: %s" name)))
@@ -638,29 +638,35 @@ element."
          ;; Skip docstring
          (slots-start (if (stringp (cadr body)) 2 1))
          (slot-forms (nthcdr slots-start body))
-         slots gen-vec)
+         slots gen-vec generics)
 
     (dotimes (slot-idx (length slot-forms))
-      (setq et--processing-path (append orig-path (list (+ slots-start slot-idx))))
+      (setq et--processing-path (append orig-path (list (+ 1 slots-start slot-idx))))
 
       (pcase (nth slot-idx slot-forms)
         ((and name (pred symbolp)) (push (list et--processing-path name) slots))
 
         (`(,(and name (pred symbolp)) ,default . ,plist)
-         (when-let* ((gv-pos (cl-position :et-generics plist)) ((= 0 (mod gv-pos 2))))
-           (if (/= 0 slot-idx) (error "Generics must be set in the first slot")
-             (setq gen-vec (cons (append et--processing-path (list (1+ gv-pos)))
-                                 (nth (1+ gv-pos) plist)))))
-
+         ;; Process the slot type
          (if-let* ((type-pos (cl-position :et plist)) ((= 0 (mod type-pos 2))))
              (push (list et--processing-path name default
-                         (cons (append et--processing-path type-pos) (nth (1+ type-pos) plist)))
+                         (cons (append et--processing-path (list (+ 3 type-pos))) (nth (1+ type-pos) plist)))
                    slots)
-           (push (list et--processing-path name default) slots)))
+           (push (list et--processing-path name default) slots))
+
+         ;; Process generics
+         (when-let* ((gv-pos (cl-position :et-generics plist)) ((= 0 (mod gv-pos 2))))
+           (cl-callf append et--processing-path (list (+ 3 gv-pos)))
+           (if (= 0 slot-idx)
+               (setq gen-vec (cons (append et--processing-path (list (+ 3 gv-pos)))
+                                   (nth (1+ gv-pos) plist))
+                     generics (et--gen-vec-generics (cdr gen-vec)))
+             (error "Generics must be set in the first slot"))))
 
         (_ (error "Invalid slot format"))))
 
-    (put name 'et-struct (list :generics (et--gen-vec-generics gen-vec)))
+    (setq )
+    (put name 'et-struct (list :generics generics))
 
     (list orig-path name gen-vec slots
           (list conc-name constructor copier predicate))))
@@ -669,7 +675,7 @@ element."
 ;;;; Preprocess helpers
 
 (defun et--preprocess-alias-def (args)
-  (if-let* ((spec-pos (1- (length args)))
+  (if-let* ((spec-pos (length args))
             (name (pop args))
             ((symbolp name))
             (gen-vec (if (vectorp (car args)) (pop args) []))
@@ -871,12 +877,12 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 
     ;; Predicate: (Any) -> True&{bindsof Struct<NAME>} | Nil&{bindsof ¬Struct<NAME>}
     (when predicate
-      (let* ((matcher (et-parse-matcher 'Any '(T)))
+      (let* ((matcher (et-parse-matcher 'Any [T]))
              (placeholder-struct
               (et--parse-struct
                '(or (and True (bindsof (and T *placeholder)))
                     (and Nil (bindsof (subtract T *placeholder))))
-               nil 'TYPE))
+               '(T) 'TYPE))
              (gs (mapcar (lambda (g) (list (list (list 'S:GENERIC g)))) generics))
              (output-struct
               (cl-subst (cons 'S:DT (cons 'Struct (cons name gs)))
@@ -1086,11 +1092,11 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
                for start-line = (line-number-at-pos)
                for start-col = (1+ (current-column))
                do (ignore-errors (forward-sexp))
-               do (princ (format "%s:%d:%d:%s:%s: %s: %s\n"
+               do (princ (format "%s:%d:%d:%s:%s: %s: %s path=%s\n"
                                  filename
                                  start-line start-col
                                  (line-number-at-pos) (1+ (current-column))
-                                 severity msg))
+                                 severity msg path))
                (flycheck-mode 1)))))
 
 

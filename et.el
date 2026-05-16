@@ -53,12 +53,11 @@
 
 (defun et--traverse-buffer-expr (path)
   (goto-char (point-min))
-  (forward-comment (buffer-size))
   (dotimes (_ (or (car path) 0)) (forward-sexp))
+  (forward-comment (buffer-size))
 
   (dolist (idx (cdr path))
     ;; Skip whitespace and comments before looking at the next form
-    (forward-comment (buffer-size))
     (cond
      ((looking-at-p ",\\|`\\|#?']")
       (if (eq idx 1)
@@ -70,7 +69,9 @@
       (dotimes (_ idx) (forward-sexp))
       (forward-comment (buffer-size)))
 
-     (t (error "Invalid expression container: %s" (thing-at-point 'char))))))
+     (t (error "Invalid expression container: %s" (thing-at-point 'char))))
+
+    (forward-comment (buffer-size))))
 
 
 ;;;; Repeat
@@ -385,12 +386,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 ;;;; Datatypes
 
-[et (@alias EtConstraint
-            (or (Tuple @Q:NEVER)
-                (Tuple @Q:EQ EtGeneric *et-type)
-                (Tuple @Q:GEQ EtGeneric *et-type)
-                (Tuple @Q:LEQ EtGeneric *et-type)))
-    (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
+[et (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
     (@alias EtDatatypeProps
             (PList :args List<EtDatatypeRole>
                    :overlap True|List<Symbol>
@@ -401,8 +397,6 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                                @Function @DynFunction
                                @Struct @Scoped))
     (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>)]
-
-
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
@@ -713,12 +707,12 @@ FUNC is called with one argument, the current argument"
     (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
     (@alias EtAliasName NonNilSymbol)
     (@alias EtAliasDefinitionPlist
-            (Plist @:restrict (or @TYPE @MATCHER @BOTH)
-                   @:custom (or Nil (Function Args<List<Any>> EtStructure))
-                   @:generics List<NonNilSymbol>
-                   @:constraints List<EtConstraint>
-                   @:structure (or Nil EtStructure)
-                   @:type (or Nil *et-type)))]
+            (PList :restrict (or @TYPE @MATCHER @BOTH)
+                   :custom (or Nil (Function Args<List<Any>> EtStructure))
+                   :generics List<NonNilSymbol>
+                   :constraints List<EtConstraint>
+                   :structure (or Nil EtStructure)
+                   :type (or Nil *et-type)))]
 
 (defmacro et-define-custom-alias (name arglist &rest body)
   (declare (indent 2))
@@ -740,10 +734,14 @@ FUNC is called with one argument, the current argument"
   (declare (et (gen-vec EtGenVec) (@return List<EtGeneric>) (@skip)))
 
   (when gen-vec
-    (cl-loop for item across gen-vec
-             for gen = (if (symbolp item) item (cadr item))
-             unless (memq gen gens) collect gen into gens
-             finally return gens)))
+    (cl-loop for gen-spec across gen-vec
+             for gen =
+             (pcase gen-spec
+               (`(,(or '= '<= '>=) ,(and gen (pred symbolp)) ,_type-spec) gen)
+               ((pred symbolp) gen-spec)
+               (_ (error "Invalid generic entry: %s" gen-spec)))
+             unless (memq gen generics) collect gen into generics
+             finally return generics)))
 
 (defun et--gen-vec-constraints (gen-vec)
   "Parse a generic vector to a list of generics and constraints."
@@ -840,13 +838,13 @@ FUNC is called with one argument, the current argument"
 
 (defun et--alias-call (name args target)
   "Expand the alias with name NAME, passing arguments ARGS."
-  (declare (et (@generics [(T <= @TYPE|@MATCHER)])
+  (declare (et (@generics [(<= T @TYPE|@MATCHER)])
                (name EtAliasName)
-               (args (ListR (and (extends @TYPE T *et-type Never)
-                                 (extends @MATCHER T EtMatcherStructure Never))))
+               (args (ListR (and (extends? @TYPE T *et-type Never)
+                                 (extends? @MATCHER T EtMatcherStructure Never))))
                (target T)
-               (@return (or (extends @TYPE T *et-type Never)
-                            (extends @MATCHER T EtMatcherStructure Never)))
+               (@return (or (extends? @TYPE T *et-type Never)
+                            (extends? @MATCHER T EtMatcherStructure Never)))
                (@skip)))
 
   (let* ((plist (or (get name 'et-alias) (error "Alias %s is not defined" name)))
@@ -925,7 +923,7 @@ a valid `et-type-case-value'."
 
 DNF is the struct representing the matcher."
   (generics nil :et List<EtGeneric>)
-  (dnf nil :et EtMatcherDnf)
+  (dnf nil :et EtMatcherStructure)
   (constraints nil :et List<EtConstraint>))
 
 (defun et--verify-matcher (matcher)
@@ -1140,26 +1138,32 @@ DNF is the struct representing the matcher."
 ;;; Structure
 ;;;; Documentation
 
-[et (@alias EtBothStructureFactor
-            (or (TupleStar @S:DT EtDatatypeName List<Any>)
-                (TupleStar @S:ALIAS EtAliasName List<*et-type>)
-                (Tuple @S:GENERIC EtGeneric)))
-    (@alias EtTypeStructureFactor
-            (or (Tuple @S:TYPE *et-type)
-                (Tuple @S:BIND NonNilSymbol EtTypeStructure)
-                (Tuple @S:TYPEOF EtTypeStructure)
-                (Tuple @S:BINDS-OF EtTypeStructure)
-                (Tuple @S:SUBTRACT EtTypeStructure EtTypeStructure)
-                (Tuple @S:INFER List<EtGeneric> EtMatcherStructure EtTypeStructure EtTypeStructure EtTypeStructure)
-                (Tuple @S:EXTENDS EtTypeStructure EtTypeStructure EtTypeStructure EtTypeStructure)
-                (TupleStar @S:EVAL Function<List<*et-type>~*et-type> List<*et-type>)))
-    (@alias EtMatcherStructureFactor
-            (or (Tuple @S:SET EtMatcherStructure EtTypeStructure)))
-    (@alias EtTypeStructure
-            (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
-    (@alias EtMatcherStructure
-            (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
-    (@alias EtBothStructure (List (List EtBothStructureFactor)))]
+[et
+ (@alias EtConstraint
+         (or (Tuple @Q:NEVER)
+             (Tuple @Q:EQ EtGeneric *et-type)
+             (Tuple @Q:GEQ EtGeneric *et-type)
+             (Tuple @Q:LEQ EtGeneric *et-type)))
+ (@alias EtBothStructureFactor
+         (or (TupleStar @S:DT EtDatatypeName List<Any>)
+             (TupleStar @S:ALIAS EtAliasName List<*et-type>)
+             (Tuple @S:GENERIC EtGeneric)))
+ (@alias EtTypeStructureFactor
+         (or (Tuple @S:TYPE *et-type)
+             (Tuple @S:BIND NonNilSymbol EtTypeStructure)
+             (Tuple @S:TYPEOF EtTypeStructure)
+             (Tuple @S:BINDS-OF EtTypeStructure)
+             (Tuple @S:SUBTRACT EtTypeStructure EtTypeStructure)
+             (Tuple @S:INFER List<EtGeneric> EtMatcherStructure EtTypeStructure EtTypeStructure EtTypeStructure)
+             (Tuple @S:EXTENDS EtTypeStructure EtTypeStructure EtTypeStructure EtTypeStructure)
+             (TupleStar @S:EVAL Function<List<*et-type>~*et-type> List<*et-type>)))
+ (@alias EtMatcherStructureFactor
+         (or (Tuple @S:SET EtMatcherStructure EtTypeStructure)))
+ (@alias EtTypeStructure
+         (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
+ (@alias EtMatcherStructure
+         (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
+ (@alias EtBothStructure (List (List EtBothStructureFactor)))]
 
 ;; A structure is a general format that can be parsed to either a matcher
 ;; or a type. RESTRICT can be either `type' or `matcher' to ensure the
