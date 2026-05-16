@@ -1009,7 +1009,7 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
       (condition-case err (apply #'et--populate-defstruct (cdr info))
         (error (push (cons et--processing-path (error-message-string err)) errors))))
 
-    (list errors defuns)))
+    (list errors (delq nil defuns))))
 
 
 ;;;; Process buffer
@@ -1070,6 +1070,28 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
               for expr = (condition-case _ (read (current-buffer))
                            (error (cl-return exprs)))
               collect expr into exprs))))
+
+
+;;;; Flycheck check
+
+(defun et--flycheck-check-file ()
+  "Entry point for batch-mode type checking."
+  (let* ((filename (pop command-line-args-left)))
+    (with-temp-buffer
+      (insert-file-contents filename)
+      (emacs-lisp-mode)
+      (cl-loop for (path severity msg) in (et--process-buffer)
+               do (goto-char (point-min))
+               do (ignore-errors (et--traverse-buffer-expr path))
+               for start-line = (line-number-at-pos)
+               for start-col = (1+ (current-column))
+               do (ignore-errors (forward-sexp))
+               do (princ (format "%s:%d:%d:%s:%s: %s: %s\n"
+                                 filename
+                                 start-line start-col
+                                 (line-number-at-pos) (1+ (current-column))
+                                 severity msg))
+               (flycheck-mode 1)))))
 
 
 ;;; ============================================================

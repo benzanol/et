@@ -22,8 +22,8 @@
 ;;; Commentary:
 ;;; Code:
 
+(require 'cl-lib)
 (require 'et-macros)
-(require 'flycheck)
 (require 'seq)
 
 
@@ -52,53 +52,25 @@
   (format "\0;;error-path:%s" (append et--error-path path)))
 
 (defun et--traverse-buffer-expr (path)
-  (dolist (idx path)
+  (goto-char (point-min))
+  (forward-comment (buffer-size))
+  (dotimes (_ (or (car path) 0)) (forward-sexp))
+
+  (dolist (idx (cdr path))
+    ;; Skip whitespace and comments before looking at the next form
+    (forward-comment (buffer-size))
     (cond
-     ((looking-at-p "[`']")
+     ((looking-at-p ",\\|`\\|#?']")
       (if (eq idx 1)
-          (forward-char 1)
+          (goto-char (match-end 0))
         (error "Only valid subexpr of quote is 1")))
 
      ((looking-at-p "[([]")
       (forward-char 1)
       (dotimes (_ idx) (forward-sexp))
-      (forward-sexp)
-      (backward-sexp))
+      (forward-comment (buffer-size)))
 
      (t (error "Invalid expression container: %s" (thing-at-point 'char))))))
-
-(defun et--flycheck-reposition-error (err)
-  "If ERR has a ;;error-path: sentinel, reposition it."
-  (ignore ; return nil so other handlers still run
-   (ignore-errors
-     (when-let* ((msg (flycheck-error-message err))
-                 (match (string-match "\0;;error-path:\\((.*)\\)" msg))
-                 (path (car (read-from-string (match-string 1 msg))))
-                 (prev-start t))
-
-       ;; Set the level of warnings to info
-       (if (eq (flycheck-error-level err) 'warning)
-           (setf (flycheck-error-level err) 'info))
-
-       ;; Find the macro call in the buffer and walk the path
-       (with-current-buffer (flycheck-error-buffer err)
-         (save-excursion
-           (goto-char (flycheck-error-pos err)) ; start near the error
-           (beginning-of-defun)
-
-           (et--traverse-buffer-expr path)
-
-           (setf (flycheck-error-line err) (line-number-at-pos))
-           (setf (flycheck-error-column err) (1+ (current-column)))
-           (forward-sexp)
-           (setf (flycheck-error-end-line err) (line-number-at-pos))
-           (setf (flycheck-error-end-column err) (1+ (current-column)))
-
-           ;; Strip the path from the displayed message
-           (setf (flycheck-error-message err)
-                 (replace-regexp-in-string "\\\\n" "\n" (substring msg 0 match)))))))))
-
-(add-hook 'flycheck-process-error-functions #'et--flycheck-reposition-error)
 
 
 ;;;; Repeat
