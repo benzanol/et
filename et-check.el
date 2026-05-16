@@ -506,7 +506,7 @@ PATH is the path to the subexpression."
 ;;; ============================================================
 ;;; Preprocessing
 
-(defvar et--preprocessing-path nil)
+(defvar et--processing-path nil)
 
 
 ;;;; Preprocess defun
@@ -524,32 +524,32 @@ PATH is the path to the subexpression."
                            (List (Tuple List<Integer> Symbol Any)) ; Key
                            (List (Tuple List<Integer> Symbol Any))))))) ; Rest
 
-  (when-let* ((orig-path et--preprocessing-path)
+  (when-let* ((orig-path et--processing-path)
               (declare-pos (cl-position 'declare args :key #'car))
               (declare-block (nth declare-pos args))
               (et-pos (cl-position 'et declare-block :key #'car))
               (et-block (nth et-pos declare-block)))
-    (cl-callf append et--preprocessing-path (list (+ declare-pos 3) et-pos))
+    (cl-callf append et--processing-path (list (+ declare-pos 3) et-pos))
 
-    (let* ((et-block-path et--preprocessing-path)
+    (let* ((et-block-path et--processing-path)
            (params (et--parse-arglist-params arglist))
            (param-types (list nil nil nil nil))
-           return gens-qs props)
+           return gen-vec props)
 
       (dotimes (form-idx (length et-block))
-        (setq et--preprocessing-path (append et-block-path (list form-idx)))
+        (setq et--processing-path (append et-block-path (list form-idx)))
 
         (pcase (nth form-idx et-block)
           ((guard (eq 0 form-idx))) ; Skip the `et' symbol
 
           (`(@return ,spec)
            (when return (error "Multiple @return clauses"))
-           (setq return (cons et--preprocessing-path spec)))
+           (setq return (cons et--processing-path spec)))
           (`(@return . ,_) (error "Expected (@return TYPE)"))
 
-          (`(@generics ,(and gen-vec (pred vectorp)))
-           (when gens-qs (error "Multiple @generic clauses"))
-           (setq gens-qs (cons et--preprocessing-path gen-vec)))
+          (`(@generics ,(and gv (pred vectorp)))
+           (when gen-vec (error "Multiple @generic clauses"))
+           (setq gen-vec (cons et--processing-path gv)))
           (`(@generics . ,_) (error "Expected (@generics [...])"))
 
           (`(@skip)
@@ -563,14 +563,14 @@ PATH is the path to the subexpression."
 
           (`(,(and name (pred symbolp)) ,spec)
            (if-let* ((idx (cl-position name params :test #'memq)))
-               (push (list et--preprocessing-path name spec) (nth idx param-types))
+               (push (list et--processing-path name spec) (nth idx param-types))
              (error "Not a parameter: %s" name)))
 
           (_ (error "Invalid format"))))
 
       (when return
         (cl-list* orig-path name
-                  gens-qs return props
+                  gen-vec return props
                   param-types)))))
 
 (defun et--parse-arglist-params (arglist)
@@ -607,7 +607,7 @@ element."
 (defun et--preprocess-cl-defstruct (body)
   "Preprocess a `cl-defstruct' expression."
 
-  (let* ((orig-path et--preprocessing-path)
+  (let* ((orig-path et--processing-path)
          (name-or-opts (car body))
          (name (if (consp name-or-opts) (car name-or-opts) name-or-opts))
          (opts (when (consp name-or-opts) (cdr name-or-opts)))
@@ -627,22 +627,22 @@ element."
          slots gen-vec)
 
     (dotimes (slot-idx (length slot-forms))
-      (setq et--preprocessing-path (append orig-path (list (+ slots-start slot-idx))))
+      (setq et--processing-path (append orig-path (list (+ slots-start slot-idx))))
 
       (pcase (nth slot-idx slot-forms)
-        ((and name (pred symbolp)) (push (list et--preprocessing-path name) slots))
+        ((and name (pred symbolp)) (push (list et--processing-path name) slots))
 
         (`(,(and name (pred symbolp)) ,default . ,plist)
          (when-let* ((gv-pos (cl-position :et-generics plist)) ((= 0 (mod gv-pos 2))))
            (if (/= 0 slot-idx) (error "Generics must be set in the first slot")
-             (setq gen-vec (cons (append et--preprocessing-path (list (1+ gv-pos)))
+             (setq gen-vec (cons (append et--processing-path (list (1+ gv-pos)))
                                  (nth (1+ gv-pos) plist)))))
 
          (if-let* ((type-pos (cl-position :et plist)) ((= 0 (mod type-pos 2))))
-             (push (list et--preprocessing-path name default
-                         (cons (append et--preprocessing-path type-pos) (nth (1+ type-pos) plist)))
+             (push (list et--processing-path name default
+                         (cons (append et--processing-path type-pos) (nth (1+ type-pos) plist)))
                    slots)
-           (push (list et--preprocessing-path name default) slots)))
+           (push (list et--processing-path name default) slots)))
 
         (_ (error "Invalid slot format"))))
 
@@ -652,62 +652,7 @@ element."
           (list conc-name constructor copier predicate))))
 
 
-;;;; Postprocess struct
-
-(defun et--postprocess-struct ()
-  ;; Set et-struct-slots property
-  (put name 'et-struct-slots slots)
-
-  ;; Predicate: (Args Any) -> Boolean with type narrowing
-  (when predicate
-    (let* ((matcher (et-parse-matcher 'Any '(T)))
-           (output-struct
-            (let ((placeholder-struct
-                   (et--parse-struct
-                    '(or (and True (bindsof (and T *placeholder)))
-                         (and Nil (bindsof (subtract T *placeholder))))
-                    nil 'TYPE)))
-              (cl-subst (list 'S:DT 'Struct name)
-                        (list 'S:DT 'Struct 'placeholder)
-                        placeholder-struct
-                        :test #'equal))))
-      (put predicate 'et-function-type
-           (et-dt 'DynFunction matcher output-struct))))
-
-  ;; Accessors: (Args Struct<NAME>) -> SLOT-TYPE
-  (dolist (slot slots)
-    (let* ((slot-name (car slot))
-           (slot-type (plist-get (cdr slot) :type))
-           (accessor-name (if conc-name
-                              (intern (format "%s%s" conc-name slot-name))
-                            slot-name)))
-      (put accessor-name 'et-function-type
-           (et-dt 'Function
-                  (et-alias 'ConsR struct-type (et-literal nil))
-                  slot-type))))
-
-  ;; Constructor: (&key SLOTS...) -> Struct<NAME>
-  (when constructor
-    (let* ((plist-args
-            (cl-loop for (slot-name . plist) in slots
-                     nconc (list (intern (format ":%s" slot-name))
-                                 (plist-get plist :type)))))
-      (put constructor 'et-function-type
-           (et-dt 'Function
-                  (if plist-args
-                      (apply #'et-dt 'PList plist-args)
-                    (et-literal nil))
-                  struct-type))))
-
-  ;; Copier: (Args Struct<NAME>) -> Struct<NAME>
-  (when copier
-    (put copier 'et-function-type
-         (et-dt 'Function
-                (et-alias 'ConsR struct-type (et-literal nil))
-                struct-type))))
-
-
-;;;; Preprocess block
+;;;; Preprocess helpers
 
 (defun et--preprocess-alias-def (args)
   (if-let* ((spec-pos (length args))
@@ -717,18 +662,21 @@ element."
             (pb (ignore-errors (et--props-and-body args))))
       ;; Just declare the alias, don't ensure its validity by parsing yet
       (progn (apply #'et--declare-alias name gen-vec (cdr pb) (car pb))
-             (list (append et--preprocessing-path (list spec-pos)) name))
+             (list (append et--processing-path (list spec-pos)) name))
 
-    (cl-callf append et--preprocessing-path (list 0))
+    (cl-callf append et--processing-path (list 0))
     (error "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)")))
 
 (defun et--preprocess-variable-def (args)
   (pcase args
     (`(,(and name (pred symbolp)) ,spec)
-     (list et--preprocessing-path name spec))
+     (list et--processing-path name spec))
 
-    (_ (cl-callf append et--preprocessing-path (list 0))
+    (_ (cl-callf append et--processing-path (list 0))
        (error "Expected format (@variable NAME TYPE)"))))
+
+
+;;;; Preprocess
 
 (defun et--preprocess (exprs)
   (let* ((declared-aliases nil) ; List<(Spec-path Symbol)>
@@ -736,17 +684,17 @@ element."
          (declared-defuns nil)
          (declared-structs nil)
          (errors nil)
-         (et--preprocessing-path nil))
+         (et--processing-path nil))
 
     ;; Process all exprs, collecting things that were declared without parsing anything
     (dotimes (expr-idx (length exprs))
-      (setq et--preprocessing-path (list expr-idx))
+      (setq et--processing-path (list expr-idx))
       (condition-case err
           (pcase (nth expr-idx exprs)
             ;; Process a root declaration block
             (`[et .. ,forms]
              (dotimes (form-idx forms)
-               (setq et--preprocessing-path (list expr-idx (1+ form-idx)))
+               (setq et--processing-path (list expr-idx (1+ form-idx)))
                (pcase (nth form-idx forms)
                  (`(@alias . ,args) (push (et--preprocess-alias-def args) declared-aliases))
                  (`(@variable . ,args) (push (et--preprocess-variable-def args) declared-vars)))))
@@ -757,7 +705,7 @@ element."
             (`(cl-defstruct . ,body)
              (push (et--preprocess-cl-defstruct body) declared-structs)))
 
-        (error (push (cons et--preprocessing-path (error-message-string err)) errors))))
+        (error (push (cons et--processing-path (error-message-string err)) errors))))
 
     (list errors
           (nreverse declared-aliases)
@@ -766,61 +714,64 @@ element."
           (nreverse declared-structs))))
 
 
-;;;; Preprocess file
+;;;; Process defun
+;;;;; Root
 
-(defvar et--preprocessed-files nil
-  "List of files that have been preprocessed.")
+(defun et--process-defun (name gen-vec return _props param-types)
+  (let* ((_ (setq et--processing-path (car gen-vec)))
+         (generics (et--gen-vec-generics (cdr gen-vec)))
+         (constraints (et--gen-vec-constraints (cdr gen-vec)))
+         (restrict (if generics 'MATCHER 'BOTH))
 
-(defvar et--preprocessing nil
-  "Currently performing preprocessing.")
+         (param-structs
+          (cl-loop for group in param-types
+                   collect
+                   (cl-loop for (path name spec) in group
+                            do (setq et--processing-path path)
+                            collect (cons name (et--parse-struct spec generics restrict)))))
 
-(defun et-preprocess-buffer ()
-  (interactive)
-  (let* ((et--preprocessing t))
-    (save-excursion
-      (goto-char (point-min))
-      (while (when-let* ((expr (ignore-errors (read (current-buffer)))))
-               (ignore-errors (et-preprocess-expr expr))
-               t)))))
+         (input (apply #'et--generate-func-input generics constraints param-structs))
 
-(defun et-preprocess-file (file)
-  (unless (member file et--preprocessed-files)
-    (push file et--preprocessed-files)
-
-    (with-temp-buffer
-      (insert-file-contents file)
-      (et-preprocess-buffer))))
+         (_ (setq et--processing-path (car return)))
+         (structure (et--parse-struct (cdr return) generics 'TYPE))
+         (func-type
+          (if generics
+              (et-dt 'DynFunction input structure)
+            (et-dt 'Function input (et-structure-to-type structure nil)))))
+    (put name 'et-function-type func-type)))
 
 
-;;; ============================================================
-;;; Function types
-;;;; Generate input type
+;;;;; Input type
 
-(defun et--generate-func-input (generics required optional key-params rest-param)
+(defun et--generate-func-input (generics constraints required optional key-params rest-params)
   "Build an input matcher or type from parameter specs.
 
 GENERICS is a list of generic symbols, or nil.
-REQUIRED, OPTIONAL, KEY-PARAMS are alists of (SYMBOL . TYPE-SPEC-OR-NIL).
-REST-PARAM is either nil or a single (SYMBOL . TYPE-SPEC-OR-NIL) cons.
+
+REQUIRED, OPTIONAL, KEY/REST-PARAMS are alists of (SYMBOL . TYPE-STRUCT).
+
+REST-PARAMS will have at most 1 entry.
 
 Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
-  (let* ((parse (lambda (spec) (et--parse-struct (or spec 'Any) generics 'MATCHER)))
-         (required-structs (mapcar (lambda (p) (funcall parse (cdr p))) required))
-         (optional-structs (mapcar (lambda (p) (funcall parse (cdr p))) optional))
-         (tail (pcase rest-param
-                 (`(,_ . ,spec) (funcall parse (or spec 'ListR<Any>)))
+
+  (let* ((required-structs (mapcar #'cdr required))
+         (optional-structs (mapcar #'cdr optional))
+         (tail (pcase (car rest-params)
+                 (`(,_ . ,struct) struct)
                  ((and (guard key-params)
                        (let plist-args
-                         (cl-loop for (name . spec) in key-params
-                                  nconc (list (intern (format ":%s" name))
-                                              (funcall parse spec)))))
-                  (et-q (((S:DT PList ,@plist-args)))))))
+                         (cl-loop for (name . struct) in key-params
+                                  nconc (list (intern (format ":%s" name)) struct))))
+                  (et-q (((S:DT PList ,@plist-args)))))
+                 ('nil (et-q (((S:DT Literal nil)))))
+                 (x (error "Invalid rest param: %s" x))))
          (opt-tail (et--func-sig-optional-tail optional-structs tail))
          (struct (et--func-sig-required-chain required-structs opt-tail)))
 
     (if generics
         (make-et-matcher
          :generics generics
+         :constraints constraints
          :dnf struct)
       (et-structure-to-type struct))))
 
@@ -860,6 +811,127 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
           ConsR<T~PList<:scale~Number~:flag~Any>>)))
 
 
+;;;; Process cl-defstruct
+
+(cl-defun et--process-defstruct (name gen-vec slots (conc-name constructor copier predicate))
+  (let* ((plist (or (get name 'et-struct) (error "Struct `%s' not defined" name)))
+
+         ;; Parse the constraints
+         (_ (cl-callf append et--processing-path (car gen-vec)))
+         (constraints (et--gen-vec-constraints (cdr gen-vec)))
+         (_ (plist-put plist :constraints constraints))
+         ;; Create a "default" struct type for use in the predicate
+         (default-generic-vals
+          (et--match-satisfy-constraints-smallest
+           (plist-get plist :generics) constraints))
+         (_ (when (eq 'INVALID default-generic-vals)
+              (error "Unsatisfiable constraints")))
+         (struct-type (apply #'et-dt 'Struct name default-generic-vals)))
+
+    (when predicate
+      (let* ((matcher (et-parse-matcher 'Any '(T)))
+             (output-struct
+              (let ((placeholder-struct
+                     (et--parse-struct
+                      '(or (and True (bindsof (and T *placeholder)))
+                           (and Nil (bindsof (subtract T *placeholder))))
+                      nil 'TYPE)))
+                (cl-subst (list 'S:DT 'Struct name)
+                          (list 'S:DT 'Struct 'placeholder)
+                          placeholder-struct
+                          :test #'equal))))
+        (put predicate 'et-function-type
+             (et-dt 'DynFunction matcher output-struct))))
+
+    ;; Accessors: (Args Struct<NAME>) -> SLOT-TYPE
+    (dolist (slot slots)
+      (let* ((slot-name (car slot))
+             (slot-type (plist-get (cdr slot) :type))
+             (accessor-name (if conc-name
+                                (intern (format "%s%s" conc-name slot-name))
+                              slot-name)))
+        (put accessor-name 'et-function-type
+             (et-dt 'Function
+                    (et-alias 'ConsR struct-type (et-literal nil))
+                    slot-type))))
+
+    ;; Constructor: (&key SLOTS...) -> Struct<NAME>
+    (when constructor
+      (let* ((plist-args
+              (cl-loop for (slot-name . plist) in slots
+                       nconc (list (intern (format ":%s" slot-name))
+                                   (plist-get plist :type)))))
+        (put constructor 'et-function-type
+             (et-dt 'Function
+                    (if plist-args
+                        (apply #'et-dt 'PList plist-args)
+                      (et-literal nil))
+                    struct-type))))
+
+    ;; Copier: (Args Struct<NAME>) -> Struct<NAME>
+    (when copier
+      (put copier 'et-function-type
+           (et-dt 'Function
+                  (et-alias 'ConsR struct-type (et-literal nil))
+                  struct-type)))))
+
+
+;;;; Process
+
+(defun et--process (exprs)
+  (pcase-let* ((`(,pre-errors ,pre-aliases ,pre-vars ,pre-defuns ,pre-structs) (et--preprocess exprs))
+               (errors pre-errors)
+               (defuns nil)
+               (et--processing-path nil))
+
+    ;; Parse alias structures
+    (cl-loop for (path . var) in pre-aliases
+             do (condition-case err (et--initialize-alias var)
+                  (error (push (cons path err) errors))))
+
+    ;; Parse function signatures to types
+    (dolist (args pre-defuns)
+      (setq et--processing-path (car args))
+      (condition-case err (push (apply #'et--process-defun (cdr args)) defuns)
+        (error (push (cons et--processing-path err) errors))))
+
+    ;; Parse struct type structures
+    (dolist (info pre-structs)
+      (setq et--processing-path (car info))
+      (apply #'et--process-defstruct (cdr info)))
+
+    )
+  )
+
+
+;;;; Preprocess file
+
+(defvar et--preprocessed-files nil
+  "List of files that have been preprocessed.")
+
+(defvar et--preprocessing nil
+  "Currently performing preprocessing.")
+
+(defun et-preprocess-buffer ()
+  (interactive)
+  (let* ((et--preprocessing t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (when-let* ((expr (ignore-errors (read (current-buffer)))))
+               (ignore-errors (et-preprocess-expr expr))
+               t)))))
+
+(defun et-preprocess-file (file)
+  (unless (member file et--preprocessed-files)
+    (push file et--preprocessed-files)
+
+    (with-temp-buffer
+      (insert-file-contents file)
+      (et-preprocess-buffer))))
+
+
+;;; ============================================================
+;;; Function types
 ;;;; declare -> et-func-sig
 
 (cl-defstruct et-func-sig
