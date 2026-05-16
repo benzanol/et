@@ -527,14 +527,14 @@ PATH is the path to the subexpression."
                            )))))
 
   (when-let* ((orig-path et--processing-path)
-              (declare-pos (cl-position 'declare args :key #'car))
+              (declare-pos (cl-position 'declare args :key #'car-safe))
               (declare-block (nth declare-pos args))
-              (et-pos (cl-position 'et declare-block :key #'car))
+              (et-pos (cl-position 'et declare-block :key #'car-safe))
               (et-block (nth et-pos declare-block)))
     (cl-callf append et--processing-path (list (+ declare-pos 3) et-pos))
 
     (let* ((source (cons (append orig-path (list (+ 4 declare-pos)))
-                         (butlast args (1+ declare-pos))))
+                         (nthcdr (1+ declare-pos) args)))
            (et-block-path et--processing-path)
            (params (et--parse-arglist-params arglist))
            (param-types (list nil nil nil nil))
@@ -573,10 +573,10 @@ PATH is the path to the subexpression."
           (_ (error "Invalid format"))))
 
       (when return
-        (cl-list* orig-path name
-                  gen-vec return source
-                  props
-                  param-types)))))
+        (list orig-path name
+              gen-vec return source
+              props
+              param-types)))))
 
 (defun et--parse-arglist-params (arglist)
   "Parse ARGLIST into (REQUIRED OPTIONAL KEY REST).
@@ -660,10 +660,10 @@ element."
 ;;;; Preprocess helpers
 
 (defun et--preprocess-alias-def (args)
-  (if-let* ((spec-pos (length args))
+  (if-let* ((spec-pos (1- (length args)))
             (name (pop args))
             ((symbolp name))
-            (gen-vec (when (vectorp (car args)) (pop args)))
+            (gen-vec (if (vectorp (car args)) (pop args) []))
             (pb (ignore-errors (et--props-and-body args))))
       ;; Just declare the alias, don't ensure its validity by parsing yet
       (progn (apply #'et--declare-alias name gen-vec (cdr pb) (car pb))
@@ -697,7 +697,7 @@ element."
       (condition-case err
           (pcase (nth expr-idx exprs)
             ;; Process a root declaration block
-            (`[et .. ,forms]
+            ((and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms)))
              (dotimes (form-idx (length forms))
                (setq et--processing-path (list expr-idx (1+ form-idx)))
                (pcase (nth form-idx forms)
@@ -755,9 +755,11 @@ element."
       (let* ((scoped (et--make-scoped-datatypes (when (et-matcher-p input) input)))
              (vars-and-ret
               (et--with-scoped-datatypes scoped
-                (cons (cl-loop for (name . struct) in param-structs
-                               for type = (et-structure-to-type struct)
-                               collect (make-et-var :name name :type type))
+                (cons (cl-loop for param-group in param-types nconc
+                               (cl-loop for (path name struct) in param-group
+                                        do (setq et--processing-path path)
+                                        for type = (et-structure-to-type struct)
+                                        collect (make-et-var :name name :type type)))
                       (cl-loop for (name unique constraints) in scoped
                                collect (cons name (et-dt 'Scoped name unique constraints))
                                into gen-repls
@@ -975,7 +977,7 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
                (et--processing-path nil))
 
     ;; Parse alias spec->structure
-    (cl-loop for (path . var) in pre-aliases
+    (cl-loop for (path var) in pre-aliases
              do (condition-case err (et--initialize-alias var)
                   (error (push (cons path (error-message-string err)) errors))))
 
@@ -988,13 +990,13 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
     (dolist (args pre-defuns)
       (setq et--processing-path (car args))
       (condition-case err (push (apply #'et--populate-defun (cdr args)) defuns)
-        (error (push (cons et--processing-path err) errors))))
+        (error (push (cons et--processing-path (error-message-string err)) errors))))
 
     ;; Generate function signatures for struct functions
     (dolist (info pre-structs)
       (setq et--processing-path (car info))
       (condition-case err (apply #'et--populate-defstruct (cdr info))
-        (error (push (cons et--processing-path err) errors))))
+        (error (push (cons et--processing-path (error-message-string err)) errors))))
 
     (list errors defuns)))
 
@@ -1004,11 +1006,12 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 (defvar et--preprocessed-files nil
   "List of files that have been preprocessed.")
 
-[et (@variable et--processing Nil|@PREPROCESS|@POPULATE|@VALIDATE)]
 (defvar et--processing nil
-  "Currently performing preprocessing.")
+  "Currently performing preprocessing.
 
-(defun et--process-exprs (exprs)
+@et-type Nil|@PREPROCESS|@POPULATE|@VALIDATE")
+
+(defun et--process (exprs)
   (pcase-let* ((et--processing 'PREPROCESS)
                (`(,pre-errors . ,pre-rest) (et--preprocess exprs))
 
@@ -1021,15 +1024,14 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 
     ;; Validate the funcs
     (cl-loop for (orig-path source-path source scoped vars ret) in pop-funcs
+             do (setq source (or source (list nil)))
              ;; Loop through each expression in the source
              for res-type =
-             (cl-loop for _expr in source
+             (cl-loop for expr in source
                       for expr-idx upfrom (car (last source-path))
                       for expr-path = (append (butlast source-path) (list expr-idx))
                       for result =
-                      (et--with-scoped-datatypes scoped
-                        (et-with-vars vars
-                          (et--check (if (cdr source) (cons #'progn source) (car source)))))
+                      (et--with-scoped-datatypes scoped (et-with-vars vars (et--check expr)))
                       ;; Propogate diagnostics
                       do
                       (cl-loop for (path severity str) in (et-result-diagnostics result)
@@ -1038,7 +1040,7 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
                       finally return (et-result-type result))
              ;; Check that the result value matches the declared return value
              unless (et-subtype? res-type ret)
-             do (push (cons orig-path (format "Expected %s, got %s" (et-pp res-type) (et-pp ret)))
+             do (push (cons orig-path (format "Expected %s, got %s" (et-pp ret) (et-pp res-type)))
                       ret-errors))
 
     ;; Convert all diagnostics to the same format: (PATH SEVERITY MESSAGE)
@@ -1052,7 +1054,7 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 
   (save-excursion
     (goto-char (point-min))
-    (et--process-exprs
+    (et--process
      (cl-loop while t
               for expr = (condition-case _ (read (current-buffer))
                            (error (cl-return exprs)))
