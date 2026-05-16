@@ -34,83 +34,83 @@
 
 ;;;; Function checkers
 
-(et-define-pcase-checker lambda body
-  (setq body (et--funcdef-inline-to-declare (copy-tree body)))
-  (et-checker-function-body (et-parse-function-type body #'lambda) 1))
+;; (et-define-pcase-checker lambda body
+;;   (setq body (et--funcdef-inline-to-declare (copy-tree body)))
+;;   (et-checker-function-body (et-parse-function-type body #'lambda) 1))
 
-(et-test
- ;; Inline typed args
- (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
-   (lambda ([x Integer]) (+ x 1)))
+;; (et-test
+;;  ;; Inline typed args
+;;  (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
+;;    (lambda ([x Integer]) (+ x 1)))
 
- ;; Untyped args default to Any
- (et-assert-resolve Function<ConsR<Any~Nil>~Any>
-   (lambda (x) x))
+;;  ;; Untyped args default to Any
+;;  (et-assert-resolve Function<ConsR<Any~Nil>~Any>
+;;    (lambda (x) x))
 
- ;; &optional — cdr is Nil|ConsR<String~Nil>
- (et-assert-resolve (Function ConsR<Integer~Nil|ConsR<String~Nil>> Integer)
-   (lambda ([x Integer] &optional [y String]) x))
+;;  ;; &optional — cdr is Nil|ConsR<String~Nil>
+;;  (et-assert-resolve (Function ConsR<Integer~Nil|ConsR<String~Nil>> Integer)
+;;    (lambda ([x Integer] &optional [y String]) x))
 
- ;; Multiple body forms — return type is last
- (et-assert-resolve Function<ConsR<Integer~ConsR<String~Nil>>~String>
-   (lambda ([x Integer] [y String]) (+ x 1) y))
+;;  ;; Multiple body forms — return type is last
+;;  (et-assert-resolve Function<ConsR<Integer~ConsR<String~Nil>>~String>
+;;    (lambda ([x Integer] [y String]) (+ x 1) y))
 
- ;; Empty arglist
- (et-assert-resolve Function<Nil~Integer>
-   (lambda () 1))
+;;  ;; Empty arglist
+;;  (et-assert-resolve Function<Nil~Integer>
+;;    (lambda () 1))
 
- ;; &rest
- (et-assert-resolve (Function ConsR<Integer~ListR<Any>> Integer)
-   (lambda ([x Integer] &rest args) x))
- (et-assert-resolve (Function ConsR<Any~ListR<Any>> ListR<Any>)
-   (lambda (x &rest args) args)))
+;;  ;; &rest
+;;  (et-assert-resolve (Function ConsR<Integer~ListR<Any>> Integer)
+;;    (lambda ([x Integer] &rest args) x))
+;;  (et-assert-resolve (Function ConsR<Any~ListR<Any>> ListR<Any>)
+;;    (lambda (x &rest args) args)))
 
-(et-test
- ;; Body return type with typed args
- (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
-   (lambda ([x Integer]) (+ x 1)))
+;; (et-test
+;;  ;; Body return type with typed args
+;;  (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
+;;    (lambda ([x Integer]) (+ x 1)))
 
- ;; Untyped args default to Any, body uses them
- (et-assert-resolve Function<ConsR<Any~Nil>~Any>
-   (lambda (x) x))
+;;  ;; Untyped args default to Any, body uses them
+;;  (et-assert-resolve Function<ConsR<Any~Nil>~Any>
+;;    (lambda (x) x))
 
- ;; &optional arg becomes Nil|Type
- (et-assert-resolve Function<ConsR<Integer~Nil|ConsR<String~Nil>>~Integer>
-   (lambda ([x Integer] &optional [y String]) (+ x 1)))
+;;  ;; &optional arg becomes Nil|Type
+;;  (et-assert-resolve Function<ConsR<Integer~Nil|ConsR<String~Nil>>~Integer>
+;;    (lambda ([x Integer] &optional [y String]) (+ x 1)))
 
- ;; Multiple body forms, return type is last
- (et-assert-resolve Function<ConsR<Integer~ConsR<String~Nil>>~String>
-   (lambda ([x Integer] [y String]) (+ x 1) y))
+;;  ;; Multiple body forms, return type is last
+;;  (et-assert-resolve Function<ConsR<Integer~ConsR<String~Nil>>~String>
+;;    (lambda ([x Integer] [y String]) (+ x 1) y))
 
- ;; Empty arglist
- (et-assert-resolve Function<Nil~Integer>
-   (lambda () 1)))
+;;  ;; Empty arglist
+;;  (et-assert-resolve Function<Nil~Integer>
+;;    (lambda () 1)))
 
 ;; Return type annotation tests
-(et-test
- ;; Inline -> return type: uses declared type
- (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
-   (lambda ([x Integer]) -> Number (+ x 1)))
+;; (et-test
+;;  ;; Inline -> return type: uses declared type
+;;  (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
+;;    (lambda ([x Integer]) -> Number (+ x 1)))
 
- ;; Inline -> with typed args
- (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
-   (lambda ([x Integer]) -> Number x))
+;;  ;; Inline -> with typed args
+;;  (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
+;;    (lambda ([x Integer]) -> Number x))
 
- ;; Inline -> is stripped from compiled output
- (let* ((result (et--check '(lambda (x) -> Integer 1))))
-   (equal (et-result-compiled result) '(lambda (x) 1)))
+;;  ;; Inline -> is stripped from compiled output
+;;  (let* ((result (et--check '(lambda (x) -> Integer 1))))
+;;    (equal (et-result-compiled result) '(lambda (x) 1)))
 
- ;; Inline -> with body type mismatch produces error
- (et-assert-resolve-errors
-  (lambda ([x Integer]) -> String x))
+;;  ;; Inline -> with body type mismatch produces error
+;;  (et-assert-resolve-errors
+;;   (lambda ([x Integer]) -> String x))
 
- ;; Inline -> with empty arglist
- (et-assert-resolve Function<Nil~Number>
-   (lambda () -> Number 1))
+;;  ;; Inline -> with empty arglist
+;;  (et-assert-resolve Function<Nil~Number>
+;;    (lambda () -> Number 1))
 
- ;; Inline -> with multiple body forms
- (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
-   (lambda ([x Integer]) -> Number "ignored" x)))
+;;  ;; Inline -> with multiple body forms
+;;  (et-assert-resolve Function<ConsR<Integer~Nil>~Number>
+;;    (lambda ([x Integer]) -> Number "ignored" x)))
 
 
 ;;;; Var checkers
