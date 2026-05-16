@@ -856,53 +856,115 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
               (error "Unsatisfiable constraints")))
          (struct-type (apply #'et-dt 'Struct name default-generic-vals)))
 
+    ;; Predicate: (Any) -> True&{bindsof Struct<NAME>} | Nil&{bindsof ¬Struct<NAME>}
     (when predicate
       (let* ((matcher (et-parse-matcher 'Any '(T)))
+             (placeholder-struct
+              (et--parse-struct
+               '(or (and True (bindsof (and T *placeholder)))
+                    (and Nil (bindsof (subtract T *placeholder))))
+               nil 'TYPE))
+             (gs (mapcar (lambda (g) (list (list (list 'S:GENERIC g)))) generics))
              (output-struct
-              (let ((placeholder-struct
-                     (et--parse-struct
-                      '(or (and True (bindsof (and T *placeholder)))
-                           (and Nil (bindsof (subtract T *placeholder))))
-                      nil 'TYPE)))
-                (cl-subst (list 'S:DT 'Struct name)
-                          (list 'S:DT 'Struct 'placeholder)
-                          placeholder-struct
-                          :test #'equal))))
+              (cl-subst (cons 'S:DT (cons 'Struct (cons name gs)))
+                        (list 'S:DT 'Struct 'placeholder)
+                        placeholder-struct
+                        :test #'equal)))
         (put predicate 'et-function-type
              (et-dt 'DynFunction matcher output-struct))))
 
-    ;; Accessors: (Args Struct<NAME>) -> SLOT-TYPE
-    (cl-loop for (path slot-name . plist) in slots
-             do (setq et--processing-path path)
-             do
-             (let* ((slot-type (et--parse-struct (plist-get plist :type) generics 'TYPE))
-                    (accessor-name (if conc-name
-                                       (intern (format "%s%s" conc-name slot-name))
-                                     slot-name)))
-               (put accessor-name 'et-function-type
-                    (et-dt 'Function
-                           (et-alias 'ConsR struct-type (et-literal nil))
-                           slot-type))))
+    ;; Accessors: (Struct<NAME G...>) -> SLOT-TYPE
+    (dolist (slot slots)
+      (pcase-let* ((`(,path ,slot-name ,_default . ,type-info) slot)
+                   (type-spec-entry (car type-info))
+                   (accessor-name (if conc-name
+                                      (intern (format "%s%s" conc-name slot-name))
+                                    slot-name)))
+        (setq et--processing-path path)
+        (if (null generics)
+            ;; No generics: plain Function
+            (let* ((slot-type (if type-spec-entry
+                                  (progn (setq et--processing-path (car type-spec-entry))
+                                         (et-parse-type (cdr type-spec-entry)))
+                                (et-any)))
+                   (arg-type (et-alias 'ConsR struct-type (et-literal nil))))
+              (put accessor-name 'et-function-type
+                   (et-dt 'Function arg-type slot-type)))
+          ;; Has generics: DynFunction so generics propagate
+          (let* ((slot-struct (if type-spec-entry
+                                  (progn (setq et--processing-path (car type-spec-entry))
+                                         (et--parse-struct (cdr type-spec-entry) generics 'TYPE))
+                                (et-q (((S:DT Any))))))
+                 (input-struct
+                  (et-q (((S:ALIAS ConsR
+                                   (((S:DT Struct ,name
+                                           ,@(mapcar (lambda (g) (list (list (list 'S:GENERIC g))))
+                                                     generics))))
+                                   (((S:DT Literal nil))))))))
+                 (matcher (make-et-matcher :generics generics
+                                           :constraints constraints
+                                           :dnf input-struct)))
+            (put accessor-name 'et-function-type
+                 (et-dt 'DynFunction matcher slot-struct))))))
 
-    ;; Constructor: (&key SLOTS...) -> Struct<NAME>
+    ;; Constructor: (&key SLOTS...) -> Struct<NAME G...>
     (when constructor
-      (let* ((plist-args
-              (cl-loop for (_path slot-name . plist) in slots
-                       nconc (list (intern (format ":%s" slot-name))
-                                   (plist-get plist :type)))))
-        (put constructor 'et-function-type
-             (et-dt 'Function
-                    (if plist-args
-                        (apply #'et-dt 'PList plist-args)
-                      (et-literal nil))
-                    struct-type))))
+      (if (null generics)
+          ;; No generics: plain Function
+          (let* ((plist-args
+                  (cl-loop for (path slot-name _default . type-info) in slots
+                           for type-spec-entry = (car type-info)
+                           do (setq et--processing-path path)
+                           nconc (list (intern (format ":%s" slot-name))
+                                       (if type-spec-entry
+                                           (progn (setq et--processing-path (car type-spec-entry))
+                                                  (et-parse-type (cdr type-spec-entry)))
+                                         (et-any))))))
+            (put constructor 'et-function-type
+                 (et-dt 'Function
+                        (if plist-args (apply #'et-dt 'PList plist-args) (et-literal nil))
+                        struct-type)))
+        ;; Has generics: DynFunction
+        (let* ((plist-struct-args
+                (cl-loop for (path slot-name _default . type-info) in slots
+                         for type-spec-entry = (car type-info)
+                         do (setq et--processing-path path)
+                         nconc (list (intern (format ":%s" slot-name))
+                                     (if type-spec-entry
+                                         (progn (setq et--processing-path (car type-spec-entry))
+                                                (et--parse-struct (cdr type-spec-entry) generics 'BOTH))
+                                       (et-q (((S:DT Any))))))))
+               (input-struct (if plist-struct-args
+                                 (et-q (((S:DT PList ,@plist-struct-args))))
+                               (et-q (((S:DT Literal nil))))))
+               (output-struct
+                (et-q (((S:DT Struct ,name
+                              ,@(mapcar (lambda (g) (list (list (list 'S:GENERIC g))))
+                                        generics))))))
+               (matcher (make-et-matcher :generics generics
+                                         :constraints constraints
+                                         :dnf input-struct)))
+          (put constructor 'et-function-type
+               (et-dt 'DynFunction matcher output-struct)))))
 
-    ;; Copier: (Args Struct<NAME>) -> Struct<NAME>
+    ;; Copier: (Struct<NAME G...>) -> Struct<NAME G...>
     (when copier
-      (put copier 'et-function-type
-           (et-dt 'Function
-                  (et-alias 'ConsR struct-type (et-literal nil))
-                  struct-type)))))
+      (if (null generics)
+          (put copier 'et-function-type
+               (et-dt 'Function
+                      (et-alias 'ConsR struct-type (et-literal nil))
+                      struct-type))
+        (let* ((struct-struct
+                (et-q (((S:DT Struct ,name
+                              ,@(mapcar (lambda (g) (list (list (list 'S:GENERIC g))))
+                                        generics))))))
+               (input-struct
+                (et-q (((S:ALIAS ConsR ,struct-struct (((S:DT Literal nil))))))))
+               (matcher (make-et-matcher :generics generics
+                                         :constraints constraints
+                                         :dnf input-struct)))
+          (put copier 'et-function-type
+               (et-dt 'DynFunction matcher struct-struct)))))))
 
 
 ;;;; Populate
