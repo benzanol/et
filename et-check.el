@@ -836,17 +836,19 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 
 
 (et-test
- (equal (et--generate-func-input nil '((x . Integer) (y . nil)) nil nil nil)
+ (equal (et--generate-func-input nil nil '((x . (((S:DT Integer)))) (y . (((S:DT Any))))) nil nil nil)
         (et ConsR<Integer~ConsR<Any~Nil>>))
 
- (equal (et--generate-func-input nil '((x . Integer) (y . String)) nil nil '(args . nil))
+ (equal (et--generate-func-input nil nil '((x . (((S:DT Integer)))) (y . (((S:DT String))))) nil nil
+                                 '((args . (((S:ALIAS ListR (((S:DT Any)))))))))
         (et ConsR<Integer~ConsR<String~ListR<Any>>>))
 
- (equal (et--generate-func-input '(T) '((x . T)) '((y . Number)) nil '(args . ListR<String>))
+ (equal (et--generate-func-input '(T) nil '((x . (((S:GENERIC T))))) '((y . (((S:DT Number)))))
+                                 nil '((args . (((S:ALIAS ListR (((S:DT String)))))))))
         (et-matcher [T]
           ConsR<T~{Nil|ConsR<Number~ListR<String>>}>))
 
- (equal (et--generate-func-input '(T) '((a . T)) nil '((scale . Number) (flag . nil)) nil)
+ (equal (et--generate-func-input '(T) nil '((a . (((S:GENERIC T))))) nil '((scale . (((S:DT Number)))) (flag . (((S:DT Any))))) nil)
         (et-matcher [T]
           ConsR<T~PList<:scale~Number~:flag~Any>>)))
 
