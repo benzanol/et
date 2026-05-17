@@ -63,10 +63,26 @@
  (@alias EtSeverity (or @error @warning @hint))
  (@alias EtDiagnostic (Tuple EtPath EtSeverity String))]
 
-(cl-defstruct et-res
+(defvar et--in-result? nil)
+
+(cl-defstruct et-result
   (value nil :et-generics [T] :et T|Nil)
   (failed nil :et Boolean)
   (diagnostics nil :et List<EtDiagnostic>))
+
+(cl-defmethod cl-print-object ((result et-result) stream)
+  (cl-flet* ((count-str (count) (if (eq count 0) "" (format " (+%s)" count))))
+
+    (if (et-result-failed result)
+        (cl-loop with others = 0
+                 for (_path severity msg) in (et-result-diagnostics result)
+                 when (eq 'error severity) collect (format "[%s]" msg) into strs
+                 else do (cl-callf 1+ others)
+                 finally do (princ (format "#<FAIL: %s%s>" (string-join strs " ") (count-str others)) stream))
+
+      (princ (format "#<SUCCESS: %s%s>" (cl-prin1-to-string (et-result-value result))
+                     (count-str (length (et-result-diagnostics result))))
+             stream))))
 
 
 ;;;; Paths
@@ -93,8 +109,8 @@ expression that is not actually in the buffer, ensure that
 
 (defun et--resolve-path (rel)
   (if et--sticky-path et--path
-    (if-let* ((flat (flatten-list (list rel))))
-        (append et--path (+ et--path-offset (car rel)) (cdr rel))
+    (if-let* ((flat (flatten-tree (list rel))))
+        (append et--path (list (+ et--path-offset (car flat))) (cdr flat))
       et--path)))
 
 (defmacro et-at (rel &rest body)
@@ -127,17 +143,20 @@ expression that is not actually in the buffer, ensure that
 
 
 (defun et--diagnostic (rel severity fmt &rest args)
+  (unless et--in-result? (error "Not in a result boundary"))
   (push (list (et--resolve-path rel) severity
-              (if args (apply #'format fmt args) fmt))
-        et--checker-diagnostics)
+              (if args (apply #'format fmt (mapcar #'et-pp args))
+                (et-pp fmt)))
+        et--result-diagnostics)
   ;; Intentionally return nil
   nil)
 
 (defmacro et--define-diagnostics-function (name severity &optional failed)
   `(defun ,name (relative fmt &rest args)
-     ,(format "Create a checker diagnostic with severity `%s'." severity)
-     ,@(when failed (list '(setq et--checker-failed t)))
-     (apply #'et--diagnostic relative ',severity fmt args)))
+     ,(format "Create a diagnostic with severity `%s'." severity)
+     (apply #'et--diagnostic relative ',severity fmt args)
+     ,@(when failed (list '(setq et--result-failed t)))
+     nil))
 
 (et--define-diagnostics-function et-err error t)
 (et--define-diagnostics-function et-warn warning)
@@ -149,25 +168,38 @@ expression that is not actually in the buffer, ensure that
 
 ;;;; Boundaries
 
+(defmacro et-error-boundary (relative &rest body)
+  (declare (indent 1))
+  `(et-at ,relative
+     (condition-case-unless-debug err (progn . ,body)
+       (error (et-err nil (error-message-string err))))))
+
 (defmacro et-result-boundary (&rest body)
   (declare (et (@generics [T])
-               (@return *et-res<T>)))
+               (@return *et-result<T>)))
 
-  `(let* ((et--path nil)
+  `(let* ((et--in-result? t)
+          (et--path nil)
           (et--path-offset 0)
           (et--sticky-path nil)
           (et--result-diagnostics nil)
           (et--result-failed nil))
-     (make-et-res
+     (make-et-result
       :value (et-error-boundary nil ,@body)
       :failed et--result-failed
       :diagnostics et--result-diagnostics)))
 
-(defmacro et-error-boundary (relative &rest body)
-  (declare (indent 1))
-  `(et-at ,relative
-     (condition-case err (progn . ,body)
-       (error (et-err nil (error-message-string err))))))
+(defun et-propagate-result (result)
+  (cl-assert et--in-result?)
+  (cl-loop for (path severity msg) in (et-result-diagnostics result)
+           do (et--diagnostic path severity msg))
+  (when (et-result-failed result) (setq et--result-failed t)))
+
+;; I think that this is a bad idea: either be a result boundary or don't, not both
+;; (defmacro et-subresult-boundary (&rest body)
+;;   `(let* ((result (et-result-boundary ,@body)))
+;;      (when et--in-result? (et-propagate-result result))
+;;      result))
 
 (defmacro et-failed-boundary (&rest body)
   "Evaluate BODY with `et--result-failed' temporarily bound to nil.
@@ -1804,7 +1836,8 @@ which are invalid for types."
 (cl-defmethod cl-print-object ((type et-type) stream)
   (princ (format "%s" (et-pp-type type)) stream))
 
-(defalias 'et-pp #'cl-prin1-to-string)
+(defun et-pp (arg)
+  (if (stringp arg) arg (cl-prin1-to-string arg)))
 
 
 

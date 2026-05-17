@@ -93,35 +93,9 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 ;;; ============================================================
 ;;; Checking
-;;;; Result struct
-
-(cl-defstruct et-result
-  "Result of parsing an expression.
-
-TYPE is an `et-type'.
-
-DIAGNOSTICS is a list (PATH SEVERITY STRING)[] of diagnostics resulting
-from type checking the expression. If this value is non-nil, then TYPE
-is not guaranteed to be non-nil (but it might be), and the entire call
-tree should propagate these errors.
-
-COMPILED is the compiled version of the expression that was being
-checked.
-
-FAILED is a boolean that is `t' when type checking was invalid."
-  type diagnostics compiled failed)
-
-
 ;;;; Check
 
-(defvar et--checker-diagnostics nil
-  "Diagnostics signalled on the current call to this checker.")
-
-(defvar et--checker-expr nil
-  "The current expr.")
-
-(defvar et--checker-failed nil
-  "Whether type checking the current expr failed.")
+(defvar et--checker-expr nil)
 
 (defun et--check (expr)
   "Generates an `et-result' resulting from typechecking EXPR.
@@ -147,80 +121,64 @@ If FUNC is a symbol with the `et-function-type' property set to an
 `et-type', then the arguments to the function will first be checked
 individually, and then will be passed to `et--funcall' as a list to
 determine the output type."
-  (et-failed-boundary
-   (or
-    (et-error-boundary nil
-      (pcase expr
-        (`(,func . ,_args)
-         (pcase nil
-           ;; Custom checker
-           ((and (let checker (get func 'et-checker)) (guard checker)
-                 (let output (funcall checker)))
-            (if (or (null output) (et-type-p output)) output
-              (et-fatal "Checker for `%s' had invalid return: %s" func output)))
+  (let* ((et--checker-expr expr))
+    (et-failed-boundary
+     (or (et-error-boundary nil (et--check-1))
+         (progn (unless et--result-failed (et-err nil "Type checking failed mysteriously"))
+                (et-never))))))
 
-           ;; Function type property
-           ((and (let func-type (get func 'et-function-type)) (guard func-type))
-            (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
-                   (output-type (et--funcall func-type args-type)))
-              (or output-type
-                  ;; If `et--checker-failed' is already true, that means one of the arguments was invalid,
-                  ;; which means the true error was in the arguments, not this call
-                  (unless et--checker-failed
-                    (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
-                            (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))
+(defun et--check-1 ()
+  (pcase et--checker-expr
+    (`(,func . ,_args)
+     (pcase nil
+       ;; Custom checker
+       ((and (let checker (get func 'et-checker)) (guard checker)
+             (let output (funcall checker)))
+        (if (or (null output) (et-type-p output)) output
+          (et-fatal "Checker for `%s' had invalid return: %s" func output)))
 
-           (_ (et-err 0 "No type for `%s'" func))))
+       ;; Function type property
+       ((and (let func-type (get func 'et-function-type)) (guard func-type))
+        (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
+               (output-type (et--funcall func-type args-type)))
+          (or output-type
+              ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
+              ;; which means the true error was in the arguments, not this call
+              (unless et--result-failed
+                (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
+                        (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))
 
-        ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
-        ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
-         (pcase nil
-           ;; Check if the variable is locally scoped
-           ((and (let var (et-get-symbol-var sym)) (guard var))
-            (et--supersect
-             (et-current-var-type var)
-             (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
-                                         :typeofs (list var)))))
+       (_ (et-err 0 "No type for `%s'" func))))
 
-           ;; Check if it is a global variable with a type
-           ((and (let type (get sym 'et-variable-type)) (guard type))
-            type)
+    ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
+    ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
+     (pcase nil
+       ;; Check if the variable is locally scoped
+       ((and (let var (et-get-symbol-var sym)) (guard var))
+        (et--supersect
+         (et-current-var-type var)
+         (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
+                                     :typeofs (list var)))))
 
-           (_ (et-err nil "Free variable: %s" sym))))
+       ;; Check if it is a global variable with a type
+       ((and (let type (get sym 'et-variable-type)) (guard type))
+        type)
 
-        (expr (et-literal expr))))
+       (_ (et-err nil "Free variable: %s" sym))))
 
-    ;; If the above returned nil, there was an issue. Return never.
-    (progn (unless et--result-failed
-             (et-err nil "Type checking failed mysteriously"))
-           (et-never)))))
+    (expr (et-literal expr))))
 
 
 (defmacro et-check-call (func &rest args)
-  `(let ((result (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a))))))
-     (or (mapcar #'caddr (et-result-diagnostics result)) (et-result-type result))))
+  `(let ((result (et-result-boundary
+                  (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a)))))))
+     (or (mapcar #'caddr (et-result-diagnostics result)) (et-result-value result))))
 
 
 ;;;; Root level functions
 
-(defun et-show-result-errors (result &optional path offset)
-  "Display the errors contained in RESULT.
-
-PATH is a path to add before the path of each message.
-
-OFFSET is a numeric offset to add to the first entry in each existing
-path."
-
-  (cl-loop for (mpath _severity message) in (et-result-diagnostics result)
-           for new-path = (append path (if (and mpath offset)
-                                           (cons (+ (car mpath) offset) (cdr mpath))
-                                         mpath))
-           do (et-error new-path message)))
-
 (defmacro et-typecheck (body)
-  (let* ((result (et--check body)))
-    (et-with-error-path '(1) (et-show-result-errors result))
-    (et-simplify-type (et-result-type result))))
+  (et-result-boundary (et-simplify-type (et--check body))))
 
 (defmacro et-typecheck-call (func &rest arg-types)
   (cl-loop for type in arg-types
@@ -228,45 +186,41 @@ path."
            else collect (list :type type) into arg-exprs
            finally return `(et-typecheck (,func ,@arg-exprs))))
 
-(defmacro et-compile (body)
-  (let* ((result (et--check body)))
-    (et-error '(0) (et-pp (et-result-type result)))
-    (et-with-error-path '(1) (et-show-result-errors result))
-    (et-result-compiled result)))
-
 
 ;;;; Tests
 
 (defmacro et-assert-resolve (type expr &optional not)
   (declare (indent 1))
-  `(let* ((t-type (et-with-error-path '(1) (et ,type)))
-          (result (et--check ',expr)))
-     (et-with-error-path '(2) (et-show-result-errors result))
-     (or (,(if not #'not #'identity) (et-subtype? (et-result-type result) t-type))
-         (et-error '(0) "Expected %s, got %s" (et-pp t-type) (et-pp (et-result-type result))))))
-
-(defmacro et-assert-resolve-errors (expr)
-  `(or (et-result-diagnostics (et--check ',expr))
-       (et-error '(0) "No errors")))
+  `(et-result-boundary
+    (let* ((t-type (et-at 1 (et ,type)))
+           (r-type (et-at 2 (et--check ',expr))))
+      (or (,(if not #'not #'identity) (et-subtype? r-type t-type))
+          (et-err 0 "Expected %s, got %s" t-type (et-result-type result))))))
 
 (defmacro et-assert-no-resolve (type expr)
   (declare (indent 1))
   `(et-assert-resolve ,type ,expr 'NOT))
 
+(defmacro et-assert-resolve-errors (expr)
+  `(et-result-boundary
+    (or (et-result-failed (et-result-boundary (et--check ',expr)))
+        (et-err 0 "Didn't fail"))))
+
 (defmacro et-assert-call (type-spec func &rest arg-types)
-  `(let* ((type (et ,type-spec))
-          (params (cl-loop for a in ',arg-types collect (list :type a)))
-          (result (et--check (cons ',func params))))
-     (et-with-error-path '(2) (et-show-result-errors result))
-     (or (equal type (et-result-type result))
-         (et-error '(0) "Expected %s, got %s" (et-pp type) (et-pp (et-result-type result))))))
+  `(et-result-boundary
+    (let* ((type (et ,type-spec))
+           (params (cl-loop for a in ',arg-types collect (list :type a)))
+           (result (et--check (cons ',func params))))
+      (or (equal type (et-result-type result))
+          (et-err 0 "Expected %s, got %s" type (et-result-type result))))))
 
 (defmacro et-assert-call-errors (func &rest arg-types)
-  `(let* ((params (cl-loop for a in ',arg-types collect (list :type a)))
-          (result (et--check (cons ',func params))))
-     (unless (et-result-diagnostics result)
-       (error "Succeeded with %s" (cl-prin1-to-string (et-result-type result))))
-     t))
+  `(et-result-boundary
+    (let* ((params (cl-loop for a in ',arg-types collect (list :type a)))
+           (result (et--check (cons ',func params))))
+      (unless (et-result-diagnostics result)
+        (error "Succeeded with %s" (cl-prin1-to-string (et-result-type result))))
+      t)))
 
 (et-test
  (et-assert-resolve Integer 1)
@@ -384,50 +338,27 @@ RETURN is a parsable expression for the return type.
 
 ;;; ============================================================
 ;;; Checker helpers
-;;;; Check subexpr
+;;;; Check subexprs
 
-(defun et--traverse-tree (path tree)
+(defun et--traverse-tree (tree path)
   (if (null path) tree
     (when (>= (car path) (length tree))
       (error "Index out of bounds: %s %s" (car path) tree))
-    (et--traverse-tree (cdr path) (nth (car path) tree))))
+    (et--traverse-tree (nth (car path) tree) (cdr path))))
 
 (defun et-checker-sub (&rest path)
   "Type check the sub expression at PATH, returning the type or never."
-  (cl-assert et--checker-expr)
-  (setq path (flatten-tree path))
-
-  (let* ((path-last (car (last path)))
-         (parent-expr (et--traverse-tree (butlast path) et--checker-expr))
-         (sub-expr (nth path-last parent-expr))
-         (sub-result (et--check sub-expr)))
-    (cl-assert (et-result-p sub-result))
-
-    ;; Diagnostics in the result have paths relative to sub-expr
-    ;; Rebase them to be relative to et--checker-expr
-    (cl-loop for (p severity message) in (et-result-diagnostics sub-result)
-             do (et--checker-diagnostic severity (append path p) message))
-
-    ;; If the child failed, then this one failed as well
-    (when (et-result-failed sub-result)
-      (setq et--checker-failed t))
-
-    ;; Update the current expr to be the new compiled version
-    (setf (nth path-last parent-expr) (et-result-compiled sub-result))
-
-    ;; Return just the inner type, or never
-    (or (et-result-type sub-result) (et-never))))
-
-
-;;;; Check multiple subexprs
+  (let* ((flat (flatten-tree path))
+         (expr (et--traverse-tree et--checker-expr flat)))
+    (et-at flat (et--check expr))))
 
 (defun et-checker-remaining (&rest first-path)
   (cl-assert et--checker-expr)
   (cl-assert first-path)
   (setq first-path (flatten-tree first-path))
 
-  (let* ((parent-path (butlast first-path 1))
-         (parent-expr (et--traverse-tree parent-path et--checker-expr))
+  (let* ((parent-path (butlast first-path))
+         (parent-expr (et--traverse-tree et--checker-expr parent-path))
          (start (car (last first-path))))
 
     (cl-loop for idx upfrom start below (length parent-expr)
