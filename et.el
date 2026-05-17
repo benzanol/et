@@ -214,6 +214,14 @@ be non-nil."
      (car value-and-failed)))
 
 
+;;;; Utils
+
+(defun et-result-map (func exprs)
+  (cl-loop for expr in exprs
+           for idx upfrom 0
+           collect (et-at idx (funcall func expr))))
+
+
 ;;; ============================================================
 ;;; Testing macros
 ;;;; Flycheck rebasing
