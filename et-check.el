@@ -92,62 +92,6 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 
 ;;; ============================================================
-;;; Result
-
-[et (@alias EtDiagnostic (Tuple List<Integer> Symbol String))]
-
-(cl-defstruct et-res
-  (value nil :et-generics [T] :et T|Nil)
-  (failed nil :et Boolean)
-  (diagnostics nil :et List<EtDiagnostic>))
-
-(defvar et--res-path nil)
-(defvar et--res-diagnostics nil)
-(defvar et--res-failed nil)
-
-(defmacro et--res (&rest body)
-  (declare (et (@generics [T])
-               (@return *et-res<T>)))
-
-  `(let* ((et--res-path nil)
-          (et--res-diagnostics nil)
-          (et--res-failed nil))
-     (make-et-res
-      :value (et--res-error-boundary nil ,@body)
-      :failed et--res-failed
-      :diagnostics et--res-diagnostics)))
-
-(defmacro et--res-at (rel &rest body)
-  (declare (indent 1))
-  (let* ((orig-var (gensym 'path)))
-    ;; On error, we want the path to stay where it is, hence using setq instead of let
-    `(let* ((,orig-var et--res-path))
-       (setq et--res-path (append et--res-path (flatten-list (list ,rel))))
-       (prog1 (progn ,@body)
-         (setq et--res-path ,orig-var)))))
-
-(defmacro et--res-error-boundary (rel &rest body)
-  (declare (indent 1))
-  (let* ((inner
-          `(condition-case err (progn . ,body)
-             (error (setq et--res-failed t)
-                    (push (list (append et--res-path nil) 'error (error-message-string err))
-                          et--res-diagnostics)
-                    nil))))
-    (if (eq rel nil) inner `(et--res-at ,rel ,inner))))
-
-(defun et--res-diag (rel severity fmt &rest args)
-  (setq rel (flatten-list (list rel)))
-  (let* ((str (if args (apply #'format fmt args) fmt)))
-    (push (list (append et--res-path rel) severity str) et--res-diagnostics)
-    nil))
-
-(defun et--res-fatal (rel fmt &rest args)
-  (setq et--res-path (append et--res-path (flatten-list (list rel))))
-  (if args (apply #'error fmt args) (error "%s" fmt)))
-
-
-;;; ============================================================
 ;;; Checking
 ;;;; Result struct
 
@@ -203,97 +147,58 @@ If FUNC is a symbol with the `et-function-type' property set to an
 `et-type', then the arguments to the function will first be checked
 individually, and then will be passed to `et--funcall' as a list to
 determine the output type."
-  (let* ((et--checker-diagnostics nil)
-         (et--checker-expr (copy-tree expr))
-         (et--checker-failed nil)
-         (return-type nil))
+  (et-failed-boundary
+   (or
+    (et-error-boundary nil
+      (pcase expr
+        (`(,func . ,_args)
+         (pcase nil
+           ;; Custom checker
+           ((and (let checker (get func 'et-checker)) (guard checker)
+                 (let output (funcall checker)))
+            (if (or (null output) (et-type-p output)) output
+              (et-fatal "Checker for `%s' had invalid return: %s" func output)))
 
-    (pcase expr
-      (`(,func . ,_args)
-       (pcase nil
-         ;; Custom checker
-         ((and (let checker (get func 'et-checker)) (guard checker))
-          (condition-case out (funcall checker)
-            (et-checker-fatal)
-            (error (et-checker-err "Checker for `%s' threw error: %s" func (error-message-string out)))
-            (:success (if (or (null out) (et-type-p out)) (setq return-type out)
-                        (et-checker-err "Checker for `%s' had invalid return: %s" func out)))))
+           ;; Function type property
+           ((and (let func-type (get func 'et-function-type)) (guard func-type))
+            (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
+                   (output-type (et--funcall func-type args-type)))
+              (or output-type
+                  ;; If `et--checker-failed' is already true, that means one of the arguments was invalid,
+                  ;; which means the true error was in the arguments, not this call
+                  (unless et--checker-failed
+                    (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
+                            (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))
 
-         ;; Function type property
-         ((and (let func-type (get func 'et-function-type)) (guard func-type))
-          (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
-                 (output-type (condition-case err (et--funcall func-type args-type)
-                                (error (et-checker-err 0 "%s" (error-message-string err))))))
-            (if output-type (setq return-type output-type)
-              ;; If `et--checker-failed' is already true, that means one of the arguments was invalid,
-              ;; which means the true error was in the arguments, not this call
-              (unless et--checker-failed
-                (et-checker-err "`%s' has type %s\\nInvalid arguments: %s" func
-                                (et-pp func-type)
-                                (et-pp (et--remove-type-binds args-type)))))))
+           (_ (et-err 0 "No type for `%s'" func))))
 
-         (_ (et-checker-err '(0) "No type for `%s'" func))))
+        ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
+        ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
+         (pcase nil
+           ;; Check if the variable is locally scoped
+           ((and (let var (et-get-symbol-var sym)) (guard var))
+            (et--supersect
+             (et-current-var-type var)
+             (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
+                                         :typeofs (list var)))))
 
-      ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
-      ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
-       (pcase nil
-         ;; Check if the variable is locally scoped
-         ((and (let var (et-get-symbol-var sym)) (guard var))
-          (setq return-type
-                (et--supersect
-                 (et-current-var-type var)
-                 (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
-                                             :typeofs (list var))))))
+           ;; Check if it is a global variable with a type
+           ((and (let type (get sym 'et-variable-type)) (guard type))
+            type)
 
-         ;; Check if it is a global variable with a type
-         ((and (let type (get sym 'et-variable-type)) (guard type))
-          (setq return-type type))
+           (_ (et-err nil "Free variable: %s" sym))))
 
-         (_ (et-checker-err "Free variable: %s" sym))))
+        (expr (et-literal expr))))
 
-      (expr (setq return-type (et-literal expr))))
+    ;; If the above returned nil, there was an issue. Return never.
+    (progn (unless et--result-failed
+             (et-err nil "Type checking failed mysteriously"))
+           (et-never)))))
 
-    ;; If it returned nil, then it failed
-    (when (null return-type) (setq et--checker-failed t))
-    ;; This shouldn't happen: checkers should always report a real error if returning nil
-    (when (and et--checker-failed (null et--checker-diagnostics))
-      (et-checker-err "Type checking failed mysteriously"))
-
-    (make-et-result :type (or return-type (et-never))
-                    :diagnostics (nreverse et--checker-diagnostics)
-                    :compiled et--checker-expr
-                    :failed et--checker-failed)))
 
 (defmacro et-check-call (func &rest args)
   `(let ((result (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a))))))
      (or (mapcar #'caddr (et-result-diagnostics result)) (et-result-type result))))
-
-
-;;;; Diagnostic helpers
-
-(defun et--checker-diagnostic (severity &rest args)
-  (let* ((path (if (stringp (car args)) nil
-                 (flatten-tree (pop args)))))
-    (push (list path severity (if (cdr args) (apply #'format args) (car args)))
-          et--checker-diagnostics)
-    nil))
-
-(defmacro et--define-diagnostics-function (name severity &optional failed)
-  `(defun ,name (&rest args)
-     ,(format "Create a checker diagnostic with severity `%s'.\n\n%s" severity
-              "(fn [PATH] FORMAT-STRING ARGS...)")
-     ,@(when failed (list '(setq et--checker-failed t)))
-     (apply #'et--checker-diagnostic ',severity args)
-     nil))
-
-(et--define-diagnostics-function et-checker-err error t)
-(et--define-diagnostics-function et-checker-warn warning)
-(et--define-diagnostics-function et-checker-hint hint)
-
-(define-error 'et-checker-fatal "Signalled by a checker which has a fatal problem.")
-(defun et-checker-fatal (path fmt &rest args)
-  (apply #'et--checker-diagnostic 'fatal path fmt args)
-  (signal 'et-checker-fatal nil))
 
 
 ;;;; Root level functions
@@ -561,8 +466,16 @@ PATH is the path to the subexpression."
 
 ;;; ============================================================
 ;;; Processing
-;;;; Preprocess a defun
+;;;; Process a defun
 ;;;;; Root
+
+;; Function processing happens in two phases:
+;;
+;; 1. `et--parse-defun-signature' must be run after all types are
+;; defined.
+;;
+;; 2. Checking the function body must happen after all functions and
+;; variabels are defined.
 
 (cl-defstruct et-func-sig
   (func-type nil :et *et-type)
@@ -574,8 +487,6 @@ PATH is the path to the subexpression."
   (scoped nil :et (List (Tuple EtGeneric Symbol List<EtConstraint>)))
   (vars nil :et List<*et-var>)
   (expected-return nil :et *et-type))
-
-;; This function takes a function name, arglist, and body, and
 
 (defun et--parse-defun-signature (arglist-pos arglist body)
   (declare (et (arglist List)
@@ -765,6 +676,10 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
 
 
 ;;;; Preprocess cl-defstruct
+
+;; Struct processing happens in 3 phases.
+;;
+;;
 
 (defun et--preprocess-cl-defstruct (body)
   "Preprocess a `cl-defstruct' expression."
@@ -1252,58 +1167,80 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
                (flycheck-mode 1)))))
 
 
+;;;; Processing
+
+(defun et--process-exprs (exprs)
+  (let* ((identify-result
+          (et--res-map #'et--identify-expr exprs #'cons))
+         (constrain-result
+          (et--res-map (lambda (plists)
+                         (et--res-map (lambda (pl) (funcall (plist-get pl :constrain))) plists))
+                       (et-res-value identify-result)
+                       #'cons))
+         (populate-result
+          (et--res-map (lambda (plists)
+                         (et--res-map (lambda (pl) (funcall (plist-get pl :populate))) plists))
+                       (et-res-value identify-result)
+                       #'cons)))
+    (cl-loop for expr in exprs
+             append (et--identify-expr expr) into identify-results
+
+             )
+    )
+
+
 ;;; ============================================================
 ;;; Utils
 ;;;; Testing checkers
 
-(et-define-pcase-checker :type `(,spec)
-  (setq et--checker-expr "dummy") (et-parse-type spec))
+  (et-define-pcase-checker :type `(,spec)
+    (setq et--checker-expr "dummy") (et-parse-type spec))
 
-(et-define-pcase-checker :eval-type `(,expr)
-  (setq et--checker-expr "dummy") (eval expr))
+  (et-define-pcase-checker :eval-type `(,expr)
+    (setq et--checker-expr "dummy") (eval expr))
 
-(et-define-pcase-checker :assert-subtype `(,_expr ,type-spec)
-  (let ((expr-type (et-checker-sub 1)))
-    (or (et-subtype? expr-type (et-parse-type type-spec))
-        (et-checker-err "Not subtype: %s" (et-pp expr-type)))
-    (setq et--checker-expr "dummy")
-    (et Nil)))
+  (et-define-pcase-checker :assert-subtype `(,_expr ,type-spec)
+    (let ((expr-type (et-checker-sub 1)))
+      (or (et-subtype? expr-type (et-parse-type type-spec))
+          (et-checker-err "Not subtype: %s" (et-pp expr-type)))
+      (setq et--checker-expr "dummy")
+      (et Nil)))
 
-(et-define-pcase-checker :assert-error `(,_expr)
-  (condition-case _err (et-checker-sub 1)
-    (error (setq et--checker-expr nil) (et-literal nil))
-    (:success (et-checker-err "Didn't error"))))
+  (et-define-pcase-checker :assert-error `(,_expr)
+    (condition-case _err (et-checker-sub 1)
+      (error (setq et--checker-expr nil) (et-literal nil))
+      (:success (et-checker-err "Didn't error"))))
 
-(et-define-pcase-checker :typeof `(,_expr)
-  (let ((type (et-checker-sub 1)))
-    (et-checker-warn (et-pp (et--remove-type-binds type)))
-    (setq et--checker-expr (cadr et--checker-expr))
-    type))
+  (et-define-pcase-checker :typeof `(,_expr)
+    (let ((type (et-checker-sub 1)))
+      (et-checker-warn (et-pp (et--remove-type-binds type)))
+      (setq et--checker-expr (cadr et--checker-expr))
+      type))
 
-(et-define-pcase-checker :typeof+ `(,_expr)
-  (let ((type (et-checker-sub 1)))
-    (et-checker-warn (et-pp type))
-    (setq et--checker-expr (cadr et--checker-expr))
-    type))
+  (et-define-pcase-checker :typeof+ `(,_expr)
+    (let ((type (et-checker-sub 1)))
+      (et-checker-warn (et-pp type))
+      (setq et--checker-expr (cadr et--checker-expr))
+      type))
 
-(et-define-pcase-checker :narrows `()
-  (cl-loop for (var . type) in (reverse et--narrow-binds)
-           collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
-           finally do
-           (et-checker-warn (string-join strs "\\n")))
-  (setq et--checker-expr nil)
-  (et Nil))
+  (et-define-pcase-checker :narrows `()
+    (cl-loop for (var . type) in (reverse et--narrow-binds)
+             collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
+             finally do
+             (et-checker-warn (string-join strs "\\n")))
+    (setq et--checker-expr nil)
+    (et Nil))
 
-(et-define-pcase-checker :eval `(,expr)
-  (et-checker-warn (cl-prin1-to-string (eval expr)))
-  (setq et--checker-expr nil)
-  (et Nil))
+  (et-define-pcase-checker :eval `(,expr)
+    (et-checker-warn (cl-prin1-to-string (eval expr)))
+    (setq et--checker-expr nil)
+    (et Nil))
 
 
 ;;;; Pcase et-*
 
-(pcase-defmacro et-2* (vars pat1 pat2)
-  "Match alternating pairs in a flat list, collecting bindings.
+  (pcase-defmacro et-2* (vars pat1 pat2)
+    "Match alternating pairs in a flat list, collecting bindings.
 Groups the list into pairs and delegates to et-*.
 
 Example:
@@ -1312,15 +1249,15 @@ Example:
                       (and (pred symbolp) var) val))
      (list vars vals)))
   => ((a b) (1 2))"
-  `(and (pred listp)
-        (pred (lambda (l) (cl-evenp (length l))))
-        (app (lambda (l)
-               (cl-loop for (a b) on l by #'cddr
-                        collect (list a b)))
-             (et-* ,vars (\` ((\, ,pat1) (\, ,pat2)))))))
+    `(and (pred listp)
+          (pred (lambda (l) (cl-evenp (length l))))
+          (app (lambda (l)
+                 (cl-loop for (a b) on l by #'cddr
+                          collect (list a b)))
+               (et-* ,vars (\` ((\, ,pat1) (\, ,pat2)))))))
 
-(pcase-defmacro et-* (vars pattern)
-  "Match a list where each element matches PATTERN, collecting bindings.
+  (pcase-defmacro et-* (vars pattern)
+    "Match a list where each element matches PATTERN, collecting bindings.
 VARS is a vector of variable specs. Each spec is one of:
   SYMBOL           — binds SYMBOL to the collected list
   (SINGULAR PLURAL) — SINGULAR is used inside PATTERN to match each element,
@@ -1333,52 +1270,52 @@ Example:
     ((et-* [(name names) val] `(,name ,val))
      (list names val)))
   => ((a b) (1 2))"
-  (let* ((specs (mapcar (lambda (v)
-                          (if (consp v)
-                              (list :singular (car v)
-                                    :plural (cadr v)
-                                    :acc (gensym (symbol-name (cadr v))))
-                            (list :singular v
-                                  :plural v
-                                  :acc (gensym (symbol-name v)))))
-                        (append vars nil)))
-         (lst (gensym "lst"))
-         (elt (gensym "elt"))
-         (plural-vars (cl-remove-if-not
-                       (lambda (s) (not (eq (plist-get s :singular)
-                                            (plist-get s :plural))))
-                       specs)))
-    `(and
-      (pred listp)
-      (app (lambda (,lst)
-             (let ,(mapcar (lambda (s) (list (plist-get s :acc) nil))
-                           specs)
-               (when (cl-every
-                      (lambda (,elt)
-                        (let ,(mapcar (lambda (s)
-                                        `(,(plist-get s :plural)
-                                          (reverse ,(plist-get s :acc))))
-                                      plural-vars)
-                          (pcase ,elt
-                            (,pattern
-                             ,@(mapcar (lambda (s)
-                                         `(push ,(plist-get s :singular)
-                                                ,(plist-get s :acc)))
-                                       specs)
-                             t)
-                            (_ nil))))
-                      ,lst)
-                 (list ,@(mapcar (lambda (s) `(nreverse ,(plist-get s :acc)))
-                                 specs)))))
-           (,'\` (,@(mapcar (lambda (s)
-                              (list '\, (plist-get s :plural)))
-                            specs)))))))
+    (let* ((specs (mapcar (lambda (v)
+                            (if (consp v)
+                                (list :singular (car v)
+                                      :plural (cadr v)
+                                      :acc (gensym (symbol-name (cadr v))))
+                              (list :singular v
+                                    :plural v
+                                    :acc (gensym (symbol-name v)))))
+                          (append vars nil)))
+           (lst (gensym "lst"))
+           (elt (gensym "elt"))
+           (plural-vars (cl-remove-if-not
+                         (lambda (s) (not (eq (plist-get s :singular)
+                                              (plist-get s :plural))))
+                         specs)))
+      `(and
+        (pred listp)
+        (app (lambda (,lst)
+               (let ,(mapcar (lambda (s) (list (plist-get s :acc) nil))
+                             specs)
+                 (when (cl-every
+                        (lambda (,elt)
+                          (let ,(mapcar (lambda (s)
+                                          `(,(plist-get s :plural)
+                                            (reverse ,(plist-get s :acc))))
+                                        plural-vars)
+                            (pcase ,elt
+                              (,pattern
+                               ,@(mapcar (lambda (s)
+                                           `(push ,(plist-get s :singular)
+                                                  ,(plist-get s :acc)))
+                                         specs)
+                               t)
+                              (_ nil))))
+                        ,lst)
+                   (list ,@(mapcar (lambda (s) `(nreverse ,(plist-get s :acc)))
+                                   specs)))))
+             (,'\` (,@(mapcar (lambda (s)
+                                (list '\, (plist-get s :plural)))
+                              specs)))))))
 
 
 ;;; ============================================================
 ;;; Provide
 
-(provide 'et-check)
+  (provide 'et-check)
 
 
 ;;; et-check.el ends here

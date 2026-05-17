@@ -130,14 +130,14 @@ expression that is not actually in the buffer, ensure that
   (push (list (et--resolve-path rel) severity
               (if args (apply #'format fmt args) fmt))
         et--checker-diagnostics)
+  ;; Intentionally return nil
   nil)
 
 (defmacro et--define-diagnostics-function (name severity &optional failed)
   `(defun ,name (relative fmt &rest args)
      ,(format "Create a checker diagnostic with severity `%s'." severity)
      ,@(when failed (list '(setq et--checker-failed t)))
-     (apply #'et--diagnostic relative ',severity fmt args)
-     nil))
+     (apply #'et--diagnostic relative ',severity fmt args)))
 
 (et--define-diagnostics-function et-err error t)
 (et--define-diagnostics-function et-warn warning)
@@ -168,6 +168,18 @@ expression that is not actually in the buffer, ensure that
   `(et-at ,relative
      (condition-case err (progn . ,body)
        (error (et-err nil (error-message-string err))))))
+
+(defmacro et-failed-boundary (&rest body)
+  "Evaluate BODY with `et--result-failed' temporarily bound to nil.
+
+Sometimes, we care whether a particular function call failed. Checking
+`et--result-failed' normally isn't sufficient, because it already might
+be non-nil."
+  `(let* ((value-and-failed
+           (let* ((et--result-failed nil))
+             (cons (progn ,@body) et--result-failed))))
+     (setq et--result-failed (or et--result-failed (cdr value-and-failed)))
+     (car value-and-failed)))
 
 
 ;;; ============================================================
