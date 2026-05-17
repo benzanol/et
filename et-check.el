@@ -717,10 +717,11 @@ OUTPUT-STRUCT each converted to concrete types."
 
          ;; --- Predicate ---
          (when predicate
-           (let* ((output-struct
+           (let* ((never-args (make-list (length generics) 'Never))
+                  (output-struct
                    (et--parse-struct
-                    `(or (and True (bindsof (and T (Struct ,name ,(make-list (length generics) 'Never)))))
-                         (and Nil (bindsof (subtract T (Struct ,name ,(make-list (length generics) 'Never))))))
+                    `(or (and True (bindsof (and T (Struct ,name ,@never-args))))
+                         (and Nil (bindsof (subtract T (Struct ,name ,@never-args)))))
                     '(T) 'TYPE)))
              (put predicate 'et-function-type
                   (et-dt 'DynFunction (et-parse-matcher 'Any [T]) output-struct))))
