@@ -275,10 +275,10 @@ Self-quoting atoms (numbers, strings, keywords) match as literals."
     (`(,head . ,_)
      (if-let* ((checker (gethash head et--pcase-patterns)))
          (funcall checker scrutinee-type pattern)
-       (et-checker-warn "Unknown pcase pattern head: %s" head)
+       (et-warn nil "Unknown pcase pattern head: %s" head)
        (make-et-pcase-result :matched-type scrutinee-type)))
 
-    (_ (et-checker-warn "Unrecognized pcase pattern: %s" pattern)
+    (_ (et-warn nil "Unrecognized pcase pattern: %s" pattern)
        (make-et-pcase-result :matched-type scrutinee-type))))
 
 
@@ -368,7 +368,7 @@ Backquote patterns are recursive:
        (make-et-pcase-result :matched-type matched :residual-type residual)))
 
     ;; Vector pattern — not yet supported
-    (_ (et-checker-warn "Unsupported backquote pattern form: %s" pattern)
+    (_ (et-warn nil "Unsupported backquote pattern form: %s" pattern)
        (make-et-pcase-result :matched-type scrutinee-type))))
 
 (et-define-pcase-pattern \` (scrutinee-type pattern)
@@ -531,7 +531,7 @@ Backquote patterns are recursive:
          (all-vars nil))
 
     (unless struct-slots
-      (et-checker-warn "Unknown struct: %s" struct-name))
+      (et-warn nil "Unknown struct: %s" struct-name))
 
     (dolist (spec slot-specs)
       (pcase spec

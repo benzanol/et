@@ -523,6 +523,28 @@ priority."
                        collect (append a-case b-case))))))
 
 
+;;;; Stop recursion
+
+(defmacro et--stop-recursion (var elem default &rest body)
+  "This allows defining recursive algorithms that loop.
+
+A function implementing this kind of algorithm should define a stack
+variable, which holds the current call stack. Each call to this macro
+will add ELEM to the call stack. If ELEM already existed in the call
+stack, then DEFAULT will be evaluated, stored, and returned. If ELEM is
+ever encountered again, this stored value will be returned.
+
+When execution returns to the original stack frame, the frame will have
+access to the default value that was created, as the cdar of the stack
+variable."
+  (declare (indent 3))
+  `(let ((elem ,elem))
+     (if-let* ((entry (assoc elem ,var)))
+         (setcdr entry (or (cdr entry) ,default))
+       (let ((,var (cons (cons elem nil) ,var)))
+         ,@body))))
+
+
 ;;; ============================================================
 ;;; Types
 ;;;; Struct
@@ -546,13 +568,16 @@ BINDS is a list of (`et-var' . `et-type').
 TYPEOFS is a list of `et-var'.
 
 VALUE is an instance of either `et-datatype' or `et-alias'."
-  value binds typeofs)
+  (value nil :et *et-datatype|*et-alias)
+  (binds nil :et AList<Symbol~*et-var>)
+  (typeofs nil :et List<*et-var>))
 
 (cl-defstruct et-type
   "Struct representing a root-level et type.
 
   CASES is a list of `et-type-case' instances being unioned."
-  cases)
+  (cases nil :et List<*et-type-case>)
+  (label nil :et Nil|EtTypeLabel))
 
 (defun et--verify-type (type)
   "Check that a matcher is valid."
@@ -790,7 +815,7 @@ matcher and another might be a type.
 Also, (funcall CO-LITERAL val super-arg) checks if the literal val is a
 subtype of super-arg."
 
-  (cl-flet ((valid-if (valid) (if valid nil (et-ql (Q:NEVER)))))
+  (cl-flet ((valid-if (valid) (if valid nil (list (et--never-constraint)))))
 
     (pcase (list sub-name super-name)
       (`(,_ Any) nil)
@@ -829,7 +854,7 @@ subtype of super-arg."
       ('(Plist Plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
                 for sub-val = (plist-get sub-args prop)
-                unless sub-val return (et-ql (Q:NEVER))
+                unless sub-val return (list (et--never-constraint))
                 nconc (funcall co sub-val super-val)))
 
       ((guard (eq sub-name super-name))
@@ -878,7 +903,7 @@ allowed and order does not matter."
                     (if pval
                         (et-alias 'ConsR pval tail)
                       (et-alias 'ConsR (et-any) tail))))))
-      (_ (et-ql (Q:NEVER))))))
+      (_ (list (et--never-constraint))))))
 
 
 ;;;; Datatype mappers
@@ -1141,7 +1166,7 @@ DNF is the struct representing the matcher."
 
       (cl-loop for q in (et-matcher-constraints matcher)
                do (pcase q
-                    (`(Q:NEVER))
+                    (`(Q:NEVER ,_))
                     (`(,(or 'Q:EQ 'Q:LEQ 'Q:GEQ)
                        ,(and gen (guard (memq gen generics)))
                        (pred et-type-p)))
@@ -1207,61 +1232,78 @@ DNF is the struct representing the matcher."
 (defvar et--sub-constraints-stack nil
   "Stack of calls to `et--sub-constraints' with the form (MATCHER . TYPE).")
 
-(defmacro et--stop-recursion (var elem default &rest body)
-  (declare (indent 3))
-  `(let ((elem ,elem))
-     (if-let* ((entry (assoc elem ,var)))
-         (setcdr entry (or (cdr entry) ,default))
-       (let ((,var (cons (cons elem nil) ,var)))
-         ,@body))))
+(defvar et--constraint-label nil
+  "A cons cell (MATCHER-LABEL . TYPE-LABEL).
+
+When evaluating `et--sub-constraints', when encountering a matcher with
+a (S:LABEL) field, or a type with a non-nil :label, the corresponding
+car/cdr of this variable will be set. Then, when a constraint is later
+created, its label will be set to the value of this variable.")
+
+(defun et--simplify-constraints (qs)
+  (if (null (cdr qs)) qs
+    (if-let* ((never (assq 'Q:NEVER qs)))
+        (list never)
+      (delete-dups qs))))
+
+(defun et--never-constraint ()
+  (list 'Q:NEVER et--constraint-label))
 
 (defun et--sub-constraints (matcher type)
   (et--verify-matcher matcher)
   (et--verify-type type)
 
-  (et--stop-recursion et--sub-constraints-stack (cons matcher type) nil
-    (setq matcher (et--matcher-expand-aliases matcher))
+  (let* ((et--constraint-label (cons (car et--constraint-label)
+                                     (or (et-type-label type) (cdr et--constraint-label)))))
 
-    (cl-loop for case in (et-type-cases type)
-             for binds = (append (et-type-case-binds case)
-                                 (cl-loop for var in (et-type-case-typeofs case)
-                                          collect (cons var (et--remove-type-binds (et-type case)))))
-             for qs-raw = (et--sub-constraints-2 matcher case)
-             for qs-with-binds =
-             (if (not binds) qs-raw
-               (cl-loop for q in qs-raw
-                        if (eq (car q) 'Q:GEQ)
-                        collect (list 'Q:GEQ (cadr q)
-                                      (et--supersect (caddr q) (et--replace-type-binds (et-any) binds)))
-                        else collect q))
-             nconc qs-with-binds into result
-             finally return (if (member '(Q:NEVER) result) (et-q ((Q:NEVER)))
-                              (delete-dups result)))))
+    (et--stop-recursion et--sub-constraints-stack (cons matcher type) nil
+      (setq matcher (et--matcher-expand-aliases matcher))
+
+      (cl-loop for case in (et-type-cases type)
+               for binds = (append (et-type-case-binds case)
+                                   (cl-loop for var in (et-type-case-typeofs case)
+                                            collect (cons var (et--remove-type-binds (et-type case)))))
+               for qs-raw = (et--sub-constraints-2 matcher case)
+               for qs-with-binds =
+               (if (not binds) qs-raw
+                 (cl-loop for q in qs-raw
+                          if (eq (car q) 'Q:GEQ)
+                          collect (list 'Q:GEQ (cadr q)
+                                        (et--supersect (caddr q) (et--replace-type-binds (et-any) binds)))
+                          else collect q))
+               nconc qs-with-binds into result
+               finally return (et--simplify-constraints result)))))
 
 (defun et--sub-constraints-2 (matcher case)
   (cl-loop for match-case in (et-matcher-dnf matcher)
-           for result =
-           (cl-loop for match-factor in match-case
-                    for gens = (et-matcher-generics matcher)
-                    nconc (et--sub-or-super-constraints-3 match-factor case gens))
-           unless (member '(Q:NEVER) result)
-           return result
+           for label = (cadr (assq 'S:MATCHER-LABEL match-case))
+           for result-1 =
+           (let* ((et--constraint-label (cons (or label (car et--constraint-label))
+                                              (cdr et--constraint-label))))
+             (cl-loop for match-factor in match-case
+                      for gens = (et-matcher-generics matcher)
+                      nconc (et--sub-or-super-constraints-3 match-factor case gens)))
+           unless (assq 'Q:NEVER result-1)
+           return result-1
            ;; If all cases failed, fallback to 2.2 or 2.3
            finally return
            (let ((val (et-type-case-value case)))
              (if (et-alias-p val)
                  (et--sub-constraints
                   matcher
-                  (cl-loop for c in (et-type-cases (et-alias-expand val))
+                  (cl-loop with exp = (et-alias-expand val)
+                           for c in (et-type-cases exp)
                            collect (make-et-type-case
                                     :value (et-type-case-value c)
                                     :binds (et-type-case-binds case)
                                     :typeofs (et-type-case-typeofs case))
-                           into cases finally return (make-et-type :cases cases)))
-               (et-q ((Q:NEVER)))))))
+                           into cases finally return (make-et-type :label (et-type-label exp) :cases cases)))
+               ;; result-1 has the correct labels
+               result-1))))
 
 (defun et--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
   (pcase match-factor
+    (`(S:MATCHER-LABEL ,_) nil)
     (`(S:GENERIC ,var) (et-q ((,(if is-super 'Q:LEQ 'Q:GEQ) ,var ,(et-type case)))))
     (`(S:SET ,dnf ,type)
      (funcall (if is-super #'et--super-constraints #'et--sub-constraints)
@@ -1269,7 +1311,7 @@ DNF is the struct representing the matcher."
     (`(S:DT ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
        ((and alias (pred et-alias-p))
-        (if (not is-super) (et-q ((Q:NEVER)))
+        (if (not is-super) (list (et--never-constraint))
           (et--super-constraints (make-et-matcher :generics generics :dnf (list (list match-factor)))
                                  (et-alias-expand alias))))
        ((and dt (pred et-datatype-p))
@@ -1315,8 +1357,7 @@ DNF is the struct representing the matcher."
     (cl-loop for m-case in (et-matcher-dnf matcher)
              nconc (et--super-constraints-2 m-case type (et-matcher-generics matcher))
              into result
-             finally return (if (member '(Q:NEVER) result) (et-q ((Q:NEVER)))
-                              (delete-dups result)))))
+             finally return (et--simplify-constraints result))))
 
 (defun et--super-constraints-2 (match-case type generics)
   (make-et-matcher :dnf (list match-case) :generics generics)
@@ -1331,10 +1372,10 @@ DNF is the struct representing the matcher."
             for result =
             (cl-loop for match-factor in match-case
                      nconc (et--sub-or-super-constraints-3 match-factor case generics 'SUPER))
-            unless (member '(Q:NEVER) result)
+            unless (assq 'Q:NEVER result)
             return result
             ;; If all cases failed, return never
-            finally return (et-q ((Q:NEVER))))))
+            finally return (list (et--never-constraint)))))
 
 
 ;;; ============================================================
@@ -1342,8 +1383,11 @@ DNF is the struct representing the matcher."
 ;;;; Documentation
 
 [et
+ (@alias EtTypeLabel Integer)
+ (@alias EtMatcherLabel Integer)
+ (@alias EtConstraintLabel (Cons EtMatcherLabel EtTypeLabel))
  (@alias EtConstraint
-         (or (Tuple @Q:NEVER)
+         (or (Tuple @Q:NEVER EtConstraintLabel)
              (Tuple @Q:EQ EtGeneric *et-type)
              (Tuple @Q:GEQ EtGeneric *et-type)
              (Tuple @Q:LEQ EtGeneric *et-type)))
@@ -1352,7 +1396,8 @@ DNF is the struct representing the matcher."
              (TupleStar @S:ALIAS EtAliasName List<*et-type>)
              (Tuple @S:GENERIC EtGeneric)))
  (@alias EtTypeStructureFactor
-         (or (Tuple @S:TYPE *et-type)
+         (or (Tuple @S:TYPE-LABEL EtTypeLabel)
+             (Tuple @S:TYPE *et-type)
              (Tuple @S:BIND NonNilSymbol EtTypeStructure)
              (Tuple @S:TYPEOF EtTypeStructure)
              (Tuple @S:BINDS-OF EtTypeStructure)
@@ -1361,7 +1406,8 @@ DNF is the struct representing the matcher."
              (Tuple @S:EXTENDS EtTypeStructure EtTypeStructure EtTypeStructure EtTypeStructure)
              (TupleStar @S:EVAL Function<List<*et-type>~*et-type> List<*et-type>)))
  (@alias EtMatcherStructureFactor
-         (or (Tuple @S:SET EtMatcherStructure EtTypeStructure)))
+         (or (Tuple @S:MATCHER-LABEL EtMatcherLabel)
+             (Tuple @S:SET EtMatcherStructure EtTypeStructure)))
  (@alias EtTypeStructure
          (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
  (@alias EtMatcherStructure
@@ -1571,7 +1617,11 @@ Depth tracks < > and { } nesting."
              (cl-loop for (name . args) in factors
                       for totype = (or (get name 'et-struct-to-type)
                                        (error "Invalid type structure: %s" name))
-                      collect (make-et-type :cases (apply totype args)) into and-types
+                      for out = (apply totype args)
+                      for type = (cond ((et-type-p out) out)
+                                       ((et-type-case-p out) (make-et-type :cases (list out)))
+                                       (t (make-et-type :cases out)))
+                      collect type into and-types
                       finally return (apply #'et--supersect and-types))
              into or-types
              finally return (apply #'et--or or-types))))
@@ -1716,6 +1766,15 @@ which are invalid for types."
 (et--define-spec-segment and :full (&rest args)
   (apply #'et--dnf-and (mapcar #'et--parse-sub args)))
 
+(et--define-struct-segment S:TYPE-LABEL type-label (label)
+  :parse (list label)
+  :to-type (list)
+  :print (format "t@%s" label))
+
+(et--define-struct-segment S:MATCHER-LABEL matcher-label (label)
+  :parse (list label)
+  :print (format "m@%s" label))
+
 (et--define-struct-segment S:BIND bind (var type)
   :parse (list var (et--parse-sub type))
   :to-type (list (make-et-type-case
@@ -1778,7 +1837,7 @@ which are invalid for types."
 
 (et--define-struct-segment S:GENERIC generic (var)
   :parse (if (memq var et--parsing-generics) (list var) (error "Generic %s not defined" var))
-  :to-type (et-type-cases (or (alist-get var et--totype-gen-repls) (error "Generic %s not defined" var)))
+  :to-type (or (alist-get var et--totype-gen-repls) (error "Generic %s not defined" var))
   :print (format "@%s" var))
 
 (et--define-struct-segment S:SET set (dnf type)
@@ -1807,7 +1866,7 @@ which are invalid for types."
   :print (et--print-sub-named name args))
 
 
-;;;; From type
+;;;; Type to struct
 
 (defun et-type-to-structure (type)
   "Convert an `et-type' to a structure DNF."
@@ -1828,7 +1887,9 @@ which are invalid for types."
              (cl-loop for (var . type) in (et-type-case-binds case)
                       collect (et-ql S:BIND ,var ,(et-type-to-structure type)))
              (cl-loop for var in (et-type-case-typeofs case)
-                      collect (et-ql S:TYPEOF ,var))))))
+                      collect (et-ql S:TYPEOF ,var))
+             (when (et-type-label type)
+               (list (et-ql S:TYPE-LABEL ,(et-type-label type))))))))
 
 
 ;;;; Parse/print type
@@ -1845,11 +1906,13 @@ which are invalid for types."
   `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
 
 (defun et-pp-type (type)
-  (or (ignore-errors (et--print-sub (et-type-to-structure type)))
+  (or (ignore-errors
+        (format "%s%s" (if (et-type-label type) (format "%s:" (et-type-label type)) "")
+                (et--print-sub (et-type-to-structure type))))
       (format "%s" type)))
 
 (cl-defmethod cl-print-object ((type et-type) stream)
-  (princ (format "%s" (et-pp-type type)) stream))
+  (princ (et-pp-type type) stream))
 
 (defun et-pp (arg)
   (if (stringp arg) arg (cl-prin1-to-string arg)))
@@ -1963,9 +2026,11 @@ same as [T (<= T Number)]."
   "Return the exact type union of TYPES."
   (mapc #'et--verify-type types)
 
-  (cl-loop for type in types
+  (cl-loop with label = nil
+           for type in types
+           when (et-type-label type) do (setq label (et-type-label type))
            nconc (apply #'list (et-type-cases type)) into cases
-           finally return (make-et-type :cases cases)))
+           finally return (make-et-type :label label :cases cases)))
 
 
 ;;;; Subtype
@@ -1974,7 +2039,7 @@ same as [T (<= T Number)]."
   (cl-assert (et-datatype-p sub))
   (cl-assert (et-datatype-p super))
 
-  (cl-flet ((valid-if (valid) (if valid nil (et-ql (Q:NEVER)))))
+  (cl-flet ((valid-if (valid) (if valid nil (list (et--never-constraint)))))
     (let ((constraints
            (et--datatype-constraints
             (et-datatype-name sub) (et-datatype-args sub)
@@ -1984,7 +2049,7 @@ same as [T (<= T Number)]."
             (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
             (lambda (literal b) (valid-if (and (et-subtype? (et-literal literal) b)))))))
 
-      (not (member '(Q:NEVER) constraints)))))
+      (not (assq 'Q:NEVER constraints)))))
 
 (defun et--binds-subtype? (sub-binds super-binds)
   (cl-loop for (var . super-type) in super-binds
@@ -2097,7 +2162,7 @@ same as [T (<= T Number)]."
                                              (make-et-type :cases (list c)))))
 
            collect case into new-cases
-           finally return (make-et-type :cases new-cases)))
+           finally return (make-et-type :label (et-type-label type) :cases new-cases)))
 
 
 ;;;; Intersection
@@ -2338,7 +2403,7 @@ returning A itself is a valid approximation."
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
 Returns the symbol `INVALID' if invalid."
-  (if (member '(Q:NEVER) constraints) 'INVALID
+  (if (assq 'Q:NEVER constraints) 'INVALID
     (cl-loop
      for gen in generics
      for gen-result =
@@ -2364,7 +2429,7 @@ Returns the symbol `INVALID' if invalid.
 
 However, unlike `et--match-satisfy-constraints-biggest', this allows
 values to be the never type."
-  (if (member '(Q:NEVER) constraints) 'INVALID
+  (if (assq 'Q:NEVER constraints) 'INVALID
     (cl-loop
      for gen in generics
      for gen-result =
@@ -2404,7 +2469,7 @@ values to be the never type."
                  (make-et-datatype :name name :args new-args)))
               (_ (error "Invalid case val: %s" val))))
            into cases
-           finally return (make-et-type :cases cases)))
+           finally return (make-et-type :label (et-type-label type) :cases cases)))
 
 (defun et--type-binds (type)
   ;; binds is an alist of `et-var' to a list of types (which will be `et--or'ed)
@@ -2435,7 +2500,7 @@ values to be the never type."
   (cl-loop for case in (et-type-cases (et--remove-type-binds type))
            collect (make-et-type-case :value (et-type-case-value case) :binds binds)
            into cases
-           finally return (make-et-type :cases cases)))
+           finally return (make-et-type :label (et-type-label type) :cases cases)))
 
 
 ;;;; Infer
@@ -2536,7 +2601,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
                        :typeofs (et-type-case-typeofs case)))))
              into new-cases
              finally return
-             (let* ((type (make-et-type :cases new-cases))
+             (let* ((type (make-et-type :label (et-type-label type) :cases new-cases))
                     (no-binds (et--remove-type-binds type))
                     (alias-type (cdar et--rec-transform-stack)))
                (when alias-type
@@ -2592,7 +2657,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
                      (et-datatype-name dt) (et-datatype-args dt)
                      (lambda (type) (et-expand-aliases-at-depth type (1- depth)))))
              collect (make-et-type-case :value new-dt) into new-cases
-             finally return (make-et-type :cases new-cases))))
+             finally return (make-et-type :label (et-type-label type) :cases new-cases))))
 
 
 ;;; ============================================================
