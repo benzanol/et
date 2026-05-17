@@ -121,20 +121,30 @@ expression that is not actually in the buffer, ensure that
 ;;;; Diagnostics
 
 (defvar et--result-diagnostics nil
-  "Diagnostics collected for the current result."
-  )
+  "Diagnostics collected for the current result.")
 
 (defvar et--result-failed nil)
 
-(defun et--res-diag (rel severity fmt &rest args)
-  (setq rel (flatten-list (list rel)))
-  (let* ((str (if args (apply #'format fmt args) fmt)))
-    (push (list (append et--path rel) severity str) et--result-diagnostics)
-    nil))
 
-(defun et--res-fatal (rel fmt &rest args)
-  (setq et--path (append et--path (flatten-list (list rel))))
-  (if args (apply #'error fmt args) (error "%s" fmt)))
+(defun et--diagnostic (rel severity fmt &rest args)
+  (push (list (et--resolve-path rel) severity
+              (if args (apply #'format fmt args) fmt))
+        et--checker-diagnostics)
+  nil)
+
+(defmacro et--define-diagnostics-function (name severity &optional failed)
+  `(defun ,name (relative fmt &rest args)
+     ,(format "Create a checker diagnostic with severity `%s'." severity)
+     ,@(when failed (list '(setq et--checker-failed t)))
+     (apply #'et--diagnostic relative ',severity fmt args)
+     nil))
+
+(et--define-diagnostics-function et-err error t)
+(et--define-diagnostics-function et-warn warning)
+(et--define-diagnostics-function et-hint hint)
+
+(defun et-fatal (relative fmt &rest args)
+  (et-at relative (error "%s" (if args (apply #'format fmt args) fmt))))
 
 
 ;;;; Boundaries
@@ -144,6 +154,8 @@ expression that is not actually in the buffer, ensure that
                (@return *et-res<T>)))
 
   `(let* ((et--path nil)
+          (et--path-offset 0)
+          (et--sticky-path nil)
           (et--result-diagnostics nil)
           (et--result-failed nil))
      (make-et-res
@@ -151,15 +163,11 @@ expression that is not actually in the buffer, ensure that
       :failed et--result-failed
       :diagnostics et--result-diagnostics)))
 
-(defmacro et-error-boundary (rel &rest body)
+(defmacro et-error-boundary (relative &rest body)
   (declare (indent 1))
-  (let* ((inner
-          `(condition-case err (progn . ,body)
-             (error (setq et--result-failed t)
-                    (push (list (append et--path nil) 'error (error-message-string err))
-                          et--result-diagnostics)
-                    nil))))
-    (if (eq rel nil) inner `(et-at ,rel ,inner))))
+  `(et-at ,relative
+     (condition-case err (progn . ,body)
+       (error (et-err nil (error-message-string err))))))
 
 
 ;;; ============================================================
