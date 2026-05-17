@@ -834,6 +834,7 @@ subtype of super-arg."
                  ((and (et-type-p func-input) (et-type-p func-output)))
                  (dyn-output (et--funcall (apply #'et-dt 'DynFunction sub-args)
                                           (car super-args)))
+                 ((et-type-p dyn-output))
                  ((et-subtype? dyn-output func-output)))
            (valid-if t)
          (valid-if nil)))
@@ -2402,8 +2403,9 @@ returning A itself is a valid approximation."
 (defun et--match-satisfy-constraints-biggest (generics constraints)
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
-Returns the symbol `INVALID' if invalid."
-  (if (assq 'Q:NEVER constraints) 'INVALID
+Returns (`INVALID' . REASON) if invalid. REASON is a cons
+cell (MATCHER-LABEL . TYPE-LABEL), or nil."
+  (if-let* ((never (assq 'Q:NEVER constraints))) (cons 'INVALID (cadr never))
     (cl-loop
      for gen in generics
      for gen-result =
@@ -2419,17 +2421,18 @@ Returns the symbol `INVALID' if invalid."
                         (et-subtype? type guess)))
            guess (et-never)))
      when (equal gen-result (et-never))
-     do (cl-return 'INVALID)
+     do (cl-return (cons 'INVALID nil))
      collect gen-result)))
 
 (defun et--match-satisfy-constraints-smallest (generics constraints)
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
-Returns the symbol `INVALID' if invalid.
+Returns (`INVALID' . REASON) if invalid. REASON is a cons
+cell (MATCHER-LABEL . TYPE-LABEL), or nil.
 
 However, unlike `et--match-satisfy-constraints-biggest', this allows
 values to be the never type."
-  (if (assq 'Q:NEVER constraints) 'INVALID
+  (if-let* ((never (assq 'Q:NEVER constraints))) (cons 'INVALID (cadr never))
     (cl-loop
      for gen in generics
      for gen-result =
@@ -2446,7 +2449,7 @@ values to be the never type."
            guess 'INVALID))
      ;; Unlike biggest, the never type actually represents a valid possible answer
      when (equal gen-result 'INVALID)
-     do (cl-return 'INVALID)
+     do (cl-return (cons 'INVALID nil))
      collect gen-result)))
 
 
@@ -2514,16 +2517,17 @@ succeeds, it will convert OUTPUT-STRUCT to a type, replacing each
 generic with the value determined by `et--sub-match', as well as
 EXTRA-REPLS if provided.
 
-If matching fails, return nil."
+If matching fails, return REASON (see `et--sub-match')."
 
   (let* ((gen-results (et--sub-match matcher type)))
-    (if (eq gen-results 'INVALID) nil
-      (et-structure-to-type
-       output-struct
-       (cl-loop for gen in (et-matcher-generics matcher)
-                for gen-type in gen-results
-                collect (cons gen gen-type) into new-repls
-                finally return (nconc new-repls extra-repls))))))
+    (if (eq (car gen-results) 'INVALID) (cdr gen-results)
+      (cl-loop for gen in (et-matcher-generics matcher)
+               for gen-type in gen-results
+               collect (cons gen gen-type) into new-repls
+               finally return
+               (et-structure-to-type
+                output-struct
+                (nconc new-repls extra-repls))))))
 
 
 ;;;; Funcall
@@ -2531,7 +2535,9 @@ If matching fails, return nil."
 (defun et--funcall (func-type arglist-type)
   "Determine the return type of calling FUNC-TYPE with ARGLIST-TYPE.
 
-Returns the output type, or nil if the call is invalid."
+Returns the output type, or REASON if the call is invalid, where REASON
+is either (MATCHER-LABEL . TYPE-LABEL), or nil."
+
   (et--verify-type func-type)
   (et--verify-type arglist-type)
 
@@ -2546,7 +2552,7 @@ Returns the output type, or nil if the call is invalid."
              ((cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,output-struct)))
               (et--infer matcher arglist-type output-struct))
              (_ nil))
-           unless result return nil
+           unless (et-type-p result) return result
            collect result into results
            finally return (apply #'et--supersect results)))
 

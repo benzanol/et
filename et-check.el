@@ -139,14 +139,22 @@ determine the output type."
 
        ;; Function type property
        ((and (let func-type (get func 'et-function-type)) (guard func-type))
-        (let* ((args-type (et--tuple 'ConsR (et-checker-remaining 1)))
+        (let* ((args-type (cl-loop for type in (et-checker-remaining 1)
+                                   for pos upfrom 1
+                                   for new = (copy-et-type type)
+                                   do (setf (et-type-label new) (cons pos (et-pp type)))
+                                   collect new into types
+                                   finally return (et--tuple 'ConsR types)))
                (output-type (et--funcall func-type args-type)))
-          (or output-type
-              ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
-              ;; which means the true error was in the arguments, not this call
-              (unless et--result-failed
-                (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
-                        (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))
+          (cond
+           ((et-type-p output-type) output-type)
+           ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
+           ;; which means the true error was in the arguments, not this call
+           (et--result-failed nil)
+           ((cdr output-type) ; The type label should be (POSN . TYPE-STRING)
+            (et-err (cadr output-type) "Labeled: %s" (cddr output-type)))
+           (t (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
+                      (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))
 
        (_ (et-err 0 "No type for `%s'" func))))
 
@@ -387,12 +395,14 @@ PATH is the path to the subexpression."
 
 (defmacro et-checker-infer (type gen-vec matcher-spec output-spec)
   (pcase-let* ((gens (et--gen-vec-generics gen-vec)))
-    `(et--infer ,(make-et-matcher
-                  :generics gens
-                  :constraints (et--gen-vec-constraints gen-vec)
-                  :dnf (et--parse-struct matcher-spec gens 'MATCHER))
-                ,type
-                (et-q ,(et--parse-struct output-spec gens 'TYPE)))))
+    `(let* ((infer
+             (et--infer ,(make-et-matcher
+                          :generics gens
+                          :constraints (et--gen-vec-constraints gen-vec)
+                          :dnf (et--parse-struct matcher-spec gens 'MATCHER))
+                        ,type
+                        (et-q ,(et--parse-struct output-spec gens 'TYPE)))))
+       (when (et-type-p infer) infer))))
 
 
 ;;; ============================================================
@@ -424,13 +434,13 @@ PATH is the path to the subexpression."
   (declare (et (body List)
                (@return Nil|*et-res<*et-func-sig>)))
 
-  (when-let* ((arglist (car body))
-              (declare-pos (1+ (cl-position 'declare (cdr body) :key #'car-safe)))
+  (when-let* ((declare-pos (1+ (cl-position 'declare (cdr body) :key #'car-safe)))
               (declare-block (nth declare-pos body))
               (et-pos (cl-position 'et declare-block :key #'car-safe))
               (et-block (nth et-pos declare-block)))
 
-    (let* ((param-structs ; (name . struct)[]
+    (let* ((arglist (car body))
+           (param-structs ; (name . struct)[]
             (et-at 0
               (cl-loop for group in (et--parse-arglist-params arglist)
                        collect (cl-loop for name in group collect (cons name nil)))))
@@ -606,18 +616,6 @@ REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
           ConsR<T~PList<:scale~Number~:flag~Any>>)))
 
 
-;;;;; Identification
-
-(defun et--identify-defun (body)
-  (list
-   :declare
-   (lambda ()
-     (when-let* ((name (cadr body))
-                 (sig (et-at-offset 2 (et--parse-function-signature (cddr body)))))
-       (put name 'et-function-signature name)
-       (put name 'et-function-type (et-func-sig-func-type sig))))))
-
-
 ;;;;; Make function type
 
 (defun et--make-function-type (generics constraints input-struct output-struct)
@@ -638,6 +636,18 @@ OUTPUT-STRUCT each converted to concrete types."
     (et-dt 'Function
            (et-structure-to-type input-struct nil)
            (et-structure-to-type output-struct nil))))
+
+
+;;;;; Identification
+
+(defun et--identify-defun (body)
+  (list
+   :declare
+   (lambda ()
+     (when-let* ((name (cadr body))
+                 (sig (et-at-offset 2 (et--parse-function-signature (cddr body)))))
+       (put name 'et-function-signature sig)
+       (put name 'et-function-type (et-func-sig-func-type sig))))))
 
 
 ;;;;; Checker
