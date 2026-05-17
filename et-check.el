@@ -717,15 +717,11 @@ OUTPUT-STRUCT each converted to concrete types."
 
          ;; --- Predicate ---
          (when predicate
-           (let* ((placeholder-struct
+           (let* ((output-struct
                    (et--parse-struct
-                    '(or (and True (bindsof (and T *placeholder)))
-                         (and Nil (bindsof (subtract T *placeholder))))
-                    '(T) 'TYPE))
-                  (output-struct
-                   (cl-subst (cons 'S:DT (cons 'Struct (cons name gen-structs)))
-                             '(S:DT Struct placeholder)
-                             placeholder-struct :test #'equal)))
+                    `(or (and True (bindsof (and T (Struct ,name ,(make-list (length generics) 'Never)))))
+                         (and Nil (bindsof (subtract T (Struct ,name ,(make-list (length generics) 'Never))))))
+                    '(T) 'TYPE)))
              (put predicate 'et-function-type
                   (et-dt 'DynFunction (et-parse-matcher 'Any [T]) output-struct))))
 
@@ -771,25 +767,26 @@ OUTPUT-STRUCT each converted to concrete types."
 
 ;;;; Identify alias
 
-(defun et--identify-alias-def (args)
+(defun et--identify-alias-def (form)
   "Identify an alias definition, returning a processing plist.
 
 During identification, declares the alias name and generics.
 Returns a plist with :constrain and :populate functions."
-  (let* ((orig-args args)
+  (let* ((args (cdr form))
+         (orig-args args)
          (name (pop args))
          (_ (or (symbolp name)
-                (et-fatal 0 "Alias name must be a symbol")))
+                (et-fatal 1 "Alias name must be a symbol")))
          (gen-vec (if (vectorp (car args)) (pop args) []))
          (pb (condition-case nil (et--props-and-body args)
-               (error (et-fatal 0 "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)")))))
+               (error (et-fatal nil "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)")))))
 
     ;; Identification phase: declare the alias name, generics, and spec
     ;; (but don't parse structure or constraints yet)
     (apply #'et--declare-alias name gen-vec (cdr pb) (car pb))
 
-    (let* ((spec-idx (- (length orig-args) 1))
-           (gen-vec-idx (when (vectorp (nth 1 orig-args)) 1)))
+    (let* ((spec-idx (length orig-args))
+           (gen-vec-idx (when (vectorp (nth 1 orig-args)) 2)))
 
       (list
        :constrain
@@ -816,20 +813,20 @@ Returns a plist with :constrain and :populate functions."
 
 ;;;; Identify variable def
 
-(defun et--identify-variable-def (args)
+(defun et--identify-variable-def (form)
   "Identify a variable definition, returning a processing plist.
 
 During identification, just validates the format.
 Returns a plist with :declare to set the variable type."
-  (pcase args
+  (pcase (cdr form)
     (`(,(and name (pred symbolp)) ,spec)
      (list
       :declare
       (lambda ()
-        (et-at 1
+        (et-at 2
           (put name 'et-variable-type (et-parse-type spec))))))
 
-    (_ (et-fatal 0 "Expected format (@variable NAME TYPE)"))))
+    (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
 
 
 ;;;; Identify expr
@@ -846,8 +843,8 @@ Returns a plist with :declare to set the variable type."
         for plist =
         (et-error-boundary pos
           (pcase form
-            (`(@alias . ,args) (et--identify-alias-def args))
-            (`(@variable . ,args) (et--identify-variable-def args))))
+            (`(@alias . ,_) (et--identify-alias-def form))
+            (`(@variable . ,_) (et--identify-variable-def form))))
         collect
         (cons pos plist)))
 
@@ -876,7 +873,7 @@ Returns a plist with :declare to set the variable type."
                do (et-at idx
                     (cl-loop for (path . plist) in expr-plists
                              for func = (plist-get plist phase)
-                             when func do (et-at path (funcall func))))))
+                             when func do (et-error-boundary path (funcall func))))))
 
     ;; Check all root-level expressions
     (cl-loop for expr in exprs
@@ -884,7 +881,7 @@ Returns a plist with :declare to set the variable type."
              when (and (consp expr)
                        (or (get (car expr) 'et-function-signature)
                            (get (car expr) 'et-checker)))
-             do (et-at idx (et--check expr)))))
+             do (et-error-boundary idx (et--check expr)))))
 
 (defun et--process-buffer ()
   (save-excursion
@@ -906,17 +903,17 @@ Returns a plist with :declare to set the variable type."
       (emacs-lisp-mode)
       (cl-loop for (path severity msg)
                in (et-result-diagnostics (et-result-boundary (et--process-buffer)))
-               do (goto-char (point-min))
-               do (ignore-errors (et--traverse-buffer-expr path))
-               for start-line = (line-number-at-pos)
-               for start-col = (1+ (current-column))
-               do (ignore-errors (forward-sexp))
-               do (princ (format "%s:%d:%d:%s:%s: %s: %s path=%s\n"
-                                 filename
-                                 start-line start-col
-                                 (line-number-at-pos) (1+ (current-column))
-                                 severity msg path))
-               (flycheck-mode 1)))))
+               do (ignore-errors
+                    (goto-char (point-min))
+                    (ignore-errors (et--traverse-buffer-expr path))
+                    (let* ((start-line (line-number-at-pos))
+                           (start-col (1+ (current-column))))
+                      (ignore-errors (forward-sexp))
+                      (princ (format "%s:%d:%d:%s:%s: %s: %s path=%s\n"
+                                     filename
+                                     start-line start-col
+                                     (line-number-at-pos) (1+ (current-column))
+                                     severity msg path))))))))
 
 
 ;;; ============================================================

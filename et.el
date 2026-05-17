@@ -652,7 +652,13 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
     ;; Struct<NAME~GENERCIC-PARAMS...>
     (Struct :args (lambda (args)
-                    (cons 'CONST (make-list (length (cdr args)) 'ISO)))
+                    (if-let* ((name (car args))
+                              (plist (get name 'et-struct))
+                              (arg-count (length (plist-get plist :generics))))
+                        (if (eq (length (cdr args)) arg-count)
+                            (cons 'CONST (make-list (length (cdr args)) 'ISO))
+                          (error "Struct %s takes %s arguments" name arg-count))
+                      (error "Not a struct: %s" name)))
             :overlap nil :intersect nil)
 
     ;; Scoped datatypes occur when you have a function with generics.
@@ -1518,7 +1524,7 @@ DNF is the struct representing the matcher."
 
       ;; Force the arg name to get parsed as a constant symbol
       (when is-struct
-        (push (format "@%s" name) arg-strs)
+        (push name arg-strs)
         (setq name 'Struct))
 
       (cl-loop for s in arg-strs
@@ -1526,7 +1532,8 @@ DNF is the struct representing the matcher."
                                (et--datatype-arg-roles name arg-strs)
                              (make-list (length arg-strs) nil))
                collect (if (not (eq role 'CONST)) s
-                         (cond ((string-match-p ":.*" s) (intern s))
+                         (cond ((symbolp s) s) ; struct name
+                               ((string-match-p ":.*" s) (intern s))
                                ((string-match-p "@.*" s) (intern (substring s 1)))
                                ((string-match-p "%.*" s) (substring s 1))
                                ((string-match-p "[0-9]+\\(\\.[0-9]+\\)?" s)
