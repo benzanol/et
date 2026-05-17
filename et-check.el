@@ -842,20 +842,22 @@ Returns a plist with :declare to set the variable type."
       ((and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms)))
        (cl-loop
         for form in forms
-        for form-idx upfrom 0
-        collect
-        (et-error-boundary form-idx
+        for pos upfrom 1
+        for plist =
+        (et-error-boundary pos
           (pcase form
             (`(@alias . ,args) (et--identify-alias-def args))
-            (`(@variable . ,args) (et--identify-variable-def args))))))
+            (`(@variable . ,args) (et--identify-variable-def args))))
+        collect
+        (cons pos plist)))
 
       ;; Process a defun
       (`(defun ,(pred symbolp) ,(pred listp) . ,_)
-       (list (et--identify-defun expr)))
+       (list (cons nil (et--identify-defun expr))))
 
       ;; Process a struct
       (`(cl-defstruct . ,_)
-       (list (et--identify-cl-defstruct expr))))))
+       (list (cons nil (et--identify-cl-defstruct expr)))))))
 
 
 ;;;; Process exprs
@@ -872,9 +874,9 @@ Returns a plist with :declare to set the variable type."
       (cl-loop for expr-plists in identified
                for idx upfrom 0
                do (et-at idx
-                    (dolist (plist expr-plists)
-                      (when-let* ((func (plist-get plist phase)))
-                        (funcall func))))))
+                    (cl-loop for (path . plist) in expr-plists
+                             for func = (plist-get plist phase)
+                             when func do (et-at path (funcall func))))))
 
     ;; Check all root-level expressions
     (cl-loop for expr in exprs
