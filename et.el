@@ -58,10 +58,10 @@
 ;; function should also be used to continue from a certain location in
 ;; the event of an error.
 
-[et
+(et-declare
  (@alias EtPath List<Integer>)
  (@alias EtSeverity (or @error @warning @hint))
- (@alias EtDiagnostic (Tuple EtPath EtSeverity String))]
+ (@alias EtDiagnostic (Tuple EtPath EtSeverity String)))
 
 (defvar et--in-result? nil)
 
@@ -168,6 +168,12 @@ expression that is not actually in the buffer, ensure that
 
 ;;;; Boundaries
 
+(defmacro et-wrap-errors (relative format &rest body)
+  "Add context to errors thrown in BODY."
+  (declare (indent 1))
+  `(condition-case-unless-debug err (progn . ,body)
+     (error (error ,format (error-message-string err)))))
+
 (defmacro et-error-boundary (relative &rest body)
   (declare (indent 1))
   `(et-at ,relative
@@ -223,48 +229,7 @@ be non-nil."
 
 
 ;;; ============================================================
-;;; Testing macros
-;;;; Flycheck rebasing
-
-(defvar et--error-path nil)
-
-(defmacro et-with-error-path (path &rest body)
-  (declare (indent 1))
-  `(let* ((et--error-path (append et--error-path ,path nil)))
-     (condition-case err (progn ,@body)
-       (error (et-error nil (error-message-string err)) nil))))
-
-(defun et-error (path string &rest args)
-  (setq string (concat string (et--error-message-suffix path)))
-  (byte-compile-warn "%s" (if args (apply #'format string args) string))
-  nil)
-
-(defun et--error-message-suffix (path)
-  (format "\0;;error-path:%s" (append et--error-path path)))
-
-(defun et--traverse-buffer-expr (path)
-  (goto-char (point-min))
-  (dotimes (_ (or (car path) 0)) (forward-sexp))
-  (forward-comment (buffer-size))
-
-  (dolist (idx (cdr path))
-    ;; Skip whitespace and comments before looking at the next form
-    (cond
-     ((looking-at-p ",\\|`\\|#?']")
-      (if (eq idx 1)
-          (goto-char (match-end 0))
-        (error "Only valid subexpr of quote is 1")))
-
-     ((looking-at-p "[([]")
-      (forward-char 1)
-      (dotimes (_ idx) (forward-sexp))
-      (forward-comment (buffer-size)))
-
-     (t (error "Invalid expression container: %s" (thing-at-point 'char))))
-
-    (forward-comment (buffer-size))))
-
-
+;;; Utils
 ;;;; Repeat
 
 (defmacro et-repeat (var repls &rest body)
@@ -275,57 +240,6 @@ be non-nil."
            finally return (cons #'ignore all)))
 
 
-;;;; Testing
-
-(eval-and-compile
-  (defvar et-run-tests (if noninteractive t nil)
-    "Whether to run et tests when compiling source files.")
-
-  (defvar et-running-tests nil
-    "Whether tests are currently being run."))
-
-(defmacro et-test (&rest body)
-  "BODY can start with a series of VAR VECTOR... forms."
-
-  (when (and et-run-tests (null load-file-name)
-             (stringp (car command-line-args-left)))
-    ;; Require the file without tests
-    (condition-case _
-        (let ((et-run-tests nil))
-          (load-file (car command-line-args-left)))
-      (:success nil)
-      (t (setq et-run-tests nil))))
-
-  (when (and et-run-tests (null load-file-name))
-    ;; Repeat var
-    (let* ((et-running-tests t)
-           (evaller
-            (lambda (body start-idx)
-              (cl-loop for expr in body
-                       for idx upfrom 0
-                       do (et-with-error-path (list (+ idx start-idx))
-                            (or (eval expr) (error "Returned nil"))))))
-           repeat-var repeat-forms)
-
-      (when (symbolp (car body))
-        (setq repeat-var (pop body)
-              repeat-forms (pop body)))
-
-      (if repeat-var
-          (cl-loop for form across repeat-forms
-                   do (funcall evaller (cl-subst form repeat-var body) 3))
-        (funcall evaller body 1)))))
-
-(defmacro et-assert-error (expr)
-  (declare (indent 1))
-  `(et-with-error-path (list 1)
-     (condition-case val ,expr
-       (error t)
-       (:success (error "=> %s" val)))))
-
-
-;;; ============================================================
-;;; Utils
 ;;;; Recursive copy
 
 (defun et--recursive-copy (object func)
@@ -396,7 +310,7 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
                    (car entry)
                  x))))
 
-(et-test
+[@test
  (pcase-let* ((`(,new-obj . ,repls)
                (et--subst-to-placeholders
                 '((1 2 3) (4 5 6))
@@ -404,7 +318,7 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
    (and (pcase new-obj (`((1 ,(pred symbolp) 3) (,(pred symbolp) 5 ,(pred symbolp))) t))
         (= 3 (length repls))
         (equal (et--subst-from-placeholders (list (cadr new-obj) (car new-obj)) repls)
-               '((4 5 6) (1 2 3))))))
+               '((4 5 6) (1 2 3)))))]
 
 
 ;;;; Caching
@@ -607,17 +521,17 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 ;;;; Datatypes
 
-[et (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
-    (@alias EtDatatypeProps
-            (PList :args List<EtDatatypeRole>
-                   :overlap True|List<Symbol>
-                   :predicate (Function Any True|List<Any>)))
-    (@alias EtDatatypeName (or @Any @Literal @NonNil
-                               @Symbol @NonNilSymbol @Number @Integer @Positive @Negative @String
-                               @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
-                               @Function @DynFunction
-                               @Struct @Scoped))
-    (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>)]
+(et-declare (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
+            (@alias EtDatatypeProps
+                    (PList :args List<EtDatatypeRole>
+                           :overlap True|List<Symbol>
+                           :predicate (Function Any True|List<Any>)))
+            (@alias EtDatatypeName (or @Any @Literal @NonNil
+                                       @Symbol @NonNilSymbol @Number @Integer @Positive @Negative @String
+                                       @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
+                                       @Function @DynFunction
+                                       @Struct @Scoped))
+            (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
@@ -930,17 +844,17 @@ FUNC is called with one argument, the current argument"
 
 ;;;; Defining aliases
 
-[et (@alias EtTypeSpec Any)
-    (@alias EtGeneric NonNilSymbol)
-    (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
-    (@alias EtAliasName NonNilSymbol)
-    (@alias EtAliasDefinitionPlist [(<= R (or @TYPE @MATCHER @BOTH))]
-            (PList :restrict R
-                   :custom (or Nil (Function Args<List<Any>> EtRestrictedStructure<R>))
-                   :generics List<NonNilSymbol>
-                   :constraints List<EtConstraint>
-                   :structure (or Nil EtRestrictedStructure<R>)
-                   :type (or Nil *et-type)))]
+(et-declare (@alias EtTypeSpec Any)
+            (@alias EtGeneric NonNilSymbol)
+            (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
+            (@alias EtAliasName NonNilSymbol)
+            (@alias EtAliasDefinitionPlist [(<= R (or @TYPE @MATCHER @BOTH))]
+                    (PList :restrict R
+                           :custom (or Nil (Function Args<List<Any>> EtRestrictedStructure<R>))
+                           :generics List<NonNilSymbol>
+                           :constraints List<EtConstraint>
+                           :structure (or Nil EtRestrictedStructure<R>)
+                           :type (or Nil *et-type))))
 
 (defmacro et-define-custom-alias (name arglist &rest body)
   (declare (indent 2))
@@ -1021,13 +935,14 @@ FUNC is called with one argument, the current argument"
     (put name 'et-alias plist)
     nil))
 
-(defun et--props-and-body (body)
-  (let* ((props nil))
-    (while (keywordp (car body))
-      (setq props (nconc props (list (pop body) (pop body)))))
-    (or body (error "Empty body"))
-    (or (eq 1 (length body)) (error "Body can only contain one expression"))
-    (cons props (car body))))
+(eval-and-compile
+  (defun et--props-and-body (body)
+    (let* ((props nil))
+      (while (keywordp (car body))
+        (setq props (nconc props (list (pop body) (pop body)))))
+      (or body (error "Empty body"))
+      (or (eq 1 (length body)) (error "Body can only contain one expression"))
+      (cons props (car body)))))
 
 (defmacro et-defalias (name &rest body)
   "Alias NAME types to return the specific type.
@@ -1383,7 +1298,7 @@ created, its label will be set to the value of this variable.")
 ;;; Structure
 ;;;; Documentation
 
-[et
+(et-declare
  (@alias EtTypeLabel Integer)
  (@alias EtMatcherLabel Integer)
  (@alias EtConstraintLabel (Cons EtMatcherLabel EtTypeLabel))
@@ -1418,7 +1333,7 @@ created, its label will be set to the value of this variable.")
          (and (extends? @TYPE R EtTypeStructure Never)
               (extends? @MATCHER R EtMatcherStructure Never)
               (extends? @BOTH R EtBothStructure Never)))
- ]
+ )
 
 ;; A structure is a general format that can be parsed to either a matcher
 ;; or a type. RESTRICT can be either `type' or `matcher' to ensure the

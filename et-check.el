@@ -85,7 +85,7 @@
   "Display a list of binds to the user at path=(0).
 
 TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
-  (when (and et-display-narrows (not et-running-tests))
+  (when et-display-narrows
     (cl-loop for (fmt type) on types by #'cddr
              for binds = (et--type-binds type) ; TODO: display just binds instead of whole type
              when binds do (et-hint path fmt (et-pp-narrows binds)))))
@@ -152,7 +152,7 @@ determine the output type."
            ;; which means the true error was in the arguments, not this call
            (et--result-failed nil)
            ((cdr output-type) ; The type label should be (POSN . TYPE-STRING)
-            (et-err (cadr output-type) "Labeled: %s" (cddr output-type)))
+            (et-err (cadr output-type) "Type %s is invalid in this argument for `%s'" (cddr output-type) func))
            (t (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
                       (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))
 
@@ -847,7 +847,8 @@ Returns a plist with :declare to set the variable type."
     (pcase expr
 
       ;; Process a root declaration block
-      ((and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms)))
+      ((or `(et-declare . ,forms)
+           (and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms))))
        (cl-loop
         for form in forms
         for pos upfrom 1
@@ -888,11 +889,11 @@ Returns a plist with :declare to set the variable type."
 
     ;; Check all root-level expressions
     (cl-loop for expr in exprs
-             for idx upfrom 0
+             for pos upfrom 0
              when (and (consp expr)
-                       (or (get (car expr) 'et-function-signature)
+                       (or (get (car expr) 'et-function-type)
                            (get (car expr) 'et-checker)))
-             do (et-error-boundary idx (et--check expr)))))
+             do (et-error-boundary pos (et--check expr)))))
 
 (defun et--process-buffer ()
   (save-excursion
@@ -906,16 +907,40 @@ Returns a plist with :declare to set the variable type."
 
 ;;;; Flycheck check
 
+(defun et--traverse-buffer-expr (path)
+  (goto-char (point-min))
+  (dotimes (_ (or (car path) 0)) (forward-sexp))
+  (forward-comment (buffer-size))
+
+  (dolist (idx (cdr path))
+    ;; Skip whitespace and comments before looking at the next form
+    (cond
+     ((looking-at-p ",\\|`\\|#?']")
+      (if (eq idx 1)
+          (goto-char (match-end 0))
+        (error "Only valid subexpr of quote is 1")))
+
+     ((looking-at-p "[([]")
+      (forward-char 1)
+      (dotimes (_ idx) (forward-sexp))
+      (forward-comment (buffer-size)))
+
+     (t (error "Invalid expression container: %s" (thing-at-point 'char))))
+
+    (forward-comment (buffer-size))))
+
+(defvar et--checking-file nil)
+
 (defun et--flycheck-check-file ()
   "Entry point for batch-mode type checking."
-  (let* ((filename (pop command-line-args-left)))
+  (let* ((filename (pop command-line-args-left))
+         (et--checking-file filename))
     (with-temp-buffer
       (insert-file-contents filename)
       (emacs-lisp-mode)
       (cl-loop for (path severity msg)
                in (et-result-diagnostics (et-result-boundary (et--process-buffer)))
                do (ignore-errors
-                    (goto-char (point-min))
                     (ignore-errors (et--traverse-buffer-expr path))
                     (let* ((start-line (line-number-at-pos))
                            (start-col (1+ (current-column))))
@@ -925,6 +950,25 @@ Returns a plist with :declare to set the variable type."
                                      start-line start-col
                                      (line-number-at-pos) (1+ (current-column))
                                      severity msg path))))))))
+
+
+;;;; Testing
+
+(defvar et--loaded-files nil)
+
+(et-define-pcase-checker et-test body
+  (when et--checking-file
+    (unless (member et--checking-file et--loaded-files)
+      (push et--checking-file et--loaded-files)
+      (et-wrap-errors "Could not run tests because file could not be loaded: %s"
+        (load-file et--checking-file)))
+
+    (cl-loop for test in body
+             for pos upfrom 1
+             do (et-at pos
+                  (or (eval test)
+                      (et-warn nil "Evaluated to nil"))))
+    (et Nil)))
 
 
 ;;; ============================================================
