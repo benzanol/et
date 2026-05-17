@@ -32,6 +32,137 @@
 
 
 ;;; ============================================================
+;;; Results
+;;;; Struct
+
+;; When type-checking an expression, it is important to know where
+;; each error occurred in the expression. Since emacs lisp code is
+;; made up of nested lists, we can express positions of the code as
+;; paths to the correct expression, where each element of the path is
+;; the index in the next expression.
+;;
+;; An `et-result' struct represents the result of performing some
+;; action on an expression. It contains the output value, whether it
+;; succeeded or failed, and a list of diagnostics which occurred, and
+;; where they occurred in the expression.
+;;
+;; To collect an et-result, wrap the corresponding code in an
+;; `et-result-boundary'. This will declare a collection of dynamically
+;; scoped variables for collecting information about checking. If an
+;; error is thrown, the result boundary will catch an error, and
+;; observe the current value of `et--path' to see where the error
+;; occurred.
+;;
+;; The `et-at' macro should be used whenever processing a
+;; sub-expression of the current expression. The `et-error-boundary'
+;; function should also be used to continue from a certain location in
+;; the event of an error.
+
+[et
+ (@alias EtPath List<Integer>)
+ (@alias EtSeverity (or @error @warning @hint))
+ (@alias EtDiagnostic (Tuple EtPath EtSeverity String))]
+
+(cl-defstruct et-res
+  (value nil :et-generics [T] :et T|Nil)
+  (failed nil :et Boolean)
+  (diagnostics nil :et List<EtDiagnostic>))
+
+
+;;;; Paths
+
+(defvar et--path nil
+  "The path to the current expression being processed.")
+
+(defvar et--path-offset 0
+  "An offset for future appends to `et--path'.
+
+This is relevant if the current expression being processed is actually
+the cdr of a larger expression. For example, when type checking a
+function body, the body of the function is the `cddr' (offset=2) of a
+lambda expression, or the `cdddr' (offset=3) of a defun.")
+
+(defvar et--sticky-path nil
+  "Whether to inhibit modifications to `et--path'.
+
+`et--path' should only be changed when the expression being evaluated
+corresponds to an expression present in the buffer. When calling a
+function which thinks it is operating on a buffer expression, with an
+expression that is not actually in the buffer, ensure that
+`et--sticky-path' is non-nil to avoid creating an invalid path.")
+
+(defun et--resolve-path (rel)
+  (if et--sticky-path et--path
+    (if-let* ((flat (flatten-list (list rel))))
+        (append et--path (+ et--path-offset (car rel)) (cdr rel))
+      et--path)))
+
+(defmacro et-at (rel &rest body)
+  (declare (indent 1))
+  (let* ((orig-var (gensym 'orig)))
+    ;; On error, we want the path to stay where it is, hence using setq instead of let
+    `(let ((,orig-var et--path))
+       (setq et--path (et--resolve-path ,rel))
+       (prog1 (let ((et--path-offset 0)) ,@body)
+         (setq et--path ,orig-var)))))
+
+(defmacro et-at-offset (offset &rest body)
+  (declare (indent 1))
+  ;; On error, we want the path to stay where it is, hence using setq instead of let
+  `(let ((et--path-offset (+ et--path-offset ,offset)))
+     ,@body))
+
+
+(defmacro et-with-sticky-path (&rest body)
+  "Evaluate BODY with a sticky path. See `et--sticky-path'."
+  `(let* ((et--sticky-path t)) ,@body))
+
+
+;;;; Diagnostics
+
+(defvar et--result-diagnostics nil
+  "Diagnostics collected for the current result."
+  )
+
+(defvar et--result-failed nil)
+
+(defun et--res-diag (rel severity fmt &rest args)
+  (setq rel (flatten-list (list rel)))
+  (let* ((str (if args (apply #'format fmt args) fmt)))
+    (push (list (append et--path rel) severity str) et--result-diagnostics)
+    nil))
+
+(defun et--res-fatal (rel fmt &rest args)
+  (setq et--path (append et--path (flatten-list (list rel))))
+  (if args (apply #'error fmt args) (error "%s" fmt)))
+
+
+;;;; Boundaries
+
+(defmacro et-result-boundary (&rest body)
+  (declare (et (@generics [T])
+               (@return *et-res<T>)))
+
+  `(let* ((et--path nil)
+          (et--result-diagnostics nil)
+          (et--result-failed nil))
+     (make-et-res
+      :value (et-error-boundary nil ,@body)
+      :failed et--result-failed
+      :diagnostics et--result-diagnostics)))
+
+(defmacro et-error-boundary (rel &rest body)
+  (declare (indent 1))
+  (let* ((inner
+          `(condition-case err (progn . ,body)
+             (error (setq et--result-failed t)
+                    (push (list (append et--path nil) 'error (error-message-string err))
+                          et--result-diagnostics)
+                    nil))))
+    (if (eq rel nil) inner `(et-at ,rel ,inner))))
+
+
+;;; ============================================================
 ;;; Testing macros
 ;;;; Flycheck rebasing
 
@@ -144,6 +275,9 @@ This will start by applying FUNC to OBJECT. If the returned
 result is an atom (not a cons cell,) it is returned. Otherwise,
 what will be returned is the result of repeating this process for
 both sides of the cons cell."
+  (declare (et (object Any)
+               (func Abcd)
+               (@return Any)))
 
   (if (not (eq object (setq object (funcall func object))))
       object
@@ -171,6 +305,8 @@ both sides of the cons cell."
 ;;;; Substitute with placeholder
 
 (defun et--subst-placeholder (idx)
+  (declare (et (idx Abcd)
+               (@return Symbol)))
   (intern (format "@@et-ph-%s@@" idx)))
 
 (defun et--subst-to-placeholders (object pred)
@@ -706,12 +842,12 @@ FUNC is called with one argument, the current argument"
     (@alias EtGeneric NonNilSymbol)
     (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
     (@alias EtAliasName NonNilSymbol)
-    (@alias EtAliasDefinitionPlist
-            (PList :restrict (or @TYPE @MATCHER @BOTH)
-                   :custom (or Nil (Function Args<List<Any>> EtStructure))
+    (@alias EtAliasDefinitionPlist [(<= R (or @TYPE @MATCHER @BOTH))]
+            (PList :restrict R
+                   :custom (or Nil (Function Args<List<Any>> EtRestrictedStructure<R>))
                    :generics List<NonNilSymbol>
                    :constraints List<EtConstraint>
-                   :structure (or Nil EtStructure)
+                   :structure (or Nil EtRestrictedStructure<R>)
                    :type (or Nil *et-type)))]
 
 (defmacro et-define-custom-alias (name arglist &rest body)
@@ -817,7 +953,8 @@ FUNC is called with one argument, the current argument"
 (defun et-alias-expand (alias)
   "Expand an alias to a type."
   (declare (et (alias *et-alias)
-               (@return *et-type)))
+               (@return *et-type)
+               (@skip)))
 
   (et--alias-call (et-alias-name alias) (et-alias-args alias) 'TYPE))
 
@@ -1163,7 +1300,12 @@ DNF is the struct representing the matcher."
          (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
  (@alias EtMatcherStructure
          (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
- (@alias EtBothStructure (List (List EtBothStructureFactor)))]
+ (@alias EtBothStructure (List (List EtBothStructureFactor)))
+ (@alias EtRestrictedStructure [(<= R (or @TYPE @MATCHER @BOTH))]
+         (and (extends? @TYPE R EtTypeStructure Never)
+              (extends? @MATCHER R EtMatcherStructure Never)
+              (extends? @BOTH R EtBothStructure Never)))
+ ]
 
 ;; A structure is a general format that can be parsed to either a matcher
 ;; or a type. RESTRICT can be either `type' or `matcher' to ensure the
@@ -1584,7 +1726,14 @@ which are invalid for types."
   :print (et--print-sub-named name args))
 
 (et--define-struct-segment S:ALIAS alias (name &rest args)
-  :parse (cons name (mapcar #'et--parse-sub args))
+  :parse
+  (let* ((plist (get name 'et-alias))
+         (_ (or plist (error "Not an alias: %s" name)))
+         (gen-ct (length (plist-get plist :generics)) )
+         (_ (or (plist-get plist :custom)
+                (eq (length args) gen-ct)
+                (error "Alias %s requires %s arguments, got %s" name gen-ct (length args)))))
+    (cons name (mapcar #'et--parse-sub args)))
   :to-type
   (let* ((new-args (mapcar #'et--totype-sub args)))
     (list (make-et-type-case :value (make-et-alias :name name :args new-args))))
@@ -2415,6 +2564,8 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
 
 (et-defalias AList [K V] (List (Cons K V)))
 (et-defalias AListR [K V] (ListR (ConsR K V)))
+
+(et-defalias KVPList [K V] (or Nil (Cons K (Cons V (KVPList K V)))))
 
 (defun et--expand-tuple-struct (cons args)
   (if (null args) (et-q (((S:DT Literal nil))))
