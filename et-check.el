@@ -123,9 +123,10 @@ individually, and then will be passed to `et--funcall' as a list to
 determine the output type."
   (let* ((et--checker-expr expr))
     (et-failed-boundary
-     (or (et-error-boundary nil (et--check-1))
-         (progn (unless et--result-failed (et-err nil "Type checking failed mysteriously"))
-                (et-never))))))
+     (or (et-error-boundary nil
+           (or (et--check-1)
+               (unless et--result-failed (et-err nil "Type checking failed mysteriously"))))
+         (et-never)))))
 
 (defun et--check-1 ()
   (pcase et--checker-expr
@@ -135,7 +136,7 @@ determine the output type."
        ((and (let checker (get func 'et-checker)) (guard checker)
              (let output (funcall checker)))
         (if (or (null output) (et-type-p output)) output
-          (et-fatal "Checker for `%s' had invalid return: %s" func output)))
+          (et-fatal nil "Checker for `%s' had invalid return: %s" func output)))
 
        ;; Function type property
        ((and (let func-type (get func 'et-function-type)) (guard func-type))
@@ -434,7 +435,8 @@ PATH is the path to the subexpression."
   (declare (et (body List)
                (@return Nil|*et-res<*et-func-sig>)))
 
-  (when-let* ((declare-pos (1+ (cl-position 'declare (cdr body) :key #'car-safe)))
+  (when-let* (;; 'declare could also be the first element of the arglist, so replace it with nil when searching
+              (declare-pos (cl-position 'declare (cons nil (cdr body)) :key #'car-safe))
               (declare-block (nth declare-pos body))
               (et-pos (cl-position 'et declare-block :key #'car-safe))
               (et-block (nth et-pos declare-block)))
@@ -479,7 +481,7 @@ PATH is the path to the subexpression."
 
             (`(,(and name (pred symbolp)) ,spec)
              (let* ((entry (cl-loop for group in param-structs
-                                    for entry = (cl-find name group :key #'cadr)
+                                    for entry = (assq name group)
                                     when entry return entry
                                     finally do (et-fatal 0 "Not a parameter: %s" name))))
                (et-at 1
@@ -489,28 +491,33 @@ PATH is the path to the subexpression."
             (_ (error "Invalid format")))))
 
       ;; Construct the function signature
-      (let* ((input (apply #'et--generate-func-input generics constraints param-structs))
-             (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
-        (et--with-scoped-datatypes scoped
-          (make-et-func-sig
-           :func-type (if (et-matcher-p input) (et-dt 'DynFunction input return-struct)
-                        (et-dt 'Function input (et-structure-to-type return-struct nil)))
-           :props props
-           ;; Things necessary for typechecking the body
-           :source (nthcdr declare-pos body)
-           :source-pos (1+ declare-pos)
-           ;; Both vars and expected-return may contain the scoped types
-           :scoped scoped
-           :vars
-           (cl-loop for param-group in param-structs nconc
-                    (cl-loop for (name . struct) in param-group
-                             for type = (et-structure-to-type struct)
-                             collect (make-et-var :name name :type type)))
-           :expected-return
-           (cl-loop for (name unique constraints) in scoped
-                    collect (cons name (et-dt 'Scoped name unique constraints))
-                    into gen-repls
-                    finally return (et-structure-to-type return-struct gen-repls))))))))
+      (when return-struct
+        (let* ((input (apply #'et--generate-func-input generics constraints param-structs))
+               (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
+          (et--with-scoped-datatypes scoped
+            (make-et-func-sig
+             :func-type (if (et-matcher-p input) (et-dt 'DynFunction input return-struct)
+                          (et-dt 'Function input (et-structure-to-type return-struct nil)))
+             :props props
+             ;; Things necessary for typechecking the body
+             :source (nthcdr declare-pos body)
+             :source-pos (1+ declare-pos)
+             ;; Both vars and expected-return may contain the scoped types
+             :scoped scoped
+             :vars
+             (cl-loop for param-group in param-structs nconc
+                      (cl-loop for (name . struct) in param-group
+                               ;; Replace each generic in the parameter structs with the corresponding scoped datatype
+                               for type = (cl-loop for gen in generics
+                                                   for scoped-args in scoped
+                                                   collect (cons gen (apply #'et-dt 'Scoped scoped-args)) into gen-repls
+                                                   finally return (et-structure-to-type struct gen-repls))
+                               collect (make-et-var :name name :type type)))
+             :expected-return
+             (cl-loop for (name unique constraints) in scoped
+                      collect (cons name (et-dt 'Scoped name unique constraints))
+                      into gen-repls
+                      finally return (et-structure-to-type return-struct gen-repls)))))))))
 
 
 ;;;;; Parse arglist params
@@ -653,7 +660,9 @@ OUTPUT-STRUCT each converted to concrete types."
 ;;;;; Checker
 
 (et-define-pcase-checker defun `(,name . ,_)
-  (when-let* ((sig (get name 'et-function-signature)))
+  (when-let* ((sig (get name 'et-function-signature))
+              ((not (plist-get (et-func-sig-props sig) :skip))))
+
     (et--with-scoped-datatypes (et-func-sig-scoped sig)
       (et-with-vars (et-func-sig-vars sig)
         (let* ((actual-ret (et-checker-tail (+ 2 (et-func-sig-source-pos sig))))
@@ -839,6 +848,15 @@ Returns a plist with :declare to set the variable type."
 
     (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
 
+(et-define-pcase-checker defvar `(,(and (pred symbolp) name) . ,rest)
+  (when-let* ((declared-type (get name 'et-variable-type))
+              (value-type (or (when (car rest) (et-checker-sub 2)) (et Nil))))
+
+    (unless (et-subtype? value-type declared-type)
+      (et-err 2 "Expected %s, found %s" declared-type value-type)))
+
+  (et-literal name))
+
 
 ;;;; Identify expr
 
@@ -895,14 +913,16 @@ Returns a plist with :declare to set the variable type."
                            (get (car expr) 'et-checker)))
              do (et-error-boundary pos (et--check expr)))))
 
-(defun et--process-buffer ()
+(defun et--buffer-exprs ()
   (save-excursion
     (goto-char (point-min))
-    (et--process-exprs
-     (cl-loop while t
-              for expr = (condition-case _ (read (current-buffer))
-                           (error (cl-return exprs)))
-              collect expr into exprs))))
+    (cl-loop while t
+             for expr = (condition-case _ (read (current-buffer))
+                          (error (cl-return exprs)))
+             collect expr into exprs)))
+
+(defun et--process-buffer ()
+  (et--process-exprs (et--buffer-exprs)))
 
 
 ;;;; Flycheck check
@@ -960,15 +980,18 @@ Returns a plist with :declare to set the variable type."
   (when et--checking-file
     (unless (member et--checking-file et--loaded-files)
       (push et--checking-file et--loaded-files)
-      (et-wrap-errors "Could not run tests because file could not be loaded: %s"
-        (load-file et--checking-file)))
+      (et-at nil ; will restore the original path on finish
+        (cl-loop for expr in (et--buffer-exprs)
+                 for pos upfrom 0
+                 do (setq et--path (list pos))
+                 do (et-error-boundary nil (et-wrap-errors "Runtime error: %s" (eval expr))))))
 
     (cl-loop for test in body
              for pos upfrom 1
              do (et-at pos
                   (or (eval test)
-                      (et-warn nil "Evaluated to nil"))))
-    (et Nil)))
+                      (et-warn nil "Evaluated to nil")))))
+  (et Nil))
 
 
 ;;; ============================================================

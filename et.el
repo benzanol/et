@@ -168,7 +168,7 @@ expression that is not actually in the buffer, ensure that
 
 ;;;; Boundaries
 
-(defmacro et-wrap-errors (relative format &rest body)
+(defmacro et-wrap-errors (format &rest body)
   "Add context to errors thrown in BODY."
   (declare (indent 1))
   `(condition-case-unless-debug err (progn . ,body)
@@ -250,7 +250,7 @@ result is an atom (not a cons cell,) it is returned. Otherwise,
 what will be returned is the result of repeating this process for
 both sides of the cons cell."
   (declare (et (object Any)
-               (func Abcd)
+               (func Function<Any~Any>)
                (@return Any)))
 
   (if (not (eq object (setq object (funcall func object))))
@@ -279,7 +279,7 @@ both sides of the cons cell."
 ;;;; Substitute with placeholder
 
 (defun et--subst-placeholder (idx)
-  (declare (et (idx Abcd)
+  (declare (et (idx Integer)
                (@return Symbol)))
   (intern (format "@@et-ph-%s@@" idx)))
 
@@ -310,7 +310,7 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
                    (car entry)
                  x))))
 
-[@test
+(et-test
  (pcase-let* ((`(,new-obj . ,repls)
                (et--subst-to-placeholders
                 '((1 2 3) (4 5 6))
@@ -318,7 +318,7 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
    (and (pcase new-obj (`((1 ,(pred symbolp) 3) (,(pred symbolp) 5 ,(pred symbolp))) t))
         (= 3 (length repls))
         (equal (et--subst-from-placeholders (list (cadr new-obj) (car new-obj)) repls)
-               '((4 5 6) (1 2 3)))))]
+               '((4 5 6) (1 2 3))))))
 
 
 ;;;; Caching
@@ -469,7 +469,7 @@ variable."
 
 (cl-defstruct et-datatype
   "A datatype factor of an `et-type'."
-  (name nil :et-generics [A B] :et Symbol)
+  (name nil :et Symbol)
   (args nil :et List<*et-type|Any>))
 
 (cl-defstruct et-alias "A type alias factor of an `et-type'." name args)
@@ -521,17 +521,18 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 ;;;; Datatypes
 
-(et-declare (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
-            (@alias EtDatatypeProps
-                    (PList :args List<EtDatatypeRole>
-                           :overlap True|List<Symbol>
-                           :predicate (Function Any True|List<Any>)))
-            (@alias EtDatatypeName (or @Any @Literal @NonNil
-                                       @Symbol @NonNilSymbol @Number @Integer @Positive @Negative @String
-                                       @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
-                                       @Function @DynFunction
-                                       @Struct @Scoped))
-            (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
+(et-declare
+ (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
+ (@alias EtDatatypeProps
+         (PList :args List<EtDatatypeRole>
+                :overlap True|List<Symbol>
+                :predicate (Function Any True|List<Any>)))
+ (@alias EtDatatypeName (or @Any @Literal @NonNil
+                            @Symbol @NonNilSymbol @Number @Integer @Positive @Negative @String
+                            @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
+                            @Function @DynFunction
+                            @Struct @Scoped))
+ (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))
@@ -1729,9 +1730,9 @@ which are invalid for types."
           (et--parse-sub yes generics)
           (et--parse-sub no)))
   :to-type
-  (et-type-cases (or (et--infer matcher (et--totype-sub type) yes
-                                et--totype-gen-repls)
-                     (et--totype-sub no)))
+  (let* ((out (et--infer matcher (et--totype-sub type) yes
+                         et--totype-gen-repls)))
+    (if (et-type-p out) out (et--totype-sub no)))
   :print
   (format "{if %s matches %s then %s else %s}"
           (et--print-sub type) (et-pp-matcher matcher)
