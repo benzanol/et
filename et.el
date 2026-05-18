@@ -2281,25 +2281,33 @@ returning A itself is a valid approximation."
 
 (defun et--type-contains-binds (type)
   (cl-loop for c in (et-type-cases type)
-           thereis (or (et-type-case-binds c) (et-type-case-typeofs c)
-                       (pcase (et-type-case-value c)
-                         ((cl-struct et-alias args)
-                          (cl-loop for arg in args thereis (et--type-contains-binds arg)))
-                         ((cl-struct et-datatype args)
-                          (cl-loop for arg in args
-                                   thereis (and (et-type-p arg) (et--type-contains-binds arg))))))))
+           thereis
+           (or (et-type-case-binds c) (et-type-case-typeofs c)
+               (pcase (et-type-case-value c)
+                 ((cl-struct et-alias args)
+                  (cl-loop for arg in args thereis (et--type-contains-binds arg)))
+                 ((cl-struct et-datatype args)
+                  (cl-loop for arg in args
+                           thereis (and (et-type-p arg) (et--type-contains-binds arg))))))))
 
-(defvar et--cache-matches nil)
+(defvar et--cache-matches t)
 
 (defun et--sub-match (matcher type)
   (if et--cache-matches
-      (et-cache (list #'et--sub-match matcher type) #'et-var-p
+      (et-cache (list #'et--sub-match matcher type)
+          (lambda (x)
+            (or (et-var-p x)
+                (assq x (et-matcher-labels matcher))))
         (et--sub-match-logic matcher type))
+
     (et--sub-match-logic matcher type)))
 
 (defun et--super-match (matcher type)
   (if et--cache-matches
-      (et-cache (list #'et--super-match matcher type) #'et-var-p
+      (et-cache (list #'et--super-match matcher type)
+          (lambda (x)
+            (or (et-var-p x)
+                (assq x (et-matcher-labels matcher))))
         (et--super-match-logic matcher type))
     (et--super-match-logic matcher type)))
 
