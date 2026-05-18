@@ -140,22 +140,37 @@ determine the output type."
 
        ;; Function type property
        ((and (let func-type (get func 'et-function-type)) (guard func-type))
-        (let* ((args-type (cl-loop for type in (et-checker-remaining 1)
+        (let* ((arg-types (cl-loop for type in (et-checker-remaining 1)
                                    for pos upfrom 1
-                                   for new = (copy-et-type type)
-                                   do (setf (et-type-label new) (cons pos (et-pp type)))
-                                   collect new into types
-                                   finally return (et--tuple 'ConsR types)))
+                                   for copy = (copy-et-type type)
+                                   do (setf (et-type-label copy) (list :position pos))
+                                   collect copy))
+               (args-type (et--tuple 'ConsR arg-types))
                (output-type (et--funcall func-type args-type)))
           (cond
            ((et-type-p output-type) output-type)
            ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
            ;; which means the true error was in the arguments, not this call
            (et--result-failed nil)
-           ((cdr output-type) ; The type label should be (POSN . TYPE-STRING)
-            (et-err (cadr output-type) "Type %s is invalid in this argument for `%s'" (cddr output-type) func))
-           (t (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
-                      (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))
+           ;; OUTPUT-TYPE is nil or the fail stack: a list of (`sub'/`super' MATCHER TYPE)
+           (t
+            ;; Find the stack frame corresponding to the position
+            (let* ((dt (et-type-case-value (car (et-type-cases func-type))))
+                   (matcher-labels (and (et-datatype-p dt) (eq 'DynFunction (et-datatype-name dt))
+                                        (et-matcher-labels (car (et-datatype-args dt)))))
+                   arg-pos arg-type param-name param-type)
+              (cl-loop for (_ m-struct type) in output-type
+                       for pos = (plist-get (et-type-label type) :position)
+                       when pos do (setq arg-pos pos arg-type type)
+                       for pname = (plist-get (alist-get m-struct matcher-labels) :param)
+                       when pname do (setq param-name pname param-type m-struct))
+              (if (and arg-pos param-name param-type)
+                  (et-err arg-pos "Argument %s has type %s, found %s" param-name
+                          (et--print-sub param-type) arg-type)
+
+                (error "%s %s %s %s" arg-pos param-name matcher-labels (et-pp output-type))
+                (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func
+                        (et-pp func-type) (et-pp (et--remove-type-binds args-type)))))))))
 
        (_ (et-err 0 "No type for `%s'" func))))
 
@@ -493,12 +508,11 @@ PATH is the path to the subexpression."
 
       ;; Construct the function signature
       (when return-struct
-        (let* ((input (apply #'et--generate-func-input generics constraints param-structs))
+        (let* ((input (apply #'et--generate-func-input t generics constraints param-structs))
                (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
           (et--with-scoped-datatypes scoped
             (make-et-func-sig
-             :func-type (if (et-matcher-p input) (et-dt 'DynFunction input return-struct)
-                          (et-dt 'Function input (et-structure-to-type return-struct nil)))
+             :func-type (et-dt 'DynFunction input return-struct)
              :props props
              ;; Things necessary for typechecking the body
              :source (nthcdr declare-pos body)
@@ -554,7 +568,7 @@ element."
 
 ;;;;; Input type
 
-(defun et--generate-func-input (generics constraints required optional key-params rest-params)
+(defun et--generate-func-input (always-matcher generics constraints required optional key-params rest-params)
   "Build an input matcher or type from parameter specs.
 
 GENERICS is a list of generic symbols, or nil.
@@ -565,63 +579,83 @@ REST-PARAMS will have at most 1 entry.
 
 Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
 
-  (let* ((required-structs (mapcar #'cdr required))
-         (optional-structs (mapcar #'cdr optional))
-         (tail (pcase (car rest-params)
-                 (`(,_ . ,struct) struct)
-                 ((and (guard key-params)
-                       (let plist-args
-                         (cl-loop for (name . struct) in key-params
-                                  nconc (list (intern (format ":%s" name)) struct))))
-                  (et-q (((S:DT PList ,@plist-args)))))
-                 ('nil (et-q (((S:DT Literal nil)))))
-                 (x (error "Invalid rest param: %s" x))))
-         (opt-tail (et--func-sig-optional-tail optional-structs tail))
-         (struct (et--func-sig-required-chain required-structs opt-tail)))
+  (let* ((fn (lambda (entry) (cons (cdr entry) (list :param (car entry)))))
+         (required-alist (mapcar fn required))
+         (optional-alist (mapcar fn optional))
+         (labels-tail
+          (pcase (car rest-params)
+            ((and entry `(,_var . ,_struct)) (list (funcall fn entry)))
+            ((guard key-params)
+             (cl-loop for entry in key-params
+                      collect (funcall fn entry) into labels-alist
+                      for (name . struct) = entry
+                      nconc (list (intern (format ":%s" name)) struct) into plist-args
+                      finally return
+                      (cons (cons (et-q (((S:DT PList ,@plist-args)))) nil)
+                            labels-alist)))
 
-    (if generics
+            ('nil (list (cons (et-q (((S:DT Literal nil)))) nil)))
+            (x (error "Invalid rest param: %s" x))))
+
+         (opt-tail (et--func-sig-optional-tail optional-alist labels-tail))
+         (struct-alist (et--func-sig-required-chain required-alist opt-tail)))
+
+    (if (or always-matcher generics)
         (make-et-matcher
          :generics generics
          :constraints constraints
-         :dnf struct)
-      (et-structure-to-type struct))))
+         :dnf (caar struct-alist)
+         :labels (cl-loop for entry in struct-alist
+                          when (cdr entry) collect entry))
+      (et-structure-to-type (caar struct-alist) nil struct-alist))))
 
-(defun et--func-sig-required-chain (structs tail)
-  "Chain required STRUCTS into nested ConsR, terminated by TAIL."
-  (if (null structs) tail
-    (et-q (((S:ALIAS ConsR
-                     ,(car structs)
-                     ,(et--func-sig-required-chain (cdr structs) tail)))))))
+(defun et--func-sig-required-chain (labeled-structs labels-tail)
+  (declare (et (labeled-structs AList<EtBothStructure~EtLabel>)
+               (labels-tail AList<EtBothStructure~EtLabel>)
+               (@return AList<EtBothStructure~EtLabel>)
+               (@skip)))
 
-(defun et--func-sig-optional-tail (opt-structs rest-tail)
-  "Build the optional suffix of an arglist structure.
+  (if (null labeled-structs) labels-tail
+    (let* ((rest-alist (et--func-sig-required-chain (cdr labeled-structs) labels-tail))
+           (rest-struct (caar rest-alist))
+           (cur-struct (caar labeled-structs))
+           (cur-label (cdar labeled-structs)))
+      (cl-list* (cons (et-q (((S:ALIAS ConsR ,cur-struct ,rest-struct)))) nil)
+                (cons cur-struct cur-label)
+                rest-alist))))
 
-Each optional param introduces (or Nil ConsR<type~...>).
-REST-TAIL is the structure for the &rest/&key tail, or nil for Nil."
-  (pcase opt-structs
-    ('nil (or rest-tail (et-q (((S:DT Literal nil))))))
-    (`(,first . ,remaining)
-     (let* ((inner (et--func-sig-optional-tail remaining rest-tail)))
-       (et-q (((S:DT Literal nil))
-              ((S:ALIAS ConsR ,first ,inner))))))))
+(defun et--func-sig-optional-tail (opt-labeled-structs labels-tail)
+  (declare (et (opt-labeled-structs AList<EtBothStructure~EtLabel>)
+               (labels-tail AList<EtBothStructure~EtLabel>)
+               (@return AList<EtBothStructure~EtLabel>)
+               (@skip)))
+
+  (if (null opt-labeled-structs) labels-tail
+    (let* ((rest-alist (et--func-sig-optional-tail (cdr opt-labeled-structs) labels-tail))
+           (rest-struct (caar rest-alist))
+           (cur-struct (caar opt-labeled-structs))
+           (cur-label (cdar opt-labeled-structs)))
+      (cl-list* (cons (et-q (((S:DT Literal Nil)) ((S:ALIAS ConsR ,cur-struct ,rest-struct)))) nil)
+                (cons cur-struct cur-label)
+                rest-alist))))
 
 
 (et-test
- (equal (et--generate-func-input nil nil '((x . (((S:DT Integer)))) (y . (((S:DT Any))))) nil nil nil)
+ (equal (et--generate-func-input nil nil nil '((x . (((S:DT Integer)))) (y . (((S:DT Any))))) nil nil nil)
         (et ConsR<Integer~ConsR<Any~Nil>>))
 
- (equal (et--generate-func-input nil nil '((x . (((S:DT Integer)))) (y . (((S:DT String))))) nil nil
+ (equal (et--generate-func-input nil nil nil '((x . (((S:DT Integer)))) (y . (((S:DT String))))) nil nil
                                  '((args . (((S:ALIAS ListR (((S:DT Any)))))))))
         (et ConsR<Integer~ConsR<String~ListR<Any>>>))
 
- (equal (et--generate-func-input '(T) nil '((x . (((S:GENERIC T))))) '((y . (((S:DT Number)))))
-                                 nil '((args . (((S:ALIAS ListR (((S:DT String)))))))))
-        (et-matcher [T]
-          ConsR<T~{Nil|ConsR<Number~ListR<String>>}>))
+ (equal (et-matcher-dnf
+         (et--generate-func-input nil '(T) nil '((x . (((S:GENERIC T))))) '((y . (((S:DT Number)))))
+                                  nil '((args . (((S:ALIAS ListR (((S:DT String))))))))))
+        (et-matcher-dnf (et-matcher [T] ConsR<T~{Nil|ConsR<Number~ListR<String>>}>)))
 
- (equal (et--generate-func-input '(T) nil '((a . (((S:GENERIC T))))) nil '((scale . (((S:DT Number)))) (flag . (((S:DT Any))))) nil)
-        (et-matcher [T]
-          ConsR<T~PList<:scale~Number~:flag~Any>>)))
+ (equal (et-matcher-dnf
+         (et--generate-func-input nil '(T) nil '((a . (((S:GENERIC T))))) nil '((scale . (((S:DT Number)))) (flag . (((S:DT Any))))) nil))
+        (et-matcher-dnf (et-matcher [T] ConsR<T~PList<:scale~Number~:flag~Any>>))))
 
 
 ;;;;; Make function type
@@ -868,8 +902,10 @@ Returns a plist with :declare to set the variable type."
       ;; Load required files
       (`(require ,name)
        (with-temp-buffer
-         (insert-file (or (locate-library (symbol-name (eval name)))
-                          (error "Library `%s' not found" name)))
+         (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
+                (load-path (cons dir load-path))
+                (library (locate-library (symbol-name (eval name)))))
+           (insert-file-contents (or library (error "Library `%s' not found" name))))
          ;; Process the buffer without propagating diagnostics
          (et-result-boundary (et--process-buffer))))
 
