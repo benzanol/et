@@ -251,7 +251,8 @@ what will be returned is the result of repeating this process for
 both sides of the cons cell."
   (declare (et (object Any)
                (func Function<Any~Any>)
-               (@return Any)))
+               (@return Any)
+               (@skip)))
 
   (if (not (eq object (setq object (funcall func object))))
       object
@@ -532,7 +533,8 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                             @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
                             @Function @DynFunction
                             @Struct @Scoped))
- (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
+ ;; (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>)
+ )
 
 (defvar et--datatypes
   '((Any :args nil :overlap t :predicate (lambda (v) t))

@@ -421,7 +421,7 @@ PATH is the path to the subexpression."
 
 (cl-defstruct et-func-sig
   (func-type nil :et *et-type)
-  (props nil :et List)
+  (props nil :et List<Any>)
   ;; Things necessary for typechecking the body
   (source nil :et List<Any>)
   (source-pos nil :et Integer) ; Position of source RELATIVE TO ARGLIST (1 if right after arglist)
@@ -432,8 +432,9 @@ PATH is the path to the subexpression."
 
 (defun et--parse-function-signature (body)
   "The current path should point to ARGLIST."
-  (declare (et (body List)
-               (@return Nil|*et-res<*et-func-sig>)))
+  (declare (et (body List<Any>)
+               (@return Nil|*et-result<*et-func-sig>)
+               (@skip)))
 
   (when-let* (;; 'declare could also be the first element of the arglist, so replace it with nil when searching
               (declare-pos (cl-position 'declare (cons nil (cdr body)) :key #'car-safe))
@@ -863,6 +864,14 @@ Returns a plist with :declare to set the variable type."
 (defun et--identify-expr (expr)
   (et-error-boundary nil
     (pcase expr
+
+      ;; Load required files
+      (`(require ,name)
+       (with-temp-buffer
+         (insert-file (or (locate-library (symbol-name (eval name)))
+                          (error "Library `%s' not found" name)))
+         ;; Process the buffer without propagating diagnostics
+         (et-result-boundary (et--process-buffer))))
 
       ;; Process a root declaration block
       ((or `(et-declare . ,forms)
