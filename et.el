@@ -1680,6 +1680,17 @@ which are invalid for types."
 
 ;;;; Printing
 
+(cl-defmethod cl-print-object ((repr et-repr) stream)
+  (princ
+   (format "#%s<%s>"
+           (pcase (et-repr-target repr)
+             ('BOTH "R")
+             ('TYPE "T")
+             ('MATCHER "M")
+             (_ "?"))
+           (et--print-sub repr))
+   stream))
+
 (defun et--print-sub (repr)
   (cl-loop for factors in (et-repr-dnf repr)
            collect
