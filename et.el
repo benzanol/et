@@ -576,11 +576,11 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
     ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
     ;; input and output type.
     (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
-    ;; DynFunction<ARGLIST-MATCHER OUTPUT-STRUCTURE> is a
+    ;; DynFunction<ARGLIST-MATCHER OUTPUT-REPR> is a
     ;; function whose output depends on the input. For a given
     ;; ARGLIST-TYPE, the output of the function is determined by
     ;; inferring ARGLIST-TYPE against ARGLIST-MATCHER, with
-    ;; OUTPUT-STRUCTURE as the output.
+    ;; OUTPUT-REPR as the output.
     (DynFunction :args (CONST CONST) :overlap nil)
 
     ;; PList<PROP1 VAL1 PROP2 VAL2 ...> is a covariant, unordered
@@ -851,12 +851,12 @@ FUNC is called with one argument, the current argument"
             (@alias EtGeneric NonNilSymbol)
             (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
             (@alias EtAliasName NonNilSymbol)
-            (@alias EtAliasDefinitionPlist [(<= R (or @TYPE @MATCHER @BOTH))]
-                    (PList :restrict R
-                           :custom (or Nil (Function Args<List<Any>> EtRestrictedStructure<R>))
+            (@alias EtAliasDefinitionPlist [(<= T (or @TYPE @MATCHER @BOTH))]
+                    (PList :target T
+                           :custom (or Nil (Function Args<List<Any>> *et-repr<T>))
                            :generics List<NonNilSymbol>
                            :constraints List<EtConstraint>
-                           :structure (or Nil EtRestrictedStructure<R>)
+                           :repr (or Nil EtRepr<T>)
                            :type (or Nil *et-type))))
 
 (defmacro et-define-custom-alias (name arglist &rest body)
@@ -867,12 +867,12 @@ FUNC is called with one argument, the current argument"
          (to (plist-get props :type-only))
          (mo (plist-get props :matcher-only))
          (_ (and to mo (error "Alias cannot be both type-only and matcher-only")))
-         (restrict (if to 'TYPE (if mo 'MATCHER 'BOTH))))
+         (target (if to 'TYPE (if mo 'MATCHER 'BOTH))))
 
     `(put ',name 'et-alias
           (list
            :custom (lambda ,arglist ,@body)
-           :restrict ',restrict
+           :target ',target
            ,@props))))
 
 (defun et--gen-vec-generics (gen-vec)
@@ -910,8 +910,8 @@ FUNC is called with one argument, the current argument"
 (defun et--initialize-alias (name)
   (if-let* ((props (get name 'et-alias))
             (spec (plist-get props :spec))
-            (restrict (plist-get props :restrict)))
-      (progn (plist-put props :structure (et--parse-struct spec (plist-get props :generics) restrict))
+            (target (plist-get props :target)))
+      (progn (plist-put props :repr (et--parse-repr spec (plist-get props :generics) target))
              (plist-put props :constraints (et--gen-vec-constraints (plist-get props :gen-vec))))
     (error "Alias `%s' not declared" name)))
 
@@ -926,11 +926,11 @@ FUNC is called with one argument, the current argument"
     (error "Alias %s is already defined, and is read-only" name))
 
   (pcase-let* ((gens (et--gen-vec-generics gen-vec))
-               (restrict (or (plist-get props :restrict) 'BOTH))
-               (_ (or (memq restrict '(TYPE MATCHER BOTH))
-                      (error ":restrict must be one of `TYPE', `MATCHER', or `BOTH'")))
+               (target (or (plist-get props :target) 'BOTH))
+               (_ (or (memq target '(TYPE MATCHER BOTH))
+                      (error ":target must be one of `TYPE', `MATCHER', or `BOTH'")))
                (plist (cl-list*
-                       :restrict restrict
+                       :target target
                        :gen-vec gen-vec
                        :generics gens
                        :spec spec
@@ -968,8 +968,12 @@ FUNC is called with one argument, the current argument"
 
   (et--alias-call (et-alias-name alias) (et-alias-args alias) 'TYPE))
 
-(defun et--expand-alias-as-matcher-dnf (name args _generics)
+(defun et--alias-call-matcher (name args)
   "Expand an alias within a matcher."
+  (declare (et (name EtAliasName)
+               (args (ListR EtMR))
+               (@return EtMR)))
+
   (et--alias-call name args 'MATCHER))
 
 (defun et-expand-all-aliases (type)
@@ -988,45 +992,47 @@ FUNC is called with one argument, the current argument"
   (declare (et (@generics [(<= T @TYPE|@MATCHER)])
                (name EtAliasName)
                (args (ListR (and (extends? @TYPE T *et-type Never)
-                                 (extends? @MATCHER T EtMatcherStructure Never))))
+                                 (extends? @MATCHER T EtMR Never))))
                (target T)
                (@return (or (extends? @TYPE T *et-type Never)
-                            (extends? @MATCHER T EtMatcherStructure Never)))
+                            (extends? @MATCHER T EtMR Never)))
                (@skip)))
 
   (let* ((plist (or (get name 'et-alias) (error "Alias %s is not defined" name)))
-         (restrict (or (plist-get plist :restrict) (error "No target defined for alias")))
+         (a-target (or (plist-get plist :target) (error "No target defined for alias")))
          (custom (plist-get plist :custom))
          (generics (plist-get plist :generics)))
 
     ;; Ensure the alias is valid for the intended target
-    (when (or (and (eq restrict 'TYPE) (eq target 'MATCHER))
-              (and (eq restrict 'MATCHER) (eq target 'TYPE)))
-      (error "Alias %s not defined for %s" name (downcase (format "%s" restrict))))
+    (when (or (and (eq a-target 'TYPE) (eq target 'MATCHER))
+              (and (eq a-target 'MATCHER) (eq target 'TYPE)))
+      (error "Alias %s not defined for %s" name (downcase (format "%s" a-target))))
 
     (cond
      (custom
-      (let* ((structure (apply custom args)))
-        (if (eq target 'MATCHER) structure
-          (et-structure-to-type structure nil))))
+      ;; ARGS are reprs or types, both of which are valid specs
+      (let* ((spec (apply custom args))
+             (repr (et--parse-repr spec nil target)))
+        (if (eq target 'MATCHER) repr
+          (et-repr-to-type repr nil))))
 
      ;; Ensure there are the right number of arguments
      ((not (eq (length generics) (length args)))
       (error "Alias %s expected %s arguments, but %s were provided"
              name (length generics) (length args)))
 
-     ((let* ((structure (plist-get plist :structure))
+     ((let* ((repr (plist-get plist :repr))
              (gen-repls (cl-loop for gen in generics
                                  for arg in args
                                  collect (cons gen arg))))
 
-        (unless structure (error "Alias %s defined incorrectly: Missing structure" name))
+        (unless repr (error "Alias %s defined incorrectly: Missing repr" name))
 
         ;; Replace S:GENERIC with the specified arg
         (if (eq target 'MATCHER)
-            (if (null generics) structure
-              (et--structure-substitute-generics structure gen-repls))
-          (et-structure-to-type structure gen-repls)))))))
+            (if (null generics) repr
+              (et--repr-substitute-generics repr gen-repls))
+          (et-repr-to-type repr gen-repls)))))))
 
 
 ;;;; Constructors
@@ -1070,9 +1076,8 @@ a valid `et-type-case-value'."
 
 DNF is the struct representing the matcher."
   (generics nil :et List<EtGeneric>)
-  (dnf nil :et EtMatcherStructure)
-  (constraints nil :et List<EtConstraint>)
-  (labels nil :et AList<EtMatcherStructure~Any>))
+  (repr nil :et EtMR)
+  (constraints nil :et List<EtConstraint>))
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
@@ -1094,7 +1099,7 @@ DNF is the struct representing the matcher."
 
       (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
                                     (error "Not a generic: %s" var))))
-        (dolist (case (et-matcher-dnf matcher))
+        (dolist (case (et-repr-dnf (et-matcher-repr matcher)))
           (dolist (factor case)
             (pcase factor
               (`(S:DT ,(and name (pred symbolp)) . ,args)
@@ -1103,10 +1108,10 @@ DNF is the struct representing the matcher."
                 (lambda (arg role)
                   (pcase role
                     ('CONST nil)
-                    ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :dnf arg))
+                    ((or 'CO 'CONTRA 'ISO) (make-et-matcher :generics generics :repr arg))
                     (_ (error "Unknown role type: %s" role))))))
               (`(S:ALIAS ,(pred symbolp) . ,args)
-               (dolist (arg args) (make-et-matcher :generics generics :dnf arg)))
+               (dolist (arg args) (make-et-matcher :generics generics :repr arg)))
               (`(S:GENERIC ,(pred genericp)))
               (`(S:SET ,_ ,(pred et-type-p)))
               (_ (error "Invalid match factor: %s" factor))))))))
@@ -1116,28 +1121,29 @@ DNF is the struct representing the matcher."
 (advice-add #'make-et-matcher :filter-return #'et--verify-matcher)
 
 
-;;;; Expand matcher aliaes
+;;;; Expand matcher aliases
 
 (defun et--matcher-expand-aliases (matcher)
-  (let ((generics (et-matcher-generics matcher))
-        (dnf (et-matcher-dnf matcher)))
-    (make-et-matcher :dnf (et--matcher-dnf-expand-aliases dnf generics)
-                     :generics generics
-                     :constraints (et-matcher-constraints matcher))))
+  (make-et-matcher :repr (et--mr-expand-aliases (et-matcher-repr matcher))
+                   :generics (et-matcher-generics matcher)
+                   :constraints (et-matcher-constraints matcher)))
 
-(defun et--matcher-dnf-expand-aliases (dnf generics)
-  (cl-loop for case in dnf
+(defun et--mr-expand-aliases (mr)
+  (declare (et (mr EtMR)
+               (@return EtMR)))
+
+  (cl-loop for case in (et-repr-dnf mr)
            nconc
            (cl-loop for factor in case
                     collect
                     (pcase factor
                       (`(S:ALIAS ,name . ,args)
-                       (et--matcher-dnf-expand-aliases
-                        (et--expand-alias-as-matcher-dnf name args generics)
-                        generics))
+                       (et--mr-expand-aliases (et--alias-call-matcher name args)))
                       (other (list (list other))))
                     into and-terms
-                    finally return (apply #'et--dnf-and and-terms))))
+                    finally return (apply #'et--dnf-and and-terms))
+           into new-cases
+           finally return (et-make-mr new-cases (et-repr-label mr))))
 
 
 ;;;; Iso match
@@ -1152,8 +1158,8 @@ DNF is the struct representing the matcher."
 (defvar et--constraints-stack nil
   "Stack of calls to `et--sub/super-constraints' for preventing loops.
 
-Used by `et--stop-recursion', with ELEM=(`sub'|`super' MATCHER TYPE).
-THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
+Used by `et--stop-recursion', with ELEM=(`sub'|`super' M-REPR TYPE).
+Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (defun et--never-constraint ()
   (list 'Q:NEVER (mapcar #'car et--constraints-stack)))
@@ -1165,10 +1171,14 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
       (delete-dups qs))))
 
 (defun et--sub-constraints (matcher type)
+  (declare (et (matcher *et-matcher)
+               (type *et-type)
+               (@return List<EtConstraint>)))
+
   (et--verify-matcher matcher)
   (et--verify-type type)
 
-  (et--stop-recursion et--constraints-stack (list 'sub (et-matcher-dnf matcher) type) nil
+  (et--stop-recursion et--constraints-stack (list 'sub (et-matcher-repr matcher) type) nil
     (setq matcher (et--matcher-expand-aliases matcher))
 
     (cl-loop for case in (et-type-cases type)
@@ -1187,13 +1197,17 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
              finally return (et--simplify-constraints result))))
 
 (defun et--sub-constraints-2 (matcher case)
-  (cl-loop for match-case in (et-matcher-dnf matcher)
+  (declare (et (matcher *et-matcher)
+               (case *et-type-case)
+               (@return List<EtConstraint>)))
+
+  (cl-loop for match-case in (et-repr-dnf (et-matcher-repr matcher))
            for result-1 =
            (cl-loop for match-factor in match-case
                     for gens = (et-matcher-generics matcher)
                     nconc (et--sub-or-super-constraints-3 match-factor case gens))
            unless (assq 'Q:NEVER result-1) return result-1
-           ;; If all cases failed, fallback to 2.2 or 2.3
+           ;; If all cases failed, fallback to 2.2 (expand aliases) or 2.3 (fail)
            finally return
            (let ((val (et-type-case-value case)))
              (if (et-alias-p val)
@@ -1210,16 +1224,21 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                result-1))))
 
 (defun et--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
+  (declare (et (match-factor EtMRFactor)
+               (case *et-type-case)
+               (generics List<EtGeneric>)
+               (@return List<EtConstraint>)))
+
   (pcase match-factor
     (`(S:GENERIC ,var) (et-q ((,(if is-super 'Q:LEQ 'Q:GEQ) ,var ,(et-type case)))))
-    (`(S:SET ,dnf ,type)
+    (`(S:SET ,mr ,type)
      (funcall (if is-super #'et--super-constraints #'et--sub-constraints)
-              (make-et-matcher :dnf dnf :generics generics) type))
+              (make-et-matcher :repr mr :generics generics) type))
     (`(S:DT ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
        ((and alias (pred et-alias-p))
         (if (not is-super) (list (et--never-constraint))
-          (et--super-constraints (make-et-matcher :generics generics :dnf (list (list match-factor)))
+          (et--super-constraints (make-et-matcher :generics generics :repr (et-make-mr (list (list match-factor))))
                                  (et-alias-expand alias))))
        ((and dt (pred et-datatype-p))
         (et--sub-or-super-constraints-4
@@ -1229,42 +1248,56 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
     (_ (error "Invalid match factor"))))
 
 (defun et--sub-or-super-constraints-4 (m-name m-args t-name t-args generics &optional is-super)
-  (cl-flet ((make-matcher (dnf) (make-et-matcher :dnf dnf :generics generics)))
+  (declare (et (m-name NonNilSymbol) (m-args List<Any>)
+               (t-name NonNilSymbol) (t-args List<Any>)
+               (generics List<EtGeneric>)
+               (@return List<EtConstraint>)))
+
+  (cl-flet ((make-matcher (mr) (make-et-matcher :repr mr :generics generics)))
     (if (not is-super)
         ;; subtype matching (super=MATCHER > sub=TYPE)
         (et--datatype-constraints
          t-name t-args m-name m-args
-         (lambda (type dnf) (et--sub-constraints (make-matcher dnf) type))
-         (lambda (type dnf) (et--super-constraints (make-matcher dnf) type))
-         (lambda (type dnf) (et-iso-match (make-matcher dnf) type))
-         (lambda (literal dnf) (et--sub-constraints (make-matcher dnf) (et-literal literal))))
+         (lambda (type ms) (et--sub-constraints (make-matcher ms) type))
+         (lambda (type ms) (et--super-constraints (make-matcher ms) type))
+         (lambda (type ms) (et-iso-match (make-matcher ms) type))
+         (lambda (literal ms) (et--sub-constraints (make-matcher ms) (et-literal literal))))
       ;; supertype matching (sub=MATCHER < super=TYPE)
       (et--datatype-constraints
        m-name m-args t-name t-args
-       (lambda (dnf type) (et--super-constraints (make-matcher dnf) type))
-       (lambda (dnf type) (et--sub-constraints (make-matcher dnf) type))
-       (lambda (dnf type) (et-iso-match (make-matcher dnf) type))
+       (lambda (ms type) (et--super-constraints (make-matcher ms) type))
+       (lambda (ms type) (et--sub-constraints (make-matcher ms) type))
+       (lambda (ms type) (et-iso-match (make-matcher ms) type))
        (lambda (literal type)
-         (let ((literal-m (make-matcher (et-q (((S:DT Literal ,literal)))))))
+         (let ((literal-m (make-matcher (et-make-mr (et-q (((S:DT Literal ,literal))))))))
            (et--super-constraints literal-m type)))))))
 
 
 ;;;; Super match
 
 (defun et--super-constraints (matcher type)
-  (et--stop-recursion et--constraints-stack (list 'super (et-matcher-dnf matcher) type) nil
+  (declare (et (matcher *et-matcher)
+               (type *et-type)
+               (@return List<EtConstraint>)))
+
+  (et--stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type) nil
     (et--verify-matcher matcher)
     (et--verify-type type)
 
     (setq matcher (et--matcher-expand-aliases matcher))
 
-    (cl-loop for m-case in (et-matcher-dnf matcher)
+    (cl-loop for m-case in (et-repr-dnf (et-matcher-repr matcher))
              nconc (et--super-constraints-2 m-case type (et-matcher-generics matcher))
              into result
              finally return (et--simplify-constraints result))))
 
 (defun et--super-constraints-2 (match-case type generics)
-  (make-et-matcher :dnf (list match-case) :generics generics)
+  (declare (et (match-case EtMRCase)
+               (type *et-type)
+               (generics List<EtGeneric>)
+               (@return List<EtConstraint>)))
+
+  (ignore (make-et-matcher :repr (et-make-mr (list match-case)) :generics generics))
   (et--verify-type type)
 
   (or
@@ -1283,55 +1316,81 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 
 ;;; ============================================================
-;;; Structure
+;;; Reprs
 ;;;; Documentation
 
+(cl-defstruct et-repr
+  "A general representation for both types and matchers."
+  (target nil :et-generics [(<= T EtTarget)] :et T)
+  (dnf nil :et (and (extends? @TYPE T EtTRDnf Never)
+                    (extends? @MATCHER T EtMRDnf Never)
+                    (extends? @BOTH T EtBRDnf Never)))
+  (label nil :et EtLabel))
+
+(defun et-make-mr (dnf &optional label)
+  (make-et-repr :target 'MATCHER :dnf dnf :label label))
+
+(defun et-modified-repr (repr dnf)
+  "Create a copy of REPR with the dnf DNF."
+  (make-et-repr :target (et-repr-target repr)
+                :dnf dnf
+                :label (et-repr-label repr)))
+
 (et-declare
+ (@alias EtTarget (or @TYPE @MATCHER @BOTH))
  (@alias EtLabel (PList :field Symbol))
- (@alias EtConstraintStack List<Tuple<@SUB|@SUPER~EtMatcherStructure~*et-type>>)
+
+ (@alias EtConstraintStack (List (Tuple @SUB|@SUPER EtMR *et-type)))
  (@alias EtConstraint
          (or (Tuple @Q:NEVER EtConstraintStack)
              (Tuple @Q:EQ EtGeneric *et-type)
              (Tuple @Q:GEQ EtGeneric *et-type)
              (Tuple @Q:LEQ EtGeneric *et-type)))
- (@alias EtBothStructureFactor
+
+ (@alias EtBRFactor
          (or (TupleStar @S:DT EtDatatypeName List<Any>)
              (TupleStar @S:ALIAS EtAliasName List<*et-type>)
              (Tuple @S:GENERIC EtGeneric)))
- (@alias EtTypeStructureFactor
-         (or (Tuple @S:TYPE-LABEL EtLabel)
-             (Tuple @S:TYPE *et-type)
-             (Tuple @S:BIND NonNilSymbol EtTypeStructure)
-             (Tuple @S:TYPEOF EtTypeStructure)
-             (Tuple @S:BINDS-OF EtTypeStructure)
-             (Tuple @S:SUBTRACT EtTypeStructure EtTypeStructure)
-             (Tuple @S:INFER List<EtGeneric> EtMatcherStructure EtTypeStructure EtTypeStructure EtTypeStructure)
-             (Tuple @S:EXTENDS EtTypeStructure EtTypeStructure EtTypeStructure EtTypeStructure)
+ (@alias EtTypeOnlyFactor
+         (or (Tuple @S:TYPE *et-type) ; Used for expanding type aliases
+             (Tuple @S:BIND NonNilSymbol EtTR)
+             (Tuple @S:TYPEOF EtTR)
+             (Tuple @S:BINDS-OF EtTR)
+             (Tuple @S:SUBTRACT EtTR EtTR)
+             (Tuple @S:INFER List<EtGeneric> EtMR EtTR EtTR EtTR)
+             (Tuple @S:EXTENDS EtTR EtTR EtTR EtTR)
              (TupleStar @S:EVAL Function<List<*et-type>~*et-type> List<*et-type>)))
- (@alias EtMatcherStructureFactor
-         (or (Tuple @S:SET EtMatcherStructure EtTypeStructure)))
- (@alias EtTypeStructure
-         (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
- (@alias EtMatcherStructure
-         (List (List (or EtBothStructureFactor EtMatcherStructureFactor))))
- (@alias EtBothStructure (List (List EtBothStructureFactor)))
- (@alias EtRestrictedStructure [(<= R (or @TYPE @MATCHER @BOTH))]
-         (and (extends? @TYPE R EtTypeStructure Never)
-              (extends? @MATCHER R EtMatcherStructure Never)
-              (extends? @BOTH R EtBothStructure Never)))
- )
+ (@alias EtMatcherOnlyFactor
+         (or (Tuple @S:SET EtMR EtTR)))
+ (@alias EtTRFactor (or EtBRFactor EtTypeOnlyFactor))
+ (@alias EtMRFactor (or EtBRFactor EtMatcherOnlyFactor))
 
-;; A structure is a general format that can be parsed to either a matcher
-;; or a type. RESTRICT can be either `type' or `matcher' to ensure the
-;; resulting structure is one or the other, and `both' to ensure that the
-;; resulting structure is a valid type AND matcher. It is a list of cases,
+ (@alias EtTRCase (List EtTRFactor))
+ (@alias EtMRCase (List EtMRFactor))
+
+ (@alias EtBRDnf (List (List EtBRFactor)))
+ (@alias EtTRDnf (List EtTRCase))
+ (@alias EtMRDnf (List EtMRCase))
+
+ (@alias EtRepr [(<= T EtTarget)] *et-repr<T>)
+ (@alias EtBR EtRepr<@BOTH>)
+ (@alias EtTR EtRepr<@TYPE|@BOTH>)
+ (@alias EtMR EtRepr<@MATCHER|@BOTH>)
+
+ ;; Could have a stricter type. Maybe later.
+ (@alias EtSpec Any))
+
+;; A repr is a general format that can be parsed to either a matcher
+;; or a type. RESTRICT can be either `TYPE' or `MATCHER' to ensure the
+;; resulting repr is one or the other, and `BOTH' to ensure that the
+;; resulting repr is a valid type AND matcher. It is a list of cases,
 ;; each of which is a list of factors. A factor is one of the following:
 ;;
 ;; \(`S:DT' NAME ARGS...)
 ;; \(`S:ALIAS' NAME ARGS...)
 ;; \(`S:GENERIC' VAR) - In matchers, this compiles to a matcher generic. In
 ;;   types, you must provide replacements for each generic when parsing the
-;;   structure to a type.
+;;   repr to a type.
 ;;
 ;; Types only:
 ;; \(`S:TYPE' TYPE) - an already compiled type
@@ -1344,63 +1403,87 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 ;; \(`S:EVAL' FUNC TYPES...)
 ;;
 ;; Matchers only:
-;; \(`S:MATCHER-DNF' LITERAL-MATCHER-DNF) - an already compiled matcher dnf
 ;; \(`S:SET' MATCHER TYPE)
 
 
 ;;;; Parsing
 
-(defmacro et-struct (&rest args)
-  `(et-parse-structure (et-q ,(if (eq (length args) 1) (car args) args))))
+(defmacro et-repr (&rest args)
+  (declare (et (args List<EtSpec>)
+               (@return EtMR|EtTR)))
+
+  `(et--parse-repr (et-q ,(if (eq (length args) 1) (car args) args)) nil 'BOTH))
 
 (defvar et--parsing-generics nil)
-(defvar et--parsing-restriction nil)
+(defvar et--parsing-target nil)
 
-(defun et--parse-struct (spec generics restrict)
+(defun et--parse-repr (spec generics target &optional label)
+  (declare (et (@generics (<= T EtTarget))
+               (spec EtSpec)
+               (generics List<EtGeneric>)
+               (target T)
+               (label EtLabel)
+               (@return EtRepr<T>)))
+
   (let* ((et--parsing-generics generics)
-         (et--parsing-restriction restrict))
-    (et--parse-sub spec)))
+         (et--parsing-target target)
+         (repr (et--parse-sub spec)))
+    (setf (et-repr-label repr) label)
+    repr))
 
 (defun et--parse-sub (spec &optional extra-generics)
-  (cl-assert (memq et--parsing-restriction '(TYPE MATCHER BOTH)))
+  (declare (et (spec EtSpec)
+               (extra-generics List<EtGeneric>)
+               (@return *et-repr)))
+
+  (cl-assert (memq et--parsing-target '(TYPE MATCHER BOTH)))
   (let* ((et--parsing-generics (append extra-generics et--parsing-generics)))
     (cond
      ((and (consp spec) (symbolp (car spec)))
       (et--parse-spec-factor (car spec) (cdr spec)))
-     ((et-type-p spec) spec)
      ((symbolp spec) (et--parse-string (symbol-name spec)))
      ((stringp spec) (et--parse-string spec))
      ((numberp spec) (et--parse-sub (list 'literal spec)))
+     ((et-type-p spec) (et--parse-sub (list 'type spec)))
      (t (error "Invalid spec: %s" spec)))))
 
 (defun et--parse-spec-factor (name args)
+  (declare (et (name Symbol)
+               (args List<EtSpec>)
+               (@return *et-repr)))
+
   (if-let* ((handler (get name 'et-spec-parse)))
       (if (eq :full (car handler))
-          (apply (cdr handler) args)
-        ;; Check that it is a valid factor for the current restriction
-        (pcase et--parsing-restriction
-          ('TYPE (unless (get (car handler) 'et-struct-to-type)
-                   (error "Invalid type structure: %s" name)))
-          ('MATCHER (unless (memq (car handler) '(S:DT S:ALIAS S:GENERIC S:SET))
-                      (error "Invalid matcher structure: %s" name))))
+          (make-et-repr
+           :target et--parsing-target
+           :dnf (apply (cdr handler) args))
+        ;; Check that it is a valid factor for the parse target
+        (when (memq et--parsing-target '(TYPE BOTH))
+          (unless (get (car handler) 'et-repr-to-type)
+            (error "Invalid type repr: %s" name)))
+        (when (memq et--parsing-target '(MATCHER BOTH))
+          (unless (memq (car handler) '(S:DT S:ALIAS S:GENERIC S:SET))
+            (error "Invalid matcher repr: %s" name)))
         ;; Base case: wrap a factor in a list of lists
-        (list (list (cons (car handler) (apply (cdr handler) args)))))
+        (make-et-repr :target et--parsing-target
+                      :dnf (list (list (cons (car handler) (apply (cdr handler) args))))))
 
     (if (memq name et--parsing-generics)
-        (list (list (list 'S:GENERIC name)))
+        (make-et-repr :target et--parsing-target
+                      :dnf (list (list (list 'S:GENERIC name))))
 
       (if (et--datatype-name? name)
           ;; Parse a datatype
           (et--parse-spec-factor 'dt (cons name args))
 
         (let* ((alias (or (get name 'et-alias) (error "Invalid type name: %s" name)))
-               (alias-restrict (plist-get alias :restrict))
-               (restrict et--parsing-restriction))
+               (alias-target (plist-get alias :target))
+               (target et--parsing-target))
           ;; Ensure the restriction is valid
-          (when (or (and (eq restrict 'TYPE) (eq alias-restrict 'MATCHER))
-                    (and (eq restrict 'MATCHER) (eq alias-restrict 'TYPE)))
+          (when (or (and (eq target 'TYPE) (eq alias-target 'MATCHER))
+                    (and (eq target 'MATCHER) (eq alias-target 'TYPE)))
             (error "Parsing %s, but alias %s only supports %s"
-                   (downcase (symbol-name restrict)) name (downcase (symbol-name alias-restrict))))
+                   (downcase (symbol-name target)) name (downcase (symbol-name alias-target))))
           ;; Parse an alias
           (et--parse-spec-factor 'alias (cons name args)))))))
 
@@ -1413,6 +1496,9 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
         (cons '$c (make-et-var :name '$c :type (et-dt 'Any)))))
 
 (defun et--parse-string (s)
+  (declare (et (s String)
+               (@return *et-repr)))
+
   (when (string-empty-p s) (error "Empty type expression"))
 
   (cl-loop for or-seg in (et--split-at-depth s ?|)
@@ -1422,13 +1508,19 @@ THus, this variable stores a list of (ELEM . DEFAULT) pairs.")
            (cl-loop for and-seg in (et--split-at-depth or-seg ?&)
                     when (string-empty-p and-seg)
                     do (error "Empty segment in intersection type: %s" s)
-                    collect (et--parse-atom and-seg) into and-parts
-                    finally return (cl-reduce #'et--dnf-and and-parts))
+                    collect (et-repr-dnf (et--parse-atom and-seg)) into and-parts
+                    finally return (apply #'et--dnf-and and-parts))
            into or-parts
-           finally return (apply #'nconc or-parts)))
+           finally return
+           (make-et-repr
+            :target et--parsing-target
+            :dnf (apply #'nconc or-parts))))
 
 (defun et--parse-atom (s)
   "Parse a single type atom into an `et-type'."
+  (declare (et (s String)
+               (@return *et-repr)))
+
   (cond
    ;; Literal number
    ((string-match "^[0-9]+\\(\\.[0-9]+\\)?$" s)
@@ -1508,60 +1600,61 @@ Depth tracks < > and { } nesting."
     (nreverse result)))
 
 
-;;;; Struct to type
+;;;; Repr to type
 
+(et-declare (@variable et--totype-gen-repls (ListR (ConsR EtGeneric *et-type))))
 (defvar et--totype-gen-repls nil)
-(defvar et--totype-labels nil)
 
-(defun et--totype-sub (structure)
-  (if (et-type-p structure) structure
-    (cl-loop for factors in structure
-             collect
-             (cl-loop for (name . args) in factors
-                      for totype = (or (get name 'et-struct-to-type)
-                                       (error "Invalid type structure: %s" name))
-                      for out = (apply totype args)
-                      for type = (cond ((et-type-p out) out)
-                                       ((et-type-case-p out) (make-et-type :cases (list out)))
-                                       (t (make-et-type :cases out)))
-                      collect type into and-types
-                      finally return (apply #'et--supersect and-types))
-             into or-types
-             finally return
-             (let* ((type (apply #'et--or or-types))
-                    (label (alist-get structure et--totype-labels)))
-               (when label (setf (et-type-label type) label))
-               type))))
+(defun et--totype-sub (repr)
+  (declare (et (repr EtTR) (@return *et-type)))
 
-(defun et-structure-to-type (structure &optional gen-repls labels)
-  "Convert STRUCTURE to an `et-type'.
+  (cl-loop for case in (et-repr-dnf repr)
+           collect
+           (cl-loop for (name . args) in case
+                    for totype = (or (get name 'et-repr-to-type)
+                                     (error "Invalid type repr: %s" name))
+                    for out = (apply totype args)
+                    for type = (cond ((et-type-p out) out)
+                                     ((et-type-case-p out) (make-et-type :cases (list out)))
+                                     (t (make-et-type :cases out)))
+                    collect type into and-types
+                    finally return (apply #'et--supersect and-types))
+           into or-types
+           finally return
+           (let* ((type (apply #'et--or or-types)))
+             (setf (et-type-label type) (et-repr-label repr))
+             type)))
+
+(defun et-repr-to-type (repr &optional gen-repls)
+  "Convert REPR to an `et-type'.
 
 GEN-REPLS is an alist of symbols to `et-type's. Each time S:GENERIC
-appears in STRUCTURE, it will be replaced with the corresponding value
+appears in REPR, it will be replaced with the corresponding value
 in GEN-REPLS, if it exists.
 
-LABELS is an alist (STRUCTURE . LABEL). For each key structure that is
-encountered, it will be given the corresponding label.
+This function will not succeed for all reprs. Reprs can represent
+multiple types in a single case, but types do not support this, so it
+will fail in this case.
 
-This function will not succeed for all structures. Structures can
-represent multiple types in a single case, but types do not support
-this, so it will fail in this case.
-
-Also, there are certain structure types that are designed for matchers,
+Also, there are certain repr types that are designed for matchers,
 which are invalid for types."
-  (let* ((et--totype-gen-repls gen-repls)
-         (et--totype-labels labels))
-    (et--totype-sub structure)))
+  (declare (et (repr EtTR)
+               (gen-repls (ListR (ConsR EtGeneric *et-type)))
+               (@return *et-type)))
+
+  (let* ((et--totype-gen-repls gen-repls))
+    (et--totype-sub repr)))
 
 
 ;;;; Replacement for matchers
 
-(defun et--structure-substitute-generics (structure gen-repls)
-  (declare (et (structure EtMatcherStructure)
-               (gen-repls AList<EtGeneric~EtMatcherStructure>)))
+(defun et--repr-substitute-generics (repr gen-repls)
+  (declare (et (repr EtMR)
+               (gen-repls AList<EtGeneric~EtMR>)
+               (@return EtMR)))
 
-  (cl-loop with sub = (lambda (s) (et--structure-substitute-generics s gen-repls))
-           for case in structure
+  (cl-loop with sub = (lambda (r) (et--repr-substitute-generics r gen-repls))
+           for case in (et-repr-dnf repr)
            nconc
            (cl-loop for factor in case
                     collect
@@ -1578,19 +1671,21 @@ which are invalid for types."
                       ;; But that means every type matcher needs a substitution function
                       (`(S:SET ,matcher ,type)
                        (et-q (((S:SET ,(funcall sub matcher) ,type)))))
-                      (_ (error "Invalid matcher structure factor: %s" factor)))
+                      (_ (error "Invalid matcher repr factor: %s" factor)))
                     into and-structs
-                    finally return (apply #'et--dnf-and and-structs))))
+                    finally return (apply #'et--dnf-and and-structs))
+           into new-dnf
+           finally return (et-modified-repr repr new-dnf)))
 
 
 ;;;; Printing
 
-(defun et--print-sub (structure)
-  (cl-loop for factors in structure
+(defun et--print-sub (repr)
+  (cl-loop for factors in (et-repr-dnf repr)
            collect
            (cl-loop for (name . args) in factors
-                    for print = (or (get name 'et-struct-print)
-                                    (error "Invalid structure: %s" name))
+                    for print = (or (get name 'et-repr-print)
+                                    (error "Invalid repr: %s" name))
                     collect (apply print args) into and-strings
                     finally return
                     (if and-strings (string-join and-strings " & ") "Any"))
@@ -1646,22 +1741,22 @@ which are invalid for types."
 
 ;;;; Segment Macros
 
-(defmacro et--define-struct-segment (struct-sym spec-sym arglist &rest plist)
+(defmacro et--define-repr-segment (repr-sym spec-sym arglist &rest plist)
   (declare (indent 3))
   (let* ((parse (or (plist-get plist :parse) (error "No :parse field provided")))
          (print (or (plist-get plist :print) (error "No :print field provided")))
          (totype (plist-get plist :to-type))
          (ignore (cons #'ignore (remq '&optional (remq '&rest arglist)))))
     `(progn
-       (put ',spec-sym 'et-spec-parse (cons ',struct-sym (lambda ,arglist ,ignore ,parse)))
-       (put ',struct-sym 'et-struct-print (lambda ,arglist ,ignore ,print))
-       ,@(when totype `((put ',struct-sym 'et-struct-to-type (lambda ,arglist ,ignore ,totype)))))))
+       (put ',spec-sym 'et-spec-parse (cons ',repr-sym (lambda ,arglist ,ignore ,parse)))
+       (put ',repr-sym 'et-repr-print (lambda ,arglist ,ignore ,print))
+       ,@(when totype `((put ',repr-sym 'et-repr-to-type (lambda ,arglist ,ignore ,totype)))))))
 
-(defmacro et--define-spec-segment (spec-sym struct-sym arglist body)
-  "Define how a spec form is parsed into a structure."
+(defmacro et--define-spec-segment (spec-sym repr-sym arglist body)
+  "Define how a spec form is parsed into a repr."
   (declare (indent 3))
   `(put ',spec-sym 'et-spec-parse
-        (cons ',struct-sym (lambda ,arglist ,body))))
+        (cons ',repr-sym (lambda ,arglist ,body))))
 
 
 ;;;; Spec segments
@@ -1673,29 +1768,31 @@ which are invalid for types."
 
 (et--define-spec-segment Never :full () nil)
 (et--define-spec-segment or :full (&rest args)
-  (apply #'nconc (mapcar #'et--parse-sub args)))
+  (let* ((ps (mapcar #'et--parse-sub args))
+         (ds (mapcar #'et-repr-dnf ps)))
+    (apply #'nconc ds)))
 (et--define-spec-segment and :full (&rest args)
-  (apply #'et--dnf-and (mapcar #'et--parse-sub args)))
+  (apply #'et--dnf-and (mapcar #'et-repr-dnf (mapcar #'et--parse-sub args))))
 
-(et--define-struct-segment S:TYPE-LABEL type-label (label)
-  :parse (list label)
-  :to-type (make-et-type :cases (list (make-et-type-case :value (make-et-datatype :name 'Any)))
-                         :label label)
-  :print (format "t@%s" label))
+;; Can be specified by its segment name (type TYPE), but also by just using an `et-type'
+(et--define-repr-segment S:TYPE type (type)
+  :parse (list type)
+  :to-type type
+  :print (format "type:%s" (et-pp type)))
 
-(et--define-struct-segment S:BIND bind (var type)
+(et--define-repr-segment S:BIND bind (var type)
   :parse (list var (et--parse-sub type))
   :to-type (list (make-et-type-case
                   :value (make-et-datatype :name 'Any)
                   :binds (list (cons var (et--totype-sub type)))))
   :print (format "{%s : %s}" (et-var-name var) (et--print-sub type)))
 
-(et--define-struct-segment S:TYPEOF typeof (var)
+(et--define-repr-segment S:TYPEOF typeof (var)
   :parse (list var)
   :to-type (list (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var)))
   :print (format "{typeof %s}" (et-var-name var)))
 
-(et--define-struct-segment S:BINDS-OF bindsof (type)
+(et--define-repr-segment S:BINDS-OF bindsof (type)
   :parse (list (et--parse-sub type))
   :to-type (let* ((type (et--totype-sub type)))
              (if (et-never-p type) nil
@@ -1704,12 +1801,12 @@ which are invalid for types."
                       :binds (et--type-binds type)))))
   :print (format "{bindsof %s}" (et--print-sub type)))
 
-(et--define-struct-segment S:SUBTRACT subtract (a b)
+(et--define-repr-segment S:SUBTRACT subtract (a b)
   :parse (list (et--parse-sub a) (et--parse-sub b))
   :to-type (et-type-cases (et--subtract (et--totype-sub a) (et--totype-sub b)))
   :print (format "{%s - %s}" (et--print-sub a) (et--print-sub b)))
 
-(et--define-struct-segment S:INFER infer (type gen-vec matcher yes no)
+(et--define-repr-segment S:INFER infer (type gen-vec matcher yes no)
   :parse
   (let* ((generics (if (vectorp gen-vec) (append gen-vec nil)
                      (error "Generics must be a vector: %s" gen-vec))))
@@ -1717,7 +1814,7 @@ which are invalid for types."
           generics
           (make-et-matcher
            :generics generics
-           :dnf (et--parse-struct matcher generics 'MATCHER))
+           :repr (et--parse-repr matcher generics 'MATCHER))
           (et--parse-sub yes generics)
           (et--parse-sub no)))
   :to-type
@@ -1729,7 +1826,7 @@ which are invalid for types."
           (et--print-sub type) (et-pp-matcher matcher)
           (et--print-sub yes) (et--print-sub no)))
 
-(et--define-struct-segment S:EXTENDS extends? (sub super yes no)
+(et--define-repr-segment S:EXTENDS extends? (sub super yes no)
   :parse (list (et--parse-sub sub) (et--parse-sub super) (et--parse-sub yes) (et--parse-sub no))
   :to-type (et-type-cases
             (if (et-subtype? (et--totype-sub sub) (et--totype-sub super))
@@ -1738,28 +1835,28 @@ which are invalid for types."
                  (et--print-sub sub) (et--print-sub super)
                  (et--print-sub yes) (et--print-sub no)))
 
-(et--define-struct-segment S:EVAL eval (func &rest args)
+(et--define-repr-segment S:EVAL eval (func &rest args)
   :parse (cons func (mapcar #'et--parse-sub args))
   :to-type (et-type-cases (apply func (mapcar #'et--totype-sub args)))
   :print (format "{eval %s on %s}" func (mapconcat #'et--print-sub args " ")))
 
-(et--define-struct-segment S:GENERIC generic (var)
+(et--define-repr-segment S:GENERIC generic (var)
   :parse (if (memq var et--parsing-generics) (list var) (error "Generic %s not defined" var))
   :to-type (or (alist-get var et--totype-gen-repls) (error "Generic %s not defined" var))
   :print (format "@%s" var))
 
-(et--define-struct-segment S:SET set (dnf type)
+(et--define-repr-segment S:SET set (dnf type)
   :parse (list (et--parse-sub dnf) (et-parse-type type))
   :print (format "{match %s to %s}" (et--print-sub dnf) (et--print-sub type)))
 
-(et--define-struct-segment S:DT dt (name &rest args)
+(et--define-repr-segment S:DT dt (name &rest args)
   :parse (cons name (et--datatype-map-type-args name args #'et--parse-sub))
   :to-type
   (let* ((new-args (et--datatype-map-type-args name args #'et--totype-sub)))
     (list (make-et-type-case :value (make-et-datatype :name name :args new-args))))
   :print (et--print-sub-named name args))
 
-(et--define-struct-segment S:ALIAS alias (name &rest args)
+(et--define-repr-segment S:ALIAS alias (name &rest args)
   :parse
   (let* ((plist (get name 'et-alias))
          (_ (or plist (error "Not an alias: %s" name)))
@@ -1776,8 +1873,11 @@ which are invalid for types."
 
 ;;;; Type to struct
 
-(defun et-type-to-structure (type)
-  "Convert an `et-type' to a structure DNF."
+(defun et-type-to-repr (type)
+  "Convert an `et-type' to a repr."
+  (declare (et (type *et-type)
+               (@return EtTR)))
+
   (et--verify-type type)
   (cl-loop for case in (et-type-cases type)
            for value = (et-type-case-value case)
@@ -1786,18 +1886,21 @@ which are invalid for types."
             (pcase value
               ((cl-struct et-datatype name args)
                (et-ql S:DT ,(et-datatype-name value)
-                      ,@(et--datatype-map-type-args name args #'et-type-to-structure)))
+                      ,@(et--datatype-map-type-args name args #'et-type-to-repr)))
               ((cl-struct et-alias name args)
-               (et-ql S:ALIAS ,name ,@(mapcar #'et-type-to-structure args)))
+               (et-ql S:ALIAS ,name ,@(mapcar #'et-type-to-repr args)))
               (_ (error "Unsupported type case value: %s" value)))
 
             (nconc
              (cl-loop for (var . type) in (et-type-case-binds case)
-                      collect (et-ql S:BIND ,var ,(et-type-to-structure type)))
+                      collect (et-ql S:BIND ,var ,(et-type-to-repr type)))
              (cl-loop for var in (et-type-case-typeofs case)
-                      collect (et-ql S:TYPEOF ,var))
-             (when (et-type-label type)
-               (list (et-ql S:TYPE-LABEL ,(et-type-label type))))))))
+                      collect (et-ql S:TYPEOF ,var))))
+           into repr-dnf
+           finally return
+           (make-et-repr :target 'TYPE
+                         :dnf repr-dnf
+                         :label (et-type-label type))))
 
 
 ;;;; Parse/print type
@@ -1808,13 +1911,13 @@ which are invalid for types."
                (@return *et-type)
                (@skip)))
 
-  (et-structure-to-type (et--parse-struct spec nil 'TYPE)))
+  (et-repr-to-type (et--parse-repr spec nil 'TYPE)))
 
 (defmacro et (&rest args)
   `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
 
 (defun et-pp-type (type)
-  (or (ignore-errors (et--print-sub (et-type-to-structure type)))
+  (or (ignore-errors (et--print-sub (et-type-to-repr type)))
       (format "%s" type)))
 
 (cl-defmethod cl-print-object ((type et-type) stream)
@@ -1893,11 +1996,8 @@ which are invalid for types."
 (defmacro et-matcher (gen-vec &rest args)
   (declare (indent 1))
   (or (vectorp gen-vec) (error "Write the generics as a vector"))
-  (let* ((labels (when (eq :labels (car args)) (pop args) (pop args))))
-    `(let* ((m (et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
-                                 ,gen-vec)))
-       ,(when labels `((setf (et-matcher-labels m) ,labels)))
-       m)))
+  `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
+                     ,gen-vec))
 
 (defun et-parse-matcher (spec gen-vec)
   "Parse SPEC as an `et-matcher' with GEN-VEC.
@@ -1915,12 +2015,12 @@ same as [T (<= T Number)]."
     (make-et-matcher
      :generics generics
      :constraints (et--gen-vec-constraints gen-vec)
-     :dnf (et--parse-struct spec generics 'MATCHER))))
+     :repr (et--parse-repr spec generics 'MATCHER))))
 
 (defun et-pp-matcher (matcher)
   "Format an `et-matcher' into a human-readable string."
   (let* ((generics (et-matcher-generics matcher))
-         (body (et--print-sub (et-matcher-dnf matcher))))
+         (body (et--print-sub (et-matcher-repr matcher))))
     (format "[%s] %s" (mapconcat #'symbol-name generics " ") body)))
 
 (cl-defmethod cl-print-object ((matcher et-matcher) stream)
@@ -2294,20 +2394,14 @@ returning A itself is a valid approximation."
 
 (defun et--sub-match (matcher type)
   (if et--cache-matches
-      (et-cache (list #'et--sub-match matcher type)
-          (lambda (x)
-            (or (et-var-p x)
-                (assq x (et-matcher-labels matcher))))
+      (et-cache (list #'et--sub-match matcher type) #'et-var-p
         (et--sub-match-logic matcher type))
 
     (et--sub-match-logic matcher type)))
 
 (defun et--super-match (matcher type)
   (if et--cache-matches
-      (et-cache (list #'et--super-match matcher type)
-          (lambda (x)
-            (or (et-var-p x)
-                (assq x (et-matcher-labels matcher))))
+      (et-cache (list #'et--super-match matcher type) #'et-var-p
         (et--super-match-logic matcher type))
     (et--super-match-logic matcher type)))
 
@@ -2427,16 +2521,43 @@ values to be the never type."
            finally return (make-et-type :label (et-type-label type) :cases cases)))
 
 
+;;;; Label utils
+
+(defun et--remove-type-labels (type)
+  "Recursively remove labels from TYPE."
+  (cl-assert (et-type-p type))
+
+  (cl-loop for case in (et-type-cases type)
+           for val = (et-type-case-value case)
+           collect
+           (make-et-type-case
+            :value
+            (pcase val
+              ((cl-struct et-alias name args)
+               (make-et-alias :name name :args (mapcar #'et--remove-type-labels args)))
+              ((cl-struct et-datatype name args)
+               (let ((new-args (et--datatype-map-type-args name args #'et--remove-type-labels)))
+                 (make-et-datatype :name name :args new-args)))
+              (_ (error "Invalid case val: %s" val))))
+           into cases
+           finally return (make-et-type :cases cases)))
+
+(defun et--remove-type-label (type)
+  "Recursively remove labels from TYPE."
+  (cl-assert (et-type-p type))
+  (make-et-type :cases (et-type-cases type)))
+
+
 ;;;; Infer
 
-(defun et--infer (matcher type output-struct &optional extra-repls)
-  "Infer TYPE against MATCHER, then convert OUTPUT-STRUCT to a type.
+(defun et--infer (matcher type output-repr &optional extra-repls)
+  "Infer TYPE against MATCHER, then convert OUTPUT-REPR to a type.
 
 Specifically, this will first call `et--sub-match' on MATCHER and TYPE
 to determine values for the generics defined in MATCHER. Then, if this
-succeeds, it will convert OUTPUT-STRUCT to a type, replacing each
-generic with the value determined by `et--sub-match', as well as
-EXTRA-REPLS if provided.
+succeeds, it will convert OUTPUT-REPR to a type, replacing each generic
+with the value determined by `et--sub-match', as well as EXTRA-REPLS if
+provided.
 
 If matching fails, return REASON (see `et--sub-match')."
 
@@ -2446,8 +2567,8 @@ If matching fails, return REASON (see `et--sub-match')."
                for gen-type in gen-results
                collect (cons gen gen-type) into new-repls
                finally return
-               (et-structure-to-type
-                output-struct
+               (et-repr-to-type
+                output-repr
                 (nconc new-repls extra-repls))))))
 
 
@@ -2470,8 +2591,8 @@ is either STACK, or nil (see `et--sub-match')."
            (pcase val
              ((cl-struct et-datatype (name 'Function) (args `(,param-type ,return-type)))
               (and (et-subtype? arglist-type param-type) return-type))
-             ((cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,output-struct)))
-              (et--infer matcher arglist-type output-struct))
+             ((cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,output-repr)))
+              (et--infer matcher arglist-type output-repr))
              (_ nil))
            unless (et-type-p result) return result
            collect result into results
@@ -2533,7 +2654,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
                     (alias-type (cdar et--rec-transform-stack)))
                (when alias-type
                  (let* ((alias (et-type-case-value (car (et-type-cases alias-type)))))
-                   (et--define-alias (et-alias-name alias) [] no-binds :restrict 'TYPE)))
+                   (et--define-alias (et-alias-name alias) [] no-binds :target 'TYPE)))
                type))))
 
 
@@ -2591,8 +2712,8 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
 ;;; Define common aliases
 
 (et-define-custom-alias Cons (&optional a b)
-  (if a (et-q (((S:DT ConsFull ,a ,a ,(or b a) ,(or b a)))))
-    (et-q (((S:DT ConsFull (((S:DT Any))) nil (((S:DT Any))) nil))))))
+  (if a (et-ql ConsFull ,a ,a ,(or b a) ,(or b a))
+    (et-ql ConsFull Any Never Any Never)))
 
 (et-defalias ConsR [L R] (ConsFull L Never R Never))
 (et-defalias ConsW [L R] (ConsFull Any L Any R))
@@ -2600,8 +2721,8 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
 (et-defalias ConsWR [L R] (ConsFull Any L R Never))
 
 (et-define-custom-alias Vector (&optional a)
-  (if a (et-q (((S:DT VectorFull ,a ,a))))
-    (et-q (((S:DT VectorFull (((S:DT Any))) nil))))))
+  (if a (et-ql VectorFull ,a ,a)
+    (et-ql VecotrFull Any Never)))
 
 (et-defalias VectorR [E] VectorFull<E~Never>)
 (et-defalias VectorW [E] VectorFull<Any~E>)
@@ -2627,23 +2748,23 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
 
 (et-defalias KVPList [K V] (or Nil (Cons K (Cons V (KVPList K V)))))
 
-(defun et--expand-tuple-struct (cons args)
-  (if (null args) (et-q (((S:DT Literal nil))))
-    (et-q (((S:ALIAS ,cons ,(car args) ,(et--expand-tuple-struct cons (cdr args))))))))
+(defun et--expand-tuple-spec (cons args)
+  (if (null args) (et-ql Nil)
+    (et-ql ,cons ,(car args) ,(et--expand-tuple-spec cons (cdr args)))))
 
-(defun et--expand-tailed-tuple-struct (cons types)
+(defun et--expand-tailed-tuple-spec (cons types)
   (pcase types
     (`(,last) last)
     (`(,next . ,rest)
-     (et-q (((S:ALIAS ,cons ,next ,(et--expand-tailed-tuple-struct cons rest))))))
+     (et-ql ,cons ,next ,(et--expand-tailed-tuple-spec cons rest)))
     (_ (error "No tail provided"))))
 
-(et-define-custom-alias TupleR (&rest args) (et--expand-tuple-struct 'ConsR args))
-(et-define-custom-alias Tuple (&rest args) (et--expand-tuple-struct 'Cons args))
-(et-define-custom-alias TupleStar (&rest args) (et--expand-tuple-struct 'Cons args))
-(et-define-custom-alias Args (&rest args) (et--expand-tuple-struct 'ConsR args))
-(et-define-custom-alias ArgsWithTail (&rest args) (et--expand-tailed-tuple-struct 'ConsR args))
-(et-define-custom-alias TupleWithTail (&rest args) (et--expand-tailed-tuple-struct 'Cons args))
+(et-define-custom-alias TupleR (&rest args) (et--expand-tuple-spec 'ConsR args))
+(et-define-custom-alias Tuple (&rest args) (et--expand-tuple-spec 'Cons args))
+(et-define-custom-alias TupleStar (&rest args) (et--expand-tuple-spec 'Cons args))
+(et-define-custom-alias Args (&rest args) (et--expand-tuple-spec 'ConsR args))
+(et-define-custom-alias ArgsWithTail (&rest args) (et--expand-tailed-tuple-spec 'ConsR args))
+(et-define-custom-alias TupleWithTail (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
 
 
 ;;; ============================================================
