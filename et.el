@@ -230,6 +230,18 @@ be non-nil."
 
 ;;; ============================================================
 ;;; Utils
+;;;; Modify struct
+
+(defun et-copy-with (struct &rest changes)
+  "Return a copy of STRUCT with properties CHANGES."
+  (cl-loop with type = (type-of struct)
+           with copy = (funcall (intern (format "copy-%s" type)) struct)
+           for (key val) on changes by #'cddr
+           for slot = (intern (substring (symbol-name key) 1))
+           do (setf (cl-struct-slot-value type slot copy) val)
+           finally return copy))
+
+
 ;;;; Repeat
 
 (defmacro et-repeat (var repls &rest body)
@@ -1330,15 +1342,9 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (defun et-make-mr (dnf &optional label)
   (make-et-repr :target 'MATCHER :dnf dnf :label label))
 
-(defun et-modified-repr (repr dnf)
-  "Create a copy of REPR with the dnf DNF."
-  (make-et-repr :target (et-repr-target repr)
-                :dnf dnf
-                :label (et-repr-label repr)))
-
 (et-declare
  (@alias EtTarget (or @TYPE @MATCHER @BOTH))
- (@alias EtLabel (PList :field Symbol))
+ (@alias EtLabel (PList :field Symbol :position Number))
 
  (@alias EtConstraintStack (List (Tuple @SUB|@SUPER EtMR *et-type)))
  (@alias EtConstraint
@@ -1675,7 +1681,7 @@ which are invalid for types."
                     into and-structs
                     finally return (apply #'et--dnf-and and-structs))
            into new-dnf
-           finally return (et-modified-repr repr new-dnf)))
+           finally return (et-copy-with repr :dnf new-dnf)))
 
 
 ;;;; Printing
@@ -1688,10 +1694,10 @@ which are invalid for types."
              ('TYPE "T")
              ('MATCHER "M")
              (_ "?"))
-           (et--print-sub repr))
+           (et-repr-to-string repr))
    stream))
 
-(defun et--print-sub (repr)
+(defun et-repr-to-string (repr)
   (cl-loop for factors in (et-repr-dnf repr)
            collect
            (cl-loop for (name . args) in factors
@@ -1703,25 +1709,25 @@ which are invalid for types."
            into or-strings
            finally return (if or-strings (string-join or-strings " | ") "Never")))
 
-(defun et--print-sub-named (name args)
+(defun et--repr-named-to-string (name args)
   (pcase (cons name args)
     (`(Literal ,val)
      (format "`%s'" (prin1-to-string val)))
 
     (`(Struct ,name . ,args)
      (if (null args) (format "*%s" name)
-       (format "*%s<%s>" name (string-join (mapcar #'et--print-sub args) " "))))
+       (format "*%s<%s>" name (string-join (mapcar #'et-repr-to-string args) " "))))
 
     ((or `(ConsFull ,left-sub ,_1 ,right-sub ,_2)
          `(,(or 'ConsR 'ConsW 'ConsRW 'ConsWR) ,left-sub ,right-sub))
-     (let ((elems (list (et--print-sub left-sub))))
+     (let ((elems (list (et-repr-to-string left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
                  (when (and (= (length d) 1) (= (length (car d)) 1))
                    (pcase (car (car d))
                      ((or `(S:DT ConsFull ,car-sub ,_1 ,cdr-sub ,_2)
                           `(S:ALIAS ,(or 'ConsR 'ConsW 'ConsRW 'ConsWR) ,car-sub ,cdr-sub))
-                      (nconc elems (list (et--print-sub car-sub)))
+                      (nconc elems (list (et-repr-to-string car-sub)))
                       (setq right-sub cdr-sub)
                       t))))))
        (let ((tail-nil-p
@@ -1732,20 +1738,20 @@ which are invalid for types."
              (format "(%s)" (mapconcat #'identity elems " "))
            (format "(%s . %s)"
                    (mapconcat #'identity elems " ")
-                   (et--print-sub right-sub))))))
+                   (et-repr-to-string right-sub))))))
 
     (`(DynFunction ,matcher ,output-type)
-     (format "(%s) -> %s" (et-pp-matcher matcher) (et--print-sub output-type)))
+     (format "(%s) -> %s" (et-pp-matcher matcher) (et-repr-to-string output-type)))
 
     (_
      (let* ((name-str (symbol-name name))
             (strs (if (not (et--datatype-name? name))
-                      (mapcar #'et--print-sub args)
+                      (mapcar #'et-repr-to-string args)
                     (et--datatype-map-args
                      name args
                      (lambda (arg role)
                        (if (eq role 'CONST) (format "%s" arg)
-                         (et--print-sub arg)))))))
+                         (et-repr-to-string arg)))))))
        (if (null args) name-str
          (format "%s<%s>" name-str (string-join strs ", ")))))))
 
@@ -1796,7 +1802,7 @@ which are invalid for types."
   :to-type (list (make-et-type-case
                   :value (make-et-datatype :name 'Any)
                   :binds (list (cons var (et--totype-sub type)))))
-  :print (format "{%s : %s}" (et-var-name var) (et--print-sub type)))
+  :print (format "{%s : %s}" (et-var-name var) (et-repr-to-string type)))
 
 (et--define-repr-segment S:TYPEOF typeof (var)
   :parse (list var)
@@ -1810,12 +1816,12 @@ which are invalid for types."
                (list (make-et-type-case
                       :value (make-et-datatype :name 'Any)
                       :binds (et--type-binds type)))))
-  :print (format "{bindsof %s}" (et--print-sub type)))
+  :print (format "{bindsof %s}" (et-repr-to-string type)))
 
 (et--define-repr-segment S:SUBTRACT subtract (a b)
   :parse (list (et--parse-sub a) (et--parse-sub b))
   :to-type (et-type-cases (et--subtract (et--totype-sub a) (et--totype-sub b)))
-  :print (format "{%s - %s}" (et--print-sub a) (et--print-sub b)))
+  :print (format "{%s - %s}" (et-repr-to-string a) (et-repr-to-string b)))
 
 (et--define-repr-segment S:INFER infer (type gen-vec matcher yes no)
   :parse
@@ -1834,8 +1840,8 @@ which are invalid for types."
     (if (et-type-p out) out (et--totype-sub no)))
   :print
   (format "{if %s matches %s then %s else %s}"
-          (et--print-sub type) (et-pp-matcher matcher)
-          (et--print-sub yes) (et--print-sub no)))
+          (et-repr-to-string type) (et-pp-matcher matcher)
+          (et-repr-to-string yes) (et-repr-to-string no)))
 
 (et--define-repr-segment S:EXTENDS extends? (sub super yes no)
   :parse (list (et--parse-sub sub) (et--parse-sub super) (et--parse-sub yes) (et--parse-sub no))
@@ -1843,13 +1849,13 @@ which are invalid for types."
             (if (et-subtype? (et--totype-sub sub) (et--totype-sub super))
                 (et--totype-sub yes) (et--totype-sub no)))
   :print (format "{if %s extends %s then %s else %s}"
-                 (et--print-sub sub) (et--print-sub super)
-                 (et--print-sub yes) (et--print-sub no)))
+                 (et-repr-to-string sub) (et-repr-to-string super)
+                 (et-repr-to-string yes) (et-repr-to-string no)))
 
 (et--define-repr-segment S:EVAL eval (func &rest args)
   :parse (cons func (mapcar #'et--parse-sub args))
   :to-type (et-type-cases (apply func (mapcar #'et--totype-sub args)))
-  :print (format "{eval %s on %s}" func (mapconcat #'et--print-sub args " ")))
+  :print (format "{eval %s on %s}" func (mapconcat #'et-repr-to-string args " ")))
 
 (et--define-repr-segment S:GENERIC generic (var)
   :parse (if (memq var et--parsing-generics) (list var) (error "Generic %s not defined" var))
@@ -1858,14 +1864,14 @@ which are invalid for types."
 
 (et--define-repr-segment S:SET set (dnf type)
   :parse (list (et--parse-sub dnf) (et-parse-type type))
-  :print (format "{match %s to %s}" (et--print-sub dnf) (et--print-sub type)))
+  :print (format "{match %s to %s}" (et-repr-to-string dnf) (et-repr-to-string type)))
 
 (et--define-repr-segment S:DT dt (name &rest args)
   :parse (cons name (et--datatype-map-type-args name args #'et--parse-sub))
   :to-type
   (let* ((new-args (et--datatype-map-type-args name args #'et--totype-sub)))
     (list (make-et-type-case :value (make-et-datatype :name name :args new-args))))
-  :print (et--print-sub-named name args))
+  :print (et--repr-named-to-string name args))
 
 (et--define-repr-segment S:ALIAS alias (name &rest args)
   :parse
@@ -1879,7 +1885,7 @@ which are invalid for types."
   :to-type
   (let* ((new-args (mapcar #'et--totype-sub args)))
     (list (make-et-type-case :value (make-et-alias :name name :args new-args))))
-  :print (et--print-sub-named name args))
+  :print (et--repr-named-to-string name args))
 
 
 ;;;; Type to struct
@@ -1928,7 +1934,7 @@ which are invalid for types."
   `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
 
 (defun et-pp-type (type)
-  (or (ignore-errors (et--print-sub (et-type-to-repr type)))
+  (or (ignore-errors (et-repr-to-string (et-type-to-repr type)))
       (format "%s" type)))
 
 (cl-defmethod cl-print-object ((type et-type) stream)
@@ -2031,7 +2037,7 @@ same as [T (<= T Number)]."
 (defun et-pp-matcher (matcher)
   "Format an `et-matcher' into a human-readable string."
   (let* ((generics (et-matcher-generics matcher))
-         (body (et--print-sub (et-matcher-repr matcher))))
+         (body (et-repr-to-string (et-matcher-repr matcher))))
     (format "[%s] %s" (mapconcat #'symbol-name generics " ") body)))
 
 (cl-defmethod cl-print-object ((matcher et-matcher) stream)
