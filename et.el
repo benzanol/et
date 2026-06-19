@@ -541,7 +541,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                 :overlap True|List<Symbol>
                 :predicate (Function Any True|List<Any>)))
  (@alias EtDatatypeName (or @Any @Literal @NonNil
-                            @Symbol @NonNilSymbol @Number @Integer @Positive @Negative @String
+                            @Symbol @NonNilSymbol @Var @Number @Integer @Positive @Negative @String
                             @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
                             @Function @DynFunction
                             @Struct @Scoped))
@@ -554,8 +554,8 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
     (Literal :args (CONST) :overlap nil :predicate (lambda (v me) (equal v me)))
     (NonNil :args nil :overlap t :predicate (lambda (v) v))
     (Symbol :args nil :overlap (Function DynFunction) :predicate symbolp)
-    (NonNilSymbol :args nil :overlap (Function DynFunction)
-                  :predicate (lambda (v) (and v (symbolp v))))
+    (NonNilSymbol :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v))))
+    (Var :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v) (not (eq v t)))))
     (Number :args nil :overlap nil :predicate numberp)
     (Integer :args nil :overlap (Positive Negative) :predicate integerp)
     (Positive :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (> v 0))))
@@ -633,7 +633,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 (defun et--make-scoped-datatypes (matcher)
   (declare (et (matcher Nil|*et-matcher)
-               (@return (List (Tuple NonNilSymbol NonNilSymbol List<EtConstraint>)))))
+               (@return (List (Tuple Var Var List<EtConstraint>)))))
 
   (cl-loop for name in (when matcher (et-matcher-generics matcher))
            for qs = (cl-loop for q in (when matcher (et-matcher-constraints matcher))
@@ -748,14 +748,20 @@ subtype of super-arg."
 
     (pcase (list sub-name super-name)
       (`(,_ Any) nil)
+      (`(Literal ,_)
+       (let* ((pred (plist-get (alist-get super-name et--datatypes) :predicate)))
+         (pcase (apply (or pred #'ignore) (car sub-args) super-args)
+           ('nil (valid-if nil))
+           ('t (valid-if t))
+           (sub (cl-loop for (sub-val . arg) in sub nconc (funcall co-literal sub-val arg))))))
 
-      ('(Integer Number) nil)
-      ('(Positive Number) nil)
-      ('(Negative Number) nil)
+      (`(Integer Number) nil)
+      (`(Positive Number) nil)
+      (`(Negative Number) nil)
 
-      ('(ConsFresh ConsFull) (append (funcall co (car sub-args) (car super-args))
+      (`(ConsFresh ConsFull) (append (funcall co (car sub-args) (car super-args))
                                      (funcall co (cadr sub-args) (caddr super-args))))
-      ('(VectorFresh VectorFull) (funcall co (car sub-args) (car super-args)))
+      (`(VectorFresh VectorFull) (funcall co (car sub-args) (car super-args)))
 
       (`(DynFunction Function)
        (if-let* ((func-input (car super-args))
@@ -768,20 +774,14 @@ subtype of super-arg."
            (valid-if t)
          (valid-if nil)))
 
-      ('(,_ NonNil)
-       (pcase super-name
-         ('Literal (valid-if (cadr super-args)))
-         ('Symbol (valid-if nil))
-         (_ (valid-if t))))
-      ('(,_ NonNilSymbol)
-       (pcase super-name
-         ('Literal (valid-if (cadr super-args)))
-         (_ (valid-if nil))))
+      (`(,_ NonNil) (valid-if (not (eq sub-name 'Symbol))))
+      (`(,_ Symbol) (valid-if (memq sub-name '(NonNilSymbol Var))))
+      (`(,_ NonNilSymbol) (valid-if (eq sub-name 'Var)))
 
-      ('(ConsFull PList)
+      (`(ConsFull PList)
        (et--cons-is-plist sub-args super-args co))
 
-      ('(Plist Plist)
+      (`(Plist Plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
                 for sub-val = (plist-get sub-args prop)
                 unless sub-val return (list (et--never-constraint))
@@ -800,13 +800,6 @@ subtype of super-arg."
                         ('CONTRA (funcall contra sub-arg super-arg))
                         ('ISO (funcall iso sub-arg super-arg))
                         (_ (error "Unknown argument role: %s" role)))))
-
-      (`(Literal ,_)
-       (let* ((pred (plist-get (alist-get super-name et--datatypes) :predicate)))
-         (pcase (apply (or pred #'ignore) (car sub-args) super-args)
-           ('nil (valid-if nil))
-           ('t (valid-if t))
-           (sub (cl-loop for (sub-val . arg) in sub nconc (funcall co-literal sub-val arg))))))
 
       (_ (valid-if nil)))))
 
@@ -860,13 +853,13 @@ FUNC is called with one argument, the current argument"
 ;;;; Defining aliases
 
 (et-declare (@alias EtTypeSpec Any)
-            (@alias EtGeneric NonNilSymbol)
+            (@alias EtGeneric Var)
             (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
-            (@alias EtAliasName NonNilSymbol)
+            (@alias EtAliasName Var)
             (@alias EtAliasDefinitionPlist [(<= T (or @TYPE @MATCHER @BOTH))]
                     (PList :target T
                            :custom (or Nil (Function Args<List<Any>> *et-repr<T>))
-                           :generics List<NonNilSymbol>
+                           :generics List<EtGeneric>
                            :constraints List<EtConstraint>
                            :repr (or Nil EtRepr<T>)
                            :type (or Nil *et-type))))
@@ -923,7 +916,7 @@ FUNC is called with one argument, the current argument"
   (if-let* ((props (get name 'et-alias))
             (spec (plist-get props :spec))
             (target (plist-get props :target)))
-      (progn (plist-put props :repr (et--parse-repr spec (plist-get props :generics) target))
+      (progn (plist-put props :repr (et-parse-repr spec (plist-get props :generics) target))
              (plist-put props :constraints (et--gen-vec-constraints (plist-get props :gen-vec))))
     (error "Alias `%s' not declared" name)))
 
@@ -1024,7 +1017,7 @@ FUNC is called with one argument, the current argument"
      (custom
       ;; ARGS are reprs or types, both of which are valid specs
       (let* ((spec (apply custom args))
-             (repr (et--parse-repr spec nil target)))
+             (repr (et-parse-repr spec nil target)))
         (if (eq target 'MATCHER) repr
           (et-repr-to-type repr nil))))
 
@@ -1260,8 +1253,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
     (_ (error "Invalid match factor"))))
 
 (defun et--sub-or-super-constraints-4 (m-name m-args t-name t-args generics &optional is-super)
-  (declare (et (m-name NonNilSymbol) (m-args List<Any>)
-               (t-name NonNilSymbol) (t-args List<Any>)
+  (declare (et (m-name Var) (m-args List<Any>)
+               (t-name Var) (t-args List<Any>)
                (generics List<EtGeneric>)
                (@return List<EtConstraint>)))
 
@@ -1359,7 +1352,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
              (Tuple @S:GENERIC EtGeneric)))
  (@alias EtTypeOnlyFactor
          (or (Tuple @S:TYPE *et-type) ; Used for expanding type aliases
-             (Tuple @S:BIND NonNilSymbol EtTR)
+             (Tuple @S:BIND Var EtTR)
              (Tuple @S:TYPEOF EtTR)
              (Tuple @S:BINDS-OF EtTR)
              (Tuple @S:SUBTRACT EtTR EtTR)
@@ -1418,12 +1411,12 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (declare (et (args List<EtSpec>)
                (@return EtMR|EtTR)))
 
-  `(et--parse-repr (et-q ,(if (eq (length args) 1) (car args) args)) nil 'BOTH))
+  `(et-parse-repr (et-q ,(if (eq (length args) 1) (car args) args)) nil 'BOTH))
 
 (defvar et--parsing-generics nil)
 (defvar et--parsing-target nil)
 
-(defun et--parse-repr (spec generics target &optional label)
+(defun et-parse-repr (spec generics target &optional label)
   (declare (et (@generics (<= T EtTarget))
                (spec EtSpec)
                (generics List<EtGeneric>)
@@ -1451,6 +1444,11 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
      ((stringp spec) (et--parse-string spec))
      ((numberp spec) (et--parse-sub (list 'literal spec)))
      ((et-type-p spec) (et--parse-sub (list 'type spec)))
+     ((et-repr-p spec)
+      (let* ((t1 et--parsing-target) (t2 (et-repr-target spec)))
+        (when (or (and (eq t1 'TYPE) (not (eq t2 'TYPE))) (and (eq t1 'MATCHER) (not (eq t2 'MATCHER))))
+          (error "Invalid repr type used as spec"))
+        spec))
      (t (error "Invalid spec: %s" spec)))))
 
 (defun et--parse-spec-factor (name args)
@@ -1831,7 +1829,7 @@ which are invalid for types."
           generics
           (make-et-matcher
            :generics generics
-           :repr (et--parse-repr matcher generics 'MATCHER))
+           :repr (et-parse-repr matcher generics 'MATCHER))
           (et--parse-sub yes generics)
           (et--parse-sub no)))
   :to-type
@@ -1928,7 +1926,7 @@ which are invalid for types."
                (@return *et-type)
                (@skip)))
 
-  (et-repr-to-type (et--parse-repr spec nil 'TYPE)))
+  (et-repr-to-type (et-parse-repr spec nil 'TYPE)))
 
 (defmacro et (&rest args)
   `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
@@ -2032,7 +2030,7 @@ same as [T (<= T Number)]."
     (make-et-matcher
      :generics generics
      :constraints (et--gen-vec-constraints gen-vec)
-     :repr (et--parse-repr spec generics 'MATCHER))))
+     :repr (et-parse-repr spec generics 'MATCHER))))
 
 (defun et-pp-matcher (matcher)
   "Format an `et-matcher' into a human-readable string."
@@ -2747,6 +2745,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
 (et-defalias Nil [] (Literal nil))
 (et-defalias True [] (Literal t))
 (et-defalias Boolean [] (or (Literal nil) (Literal t)))
+(et-defalias Var [] (or (Literal nil) (Literal t)))
 
 ;; ConsR/ListR/*R can be thought of as "read only references" to a
 ;; type. It is merely a shortcut for "[(T <= Number)] List<T>" for

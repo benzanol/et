@@ -343,8 +343,8 @@ RETURN is a parsable expression for the return type.
          (func-type
           (if gen-vec
               (let* ((matcher (et-parse-matcher arglist-spec gen-vec))
-                     (output-struct (et--parse-struct return-spec (et-matcher-generics matcher) 'TYPE)))
-                (et-dt 'DynFunction matcher output-struct))
+                     (output-repr (et-parse-repr return-spec (et-matcher-generics matcher) 'TYPE)))
+                (et-dt 'DynFunction matcher output-repr))
             (et-dt 'Function (et-parse-type arglist-spec) (et-parse-type return-spec)))))
     (unless (eq (length arguments) 2)
       (error "Incorrect number of arguments"))
@@ -410,9 +410,9 @@ PATH is the path to the subexpression."
              (et--infer ,(make-et-matcher
                           :generics gens
                           :constraints (et--gen-vec-constraints gen-vec)
-                          :dnf (et--parse-struct matcher-spec gens 'MATCHER))
+                          :repr (et-parse-repr matcher-spec gens 'MATCHER))
                         ,type
-                        (et-q ,(et--parse-struct output-spec gens 'TYPE)))))
+                        (et-q ,(et-parse-repr output-spec gens 'TYPE)))))
        (when (et-type-p infer) infer))))
 
 
@@ -433,7 +433,7 @@ PATH is the path to the subexpression."
   (func-type nil :et *et-type)
   (props nil :et List<Any>)
   ;; Things necessary for typechecking the body
-  (source nil :et List<Any>)
+  (source nil :et List<Any>) ; Some nthcdr of the function body containing the code
   (source-pos nil :et Integer) ; Position of source RELATIVE TO ARGLIST (1 if right after arglist)
   ;; Both vars and expected-return may contain the scoped types
   (scoped nil :et (List (Tuple EtGeneric Symbol List<EtConstraint>)))
@@ -453,11 +453,11 @@ PATH is the path to the subexpression."
               (et-block (nth et-pos declare-block)))
 
     (let* ((arglist (car body))
-           (param-structs ; (name . struct)[]
+           (param-reprs ; (name . repr)[][]
             (et-at 0
               (cl-loop for group in (et--parse-arglist-params arglist)
                        collect (cl-loop for name in group collect (cons name nil)))))
-           any-params return-struct gen-vec generics constraints props)
+           any-params return-repr gen-vec generics constraints props)
 
       ;; Parse the fields of the declare block
       (dotimes (form-idx (length et-block))
@@ -466,14 +466,14 @@ PATH is the path to the subexpression."
             ((guard (eq 0 form-idx))) ; Skip the `et' symbol
 
             (`(@return ,spec)
-             (when return-struct (et-fatal 0 "Multiple @return clauses"))
+             (when return-repr (et-fatal 0 "Multiple @return clauses"))
              (et-at 1
-               (setq return-struct (et--parse-struct spec generics 'TYPE))))
+               (setq return-repr (et-parse-repr spec generics 'TYPE))))
             (`(@return . ,_) (et-fatal 0 "Expected (@return TYPE)"))
 
             (`(@generics ,(and gv (pred vectorp)))
              (when gen-vec (et-fatal 0 "Multiple @generic clauses"))
-             (when return-struct (et-fatal 0 "@generic must come before @return"))
+             (when return-repr (et-fatal 0 "@generic must come before @return"))
              (when any-params (et-fatal 0 "@generic must come before parameter declarations"))
              (et-at 1
                (setq gen-vec gv
@@ -491,23 +491,23 @@ PATH is the path to the subexpression."
              (setq props (cl-list* :skip show props)))
 
             (`(,(and name (pred symbolp)) ,spec)
-             (let* ((entry (cl-loop for group in param-structs
+             (let* ((entry (cl-loop for group in param-reprs
                                     for entry = (assq name group)
                                     when entry return entry
                                     finally do (et-fatal 0 "Not a parameter: %s" name))))
                (et-at 1
                  (setq any-params t)
-                 (setcdr entry (et--parse-struct spec generics 'BOTH)))))
+                 (setcdr entry (et-parse-repr spec generics 'BOTH)))))
 
             (_ (error "Invalid format")))))
 
       ;; Construct the function signature
-      (when return-struct
-        (let* ((input (apply #'et--generate-func-input t generics constraints param-structs))
+      (when return-repr
+        (let* ((input (apply #'et--generate-func-input t generics constraints param-reprs))
                (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
           (et--with-scoped-datatypes scoped
             (make-et-func-sig
-             :func-type (et-dt 'DynFunction input return-struct)
+             :func-type (et-dt 'DynFunction input return-repr)
              :props props
              ;; Things necessary for typechecking the body
              :source (nthcdr declare-pos body)
@@ -515,19 +515,19 @@ PATH is the path to the subexpression."
              ;; Both vars and expected-return may contain the scoped types
              :scoped scoped
              :vars
-             (cl-loop for param-group in param-structs nconc
-                      (cl-loop for (name . struct) in param-group
-                               ;; Replace each generic in the parameter structs with the corresponding scoped datatype
+             (cl-loop for param-group in param-reprs nconc
+                      (cl-loop for (name . repr) in param-group
+                               ;; Replace each generic in the parameter reprs with the corresponding scoped datatype
                                for type = (cl-loop for gen in generics
                                                    for scoped-args in scoped
                                                    collect (cons gen (apply #'et-dt 'Scoped scoped-args)) into gen-repls
-                                                   finally return (et-repr-to-type struct gen-repls))
+                                                   finally return (et-repr-to-type repr gen-repls))
                                collect (make-et-var :name name :type type)))
              :expected-return
              (cl-loop for (name unique constraints) in scoped
                       collect (cons name (et-dt 'Scoped name unique constraints))
                       into gen-repls
-                      finally return (et-repr-to-type return-struct gen-repls)))))))))
+                      finally return (et-repr-to-type return-repr gen-repls)))))))))
 
 
 ;;;;; Parse arglist params
@@ -539,6 +539,9 @@ ARGLIST is a plain parameter list with no type annotations — just
 symbols and default-value forms. REQUIRED, OPTIONAL, KEY, and REST are
 each lists of parameter name symbols. The list REST has at most 1
 element."
+  (declare (et (arglist List<Var>)
+               (@return (Tuple List<Var> List<Var> List<Var> List<Var>))))
+
   (let ((required nil)
         (optional nil)
         (key-params nil)
@@ -568,72 +571,50 @@ element."
 
 GENERICS is a list of generic symbols, or nil.
 
-REQUIRED, OPTIONAL, KEY/REST-PARAMS are alists of (SYMBOL . TYPE-STRUCT).
+REQUIRED, OPTIONAL, KEY/REST-PARAMS are alists of (SYMBOL . REPR).
 
 REST-PARAMS will have at most 1 entry.
 
 Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
+  (declare (et (always-matcher Boolean)
+               (generics ListR<EtGeneric>)
+               (constraints ListR<EtConstraint>)
+               (required AList<Symbol~EtBR>)
+               (optional AList<Symbol~EtBR>)
+               (key-params AList<Symbol~EtBR>)
+               (rest-params AList<Symbol~EtBR>)))
 
-  (let* ((fn (lambda (entry) (cons (cdr entry) (list :param (car entry)))))
-         (required-alist (mapcar fn required))
-         (optional-alist (mapcar fn optional))
-         (labels-tail
+  ;; Convert an entry (VAR . REPR) to a labeled repr
+  (let* ((fn (lambda (var repr) (et-copy-with repr :label (list :field var))))
+         (rest-repr
           (pcase (car rest-params)
-            ((and entry `(,_var . ,_struct)) (list (funcall fn entry)))
+            (`(,var . ,repr) (funcall fn var repr))
             ((guard key-params)
-             (cl-loop for entry in key-params
-                      collect (funcall fn entry) into labels-alist
-                      for (name . struct) = entry
-                      nconc (list (intern (format ":%s" name)) struct) into plist-args
-                      finally return
-                      (cons (cons (et-q (((S:DT PList ,@plist-args)))) nil)
-                            labels-alist)))
+             (cl-loop for (var . repr) in key-params
+                      nconc (list (intern (format ":%s" var)) (funcall fn var repr)) into plist-args
+                      finally return (et-repr PList ,@plist-args)))
 
-            ('nil (list (cons (et-q (((S:DT Literal nil)))) nil)))
+            ('nil (et-repr Nil))
             (x (error "Invalid rest param: %s" x))))
 
-         (opt-tail (et--func-sig-optional-tail optional-alist labels-tail))
-         (struct-alist (et--func-sig-required-chain required-alist opt-tail)))
+         (req-reprs (mapcar fn required))
+         (opt-reprs (mapcar fn optional))
+         (input-repr (et--params-to-input-repr req-reprs opt-reprs rest-repr)))
 
     (if (or always-matcher generics)
         (make-et-matcher
          :generics generics
          :constraints constraints
-         :dnf (caar struct-alist)
-         :labels (cl-loop for entry in struct-alist
-                          when (cdr entry) collect entry))
-      (et-repr-to-type (caar struct-alist) nil struct-alist))))
+         :repr input-repr)
+      (et-repr-to-type input-repr nil))))
 
-(defun et--func-sig-required-chain (labeled-structs labels-tail)
-  (declare (et (labeled-structs AList<EtBothStructure~EtLabel>)
-               (labels-tail AList<EtBothStructure~EtLabel>)
-               (@return AList<EtBothStructure~EtLabel>)
-               (@skip)))
-
-  (if (null labeled-structs) labels-tail
-    (let* ((rest-alist (et--func-sig-required-chain (cdr labeled-structs) labels-tail))
-           (rest-struct (caar rest-alist))
-           (cur-struct (caar labeled-structs))
-           (cur-label (cdar labeled-structs)))
-      (cl-list* (cons (et-q (((S:ALIAS ConsR ,cur-struct ,rest-struct)))) nil)
-                (cons cur-struct cur-label)
-                rest-alist))))
-
-(defun et--func-sig-optional-tail (opt-labeled-structs labels-tail)
-  (declare (et (opt-labeled-structs AList<EtBothStructure~EtLabel>)
-               (labels-tail AList<EtBothStructure~EtLabel>)
-               (@return AList<EtBothStructure~EtLabel>)
-               (@skip)))
-
-  (if (null opt-labeled-structs) labels-tail
-    (let* ((rest-alist (et--func-sig-optional-tail (cdr opt-labeled-structs) labels-tail))
-           (rest-struct (caar rest-alist))
-           (cur-struct (caar opt-labeled-structs))
-           (cur-label (cdar opt-labeled-structs)))
-      (cl-list* (cons (et-q (((S:DT Literal Nil)) ((S:ALIAS ConsR ,cur-struct ,rest-struct)))) nil)
-                (cons cur-struct cur-label)
-                rest-alist))))
-
+(defun et--params-to-input-repr (req opt rest)
+  (declare (et (req ListR<EtBR>) (opt ListR<EtBR>) (rest EtBR)
+               (@return EtBR)))
+  (cond
+   (req (et-repr ConsR ,(car req) ,(et--params-to-input-repr (cdr req) opt rest)))
+   (opt (et-repr or Nil (ConsR ,(car opt) ,(et--params-to-input-repr nil (cdr opt) rest))))
+   (t rest)))
 
 (et-test
  (equal (et--generate-func-input nil nil nil '((x . (((S:DT Integer)))) (y . (((S:DT Any))))) nil nil nil)
@@ -655,24 +636,28 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
 
 ;;;;; Make function type
 
-(defun et--make-function-type (generics constraints input-struct output-struct)
-  "Build a Function or DynFunction type from structures.
+(defun et--make-function-type (generics constraints input-repr output-repr)
+  "Build a Function or DynFunction type from reprs.
 
 If GENERICS is non-nil, returns a DynFunction with a matcher built from
-GENERICS, CONSTRAINTS, and INPUT-STRUCT, and OUTPUT-STRUCT as the output
-structure.
+GENERICS, CONSTRAINTS, and INPUT-REPR, and OUTPUT-REPR as the output.
 
-If GENERICS is nil, returns a Function with INPUT-STRUCT and
-OUTPUT-STRUCT each converted to concrete types."
+If GENERICS is nil, returns a Function with INPUT-REPR and
+OUTPUT-REPR each converted to concrete types."
+  (declare (et (generics ListR<EtGeneric>)
+               (constraints ListR<EtConstraint>)
+               (input-repr EtBR)
+               (output-repr EtTR)))
+
   (if generics
       (et-dt 'DynFunction
              (make-et-matcher :generics generics
                               :constraints constraints
-                              :dnf input-struct)
-             output-struct)
+                              :repr input-repr)
+             output-repr)
     (et-dt 'Function
-           (et-repr-to-type input-struct nil)
-           (et-repr-to-type output-struct nil))))
+           (et-repr-to-type input-repr nil)
+           (et-repr-to-type output-repr nil))))
 
 
 ;;;;; Identification
@@ -759,21 +744,25 @@ OUTPUT-STRUCT each converted to concrete types."
        (let* ((plist (or (get name 'et-struct)
                          (et-fatal 0 "Struct `%s' not defined" name)))
               (constraints (plist-get plist :constraints))
-              ;; Generic repr helpers used across all generated functions
-              (gen-structs (mapcar (lambda (g) (list (list (list 'S:GENERIC g)))) generics))
-              (struct-struct (et-q (((S:DT Struct ,name ,@gen-structs)))))
-              (consR-struct-nil (et-q (((S:ALIAS ConsR ,struct-struct (((S:DT Literal nil)))))))))
+              ;; The target for input reprs: a matcher when generic, else a plain type
+              (input-target (if generics 'BOTH 'TYPE))
+              ;; Repr helpers shared across all generated functions
+              ;; STRUCT-REPR is the struct's own type, e.g. *Name<T1 T2>
+              (struct-repr (et-parse-repr (et-q (Struct ,name ,@generics)) generics 'BOTH))
+              ;; ARGLIST-REPR is the single-argument arglist (STRUCT), used by
+              ;; accessors and the copier
+              (arglist-repr (et-parse-repr (et-q (ConsR ,struct-repr Nil)) generics 'BOTH)))
 
          ;; --- Predicate ---
          (when predicate
            (let* ((never-args (make-list (length generics) 'Never))
-                  (output-struct
-                   (et--parse-struct
-                    `(or (and True (bindsof (and T (Struct ,name ,@never-args))))
-                         (and Nil (bindsof (subtract T (Struct ,name ,@never-args)))))
+                  (output-repr
+                   (et-parse-repr
+                    (et-q (or (and True (bindsof (and T (Struct ,name ,@never-args))))
+                              (and Nil (bindsof (subtract T (Struct ,name ,@never-args))))))
                     '(T) 'TYPE)))
              (put predicate 'et-function-type
-                  (et-dt 'DynFunction (et-parse-matcher 'Any [T]) output-struct))))
+                  (et-dt 'DynFunction (et-parse-matcher 'Any [T]) output-repr))))
 
          ;; --- Accessors ---
          (dolist (slot slots)
@@ -781,38 +770,34 @@ OUTPUT-STRUCT each converted to concrete types."
                         (accessor (if conc-name (intern (format "%s%s" conc-name slot-name))
                                     slot-name)))
              (et-error-boundary rel
-               (let* ((slot-struct (if type-info
-                                       (et-at (car type-info)
-                                         (et--parse-struct (cdr type-info) generics
-                                                           (if generics 'TYPE 'TYPE)))
-                                     (et-q (((S:DT Any)))))))
+               (let* ((slot-repr (if type-info
+                                     (et-at (car type-info)
+                                       (et-parse-repr (cdr type-info) generics 'TYPE))
+                                   (et-repr Any))))
                  (put accessor 'et-function-type
                       (et--make-function-type generics constraints
-                                              consR-struct-nil slot-struct))))))
+                                              arglist-repr slot-repr))))))
 
          ;; --- Constructor ---
          (when constructor
-           (let* ((input-struct
+           (let* ((input-repr
                    (cl-loop for (rel slot-name _default type-info) in slots
-                            nconc (list (intern (format ":%s" slot-name))
-                                        (if type-info
-                                            (et-error-boundary rel
-                                              (et-at (car type-info)
-                                                (et--parse-struct (cdr type-info) generics
-                                                                  (if generics 'BOTH 'TYPE))))
-                                          (et-q (((S:DT Any))))))
-                            into args
-                            finally return (if args (et-q (((S:DT PList ,@args))))
-                                             (et-q (((S:DT Literal nil))))))))
+                            for slot-repr = (if type-info
+                                                (et-error-boundary rel
+                                                  (et-at (car type-info)
+                                                    (et-parse-repr (cdr type-info) generics input-target)))
+                                              (et-repr Any))
+                            nconc (list (intern (format ":%s" slot-name)) slot-repr) into args
+                            finally return (if args (et-repr PList ,@args) (et-repr Nil)))))
              (put constructor 'et-function-type
                   (et--make-function-type generics constraints
-                                          input-struct struct-struct))))
+                                          input-repr struct-repr))))
 
          ;; --- Copier ---
          (when copier
            (put copier 'et-function-type
                 (et--make-function-type generics constraints
-                                        consR-struct-nil struct-struct))))))))
+                                        arglist-repr struct-repr))))))))
 
 
 ;;;; Identify alias
@@ -857,8 +842,8 @@ Returns a plist with :constrain and :populate functions."
                   (spec (plist-get props :spec))
                   (generics (plist-get props :generics))
                   (restrict (plist-get props :restrict)))
-             (plist-put props :structure
-                        (et--parse-struct spec generics restrict)))))))))
+             (plist-put props :repr
+                        (et-parse-repr spec generics restrict)))))))))
 
 
 ;;;; Identify variable def
