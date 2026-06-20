@@ -1422,6 +1422,9 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                (label EtLabel)
                (@return EtRepr<T>)))
 
+  (unless (memq target '(TYPE MATCHER BOTH))
+    (error "Invalid parsing target: %s" target))
+
   (let* ((et--parsing-generics generics)
          (et--parsing-target target)
          (repr (et--parse-sub spec)))
@@ -1433,6 +1436,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                (extra-generics List<EtGeneric>)
                (@return *et-repr)))
 
+  (unless (memq et--parsing-target '(TYPE MATCHER BOTH))
+    (error "Invalid parsing target: %s" (mapcar #'cadr (backtrace-frames))))
   (cl-assert (memq et--parsing-target '(TYPE MATCHER BOTH)))
   (let* ((et--parsing-generics (append extra-generics et--parsing-generics)))
     (cond
@@ -1444,7 +1449,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
      ((et-type-p spec) (et--parse-sub (list 'type spec)))
      ((et-repr-p spec)
       (let* ((t1 et--parsing-target) (t2 (et-repr-target spec)))
-        (when (or (and (eq t1 'TYPE) (not (eq t2 'TYPE))) (and (eq t1 'MATCHER) (not (eq t2 'MATCHER))))
+        (when (or (and (eq t2 'TYPE) (not (eq t1 'TYPE)))
+                  (and (eq t2 'MATCHER) (not (eq t1 'MATCHER))))
           (error "Invalid repr type used as spec"))
         spec))
      (t (error "Invalid spec: %s" spec)))))
@@ -1623,9 +1629,9 @@ Depth tracks < > and { } nesting."
                     finally return (apply #'et--supersect and-types))
            into or-types
            finally return
-           (let* ((type (apply #'et--or or-types)))
-             (setf (et-type-label type) (et-repr-label repr))
-             type)))
+           (let* ((ored (apply #'et--or or-types)))
+             (if (et-type-label ored) ored
+               (et-copy-with ored :label (et-repr-label repr))))))
 
 (defun et-repr-to-type (repr &optional gen-repls)
   "Convert REPR to an `et-type'.
@@ -1650,36 +1656,49 @@ which are invalid for types."
 
 ;;;; Replacement for matchers
 
+(defun et--repr-factor-substitute-generics (factor gen-repls)
+  (declare (et (factor EtMRFactor)
+               (gen-repls AList<EtGeneric~EtMR>)
+               (@return EtMRDnf)))
+
+  (let* ((sub (lambda (r) (et--repr-substitute-generics r gen-repls))))
+    (pcase factor
+      (`(S:GENERIC ,var)
+       ;; Don't use alist-get, because the value of the replacement can be nil
+       (if-let* ((entry (assq var gen-repls)))
+           (et-repr-dnf (cdr entry))
+         (error "Replacement for %s not provided" var)))
+      (`(S:DT ,name . ,args)
+       (et-q (((S:DT ,name . ,(et--datatype-map-type-args name args sub))))))
+      (`(S:ALIAS ,name . ,args)
+       (et-q (((S:ALIAS ,name . ,(mapcar sub args))))))
+      ;; Maybe at some point this should also be called on type?
+      ;; But that means every type matcher needs a substitution function
+      (`(S:SET ,matcher ,type)
+       (et-q (((S:SET ,(funcall sub matcher) ,type)))))
+      (_ (error "Invalid matcher repr factor: %s" factor)))))
+
 (defun et--repr-substitute-generics (repr gen-repls)
   (declare (et (repr EtMR)
                (gen-repls AList<EtGeneric~EtMR>)
                (@return EtMR)))
 
-  (cl-loop with sub = (lambda (r) (et--repr-substitute-generics r gen-repls))
-           ;; case : *et-repr
-           for case in (et-repr-dnf repr)
-           nconc
-           (cl-loop for factor in case
-                    collect
-                    (pcase factor
-                      (`(S:GENERIC ,var)
-                       ;; Don't use alist-get, because the value of the replacement can be nil
-                       (if-let* ((entry (assq var gen-repls)))
-                           (et-repr-dnf (cdr entry))
-                         (error "Replacement for %s not provided" var)))
-                      (`(S:DT ,name . ,args)
-                       (et-q (((S:DT ,name . ,(et--datatype-map-type-args name args sub))))))
-                      (`(S:ALIAS ,name . ,args)
-                       (et-q (((S:ALIAS ,name . ,(mapcar sub args))))))
-                      ;; Maybe at some point this should also be called on type?
-                      ;; But that means every type matcher needs a substitution function
-                      (`(S:SET ,matcher ,type)
-                       (et-q (((S:SET ,(funcall sub matcher) ,type)))))
-                      (_ (error "Invalid matcher repr factor: %s" factor)))
-                    into and-structs
-                    finally return (apply #'et--dnf-and and-structs))
-           into new-dnf
-           finally return (et-copy-with repr :dnf new-dnf)))
+  (pcase (et-repr-dnf repr)
+    (`(((S:GENERIC ,var)))
+     ;; If this is a single generic, use the label from the generic
+     ;; instead of from the outer repr
+     (or (alist-get var gen-repls)
+         (error "Replacement for %s not provided" var)))
+    (dnf
+     (cl-loop for case in dnf
+              nconc
+              (cl-loop for factor in case
+                       collect
+                       (et--repr-factor-substitute-generics factor gen-repls)
+                       into and-structs
+                       finally return (apply #'et--dnf-and and-structs))
+              into new-dnf
+              finally return (et-copy-with repr :dnf new-dnf)))))
 
 
 ;;;; Printing
@@ -1695,6 +1714,8 @@ which are invalid for types."
            (et-repr-to-string repr))
    stream))
 
+(defvar et-print-labels nil)
+
 (defun et-repr-to-string (repr)
   (cl-loop for factors in (et-repr-dnf repr)
            collect
@@ -1705,7 +1726,11 @@ which are invalid for types."
                     finally return
                     (if and-strings (string-join and-strings " & ") "Any"))
            into or-strings
-           finally return (if or-strings (string-join or-strings " | ") "Never")))
+           finally return
+           (let* ((str (if or-strings (string-join or-strings " | ") "Never")))
+             (if (and et-print-labels (et-repr-label repr))
+                 (format "%s[%s]" (et-repr-label repr) str)
+               str))))
 
 (defun et--repr-named-to-string (name args)
   (pcase (cons name args)

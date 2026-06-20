@@ -79,7 +79,8 @@
    (error line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": fatal: " (message) line-end))
   :error-filter et-flycheck--error-filter
   :modes (emacs-lisp-mode)
-  :predicate (lambda () (bound-and-true-p et-mode)))
+  :predicate (lambda () (bound-and-true-p et-mode))
+  :next-checkers ((t . emacs-lisp) (t . emacs-lisp-checkdoc)))
 
 (add-to-list 'flycheck-checkers 'et-flycheck-checker)
 

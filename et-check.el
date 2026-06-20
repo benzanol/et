@@ -165,7 +165,8 @@ determine the output type."
              finally do
              (if (and arg-type param-repr)
                  (et-err arg-pos "Parameter %s has type %s, found %s" param-name param-repr arg-type)
-               (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))
+               (et-err 0 "`%s' has type %s\\nInvalid arguments: %s\\n%s" func func-type args-type
+                       output-type)))))))
 
        (_ (et-err 0 "No type for `%s'" func))))
 
@@ -586,6 +587,7 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
 
   ;; Convert an entry (VAR . REPR) to a labeled repr
   (let* ((fn (lambda (var repr) (et-copy-with repr :label (list :field var))))
+         (fn1 (lambda (e) (funcall fn (car e) (cdr e))))
          (rest-repr
           (pcase (car rest-params)
             (`(,var . ,repr) (funcall fn var repr))
@@ -597,8 +599,8 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
             ('nil (et-repr Nil))
             (x (error "Invalid rest param: %s" x))))
 
-         (req-reprs (mapcar fn required))
-         (opt-reprs (mapcar fn optional))
+         (req-reprs (mapcar fn1 required))
+         (opt-reprs (mapcar fn1 optional))
          (input-repr (et--params-to-input-repr req-reprs opt-reprs rest-repr)))
 
     (if (or always-matcher generics)
