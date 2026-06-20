@@ -141,7 +141,7 @@ determine the output type."
        ;; Function type property
        ((and (let func-type (get func 'et-function-type)) (guard func-type))
         (let* ((arg-types (cl-loop for type in (et-checker-remaining 1) for pos upfrom 1
-                                   collect (et-copy-with type :label (list :position pos)) into arg-types))
+                                   collect (et-copy-with type :label (list :position pos))))
                (args-type (et--tuple 'Cons arg-types))
                (output-type (et--funcall func-type args-type)))
           (cond

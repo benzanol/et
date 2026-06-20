@@ -314,10 +314,10 @@
     ((and sym (pred symbolp))
      (if-let* ((func-type (get sym 'et-function-type)))
          func-type
-       (et-checker-err "No function type for `%s'" sym)))
+       (et-err "No function type for `%s'" sym)))
 
     ;; Anything else is invalid
-    (_ (et-checker-err "Invalid argument to function: %s" inner))))
+    (_ (et-err "Invalid argument to function: %s" inner))))
 
 (et-test
  (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
@@ -403,10 +403,12 @@
 ;;;;; car/cdr
 
 (et-defalias MatchCar [T]
+  :matcher-only t
   (or (and Nil (set T Nil))
       (ConsR T Any)))
 
 (et-defalias MatchCdr [T]
+  :matcher-only t
   (or (and Nil (set T Nil))
       (ConsR Any T)))
 
@@ -439,7 +441,7 @@
  (et-assert-call Nil|Integer|String car ListR<Integer>|ConsR<String~Nil>)
 
  (et-assert-error
-     (et-root-check-call car ListR<Integer>|ConsR<String~Nil>|String)))
+  (et-root-check-call car ListR<Integer>|ConsR<String~Nil>|String)))
 
 (et-test
  (et-assert-resolve ListR<Number> (cdr (list 1 2.2 3)))
@@ -729,7 +731,7 @@ function returns nil."
   (let* ((plist-type (et-checker-sub 1))
          (key-type (et-checker-sub 2)))
     (et--plist-lookup plist-type key-type
-                      (lambda (fmt &rest args) (apply #'et-checker-err 0 fmt args)))))
+                      (lambda (fmt &rest args) (apply #'et-err 0 fmt args)))))
 
 
 (et-define-pcase-checker plist-put `(,_plist ,_key ,_val)
@@ -738,11 +740,11 @@ function returns nil."
          (val-type (et-checker-sub 3))
          (existing-val-type
           (et--plist-lookup plist-type key-type
-                            (lambda (fmt &rest args) (apply #'et-checker-err 0 fmt args)))))
+                            (lambda (fmt &rest args) (apply #'et-err 0 fmt args)))))
     (when existing-val-type
       (if (et-subtype? val-type existing-val-type)
           plist-type
-        (et-checker-err 3 "Expected %s, found %s" (et-pp existing-val-type) (et-pp val-type))))))
+        (et-err 3 "Expected %s, found %s" (et-pp existing-val-type) (et-pp val-type))))))
 
 
 ;;;; cl-loop
@@ -1325,7 +1327,7 @@ Freshness reasoning:
   (let* ((actual (et-checker-sub 1))
          (declared (et-parse-type type-spec)))
     (unless (et-subtype? actual declared)
-      (et-checker-err 0 "Expected %s, found %s" (et-pp declared) (et-pp actual)))
+      (et-err 0 "Expected %s, found %s" (et-pp declared) (et-pp actual)))
     declared))
 
 (et-define-pcase-checker et! `(,_expr ,type-spec)
@@ -1334,8 +1336,8 @@ Freshness reasoning:
     (when (and (not (et-never-p actual))
                (not (et-never-p declared))
                (et-never-p (et--supersect actual declared)))
-      (et-checker-err 0 "Types %s and %s have no overlap. Use et!! to supress this warning."
-                      (et-pp declared) (et-pp actual)))
+      (et-err 0 "Types %s and %s have no overlap. Use et!! to supress this warning."
+              (et-pp declared) (et-pp actual)))
     declared))
 
 (et-define-pcase-checker et!! `(,_expr ,type-spec)

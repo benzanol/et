@@ -909,16 +909,9 @@ FUNC is called with one argument, the current argument"
              when constraint collect constraint)))
 
 (defun et--define-alias (name gen-vec spec &rest props)
+  "First declare an alias, then initialize it."
   (apply #'et--declare-alias name gen-vec spec props)
   (et--initialize-alias name))
-
-(defun et--initialize-alias (name)
-  (if-let* ((props (get name 'et-alias))
-            (spec (plist-get props :spec))
-            (target (plist-get props :target)))
-      (progn (plist-put props :repr (et-parse-repr spec (plist-get props :generics) target))
-             (plist-put props :constraints (et--gen-vec-constraints (plist-get props :gen-vec))))
-    (error "Alias `%s' not declared" name)))
 
 (defun et--declare-alias (name gen-vec spec &rest props)
   (declare (et (name EtAliasName)
@@ -931,7 +924,10 @@ FUNC is called with one argument, the current argument"
     (error "Alias %s is already defined, and is read-only" name))
 
   (pcase-let* ((gens (et--gen-vec-generics gen-vec))
-               (target (or (plist-get props :target) 'BOTH))
+               (to (plist-get props :type-only))
+               (mo (plist-get props :matcher-only))
+               (_ (and to mo (error "Alias cannot be both type-only and matcher-only")))
+               (target (if to 'TYPE (if mo 'MATCHER 'BOTH)))
                (_ (or (memq target '(TYPE MATCHER BOTH))
                       (error ":target must be one of `TYPE', `MATCHER', or `BOTH'")))
                (plist (cl-list*
@@ -942,6 +938,15 @@ FUNC is called with one argument, the current argument"
                        props)))
     (put name 'et-alias plist)
     nil))
+
+(defun et--initialize-alias (name)
+  (if-let* ((props (get name 'et-alias))
+            (spec (plist-get props :spec))
+            (target (plist-get props :target)))
+
+      (progn (plist-put props :repr (et-parse-repr spec (plist-get props :generics) target))
+             (plist-put props :constraints (et--gen-vec-constraints (plist-get props :gen-vec))))
+    (error "Alias `%s' not declared" name)))
 
 (eval-and-compile
   (defun et--props-and-body (body)
@@ -972,14 +977,6 @@ FUNC is called with one argument, the current argument"
                (@skip)))
 
   (et--alias-call (et-alias-name alias) (et-alias-args alias) 'TYPE))
-
-(defun et--alias-call-matcher (name args)
-  "Expand an alias within a matcher."
-  (declare (et (name EtAliasName)
-               (args (ListR EtMR))
-               (@return EtMR)))
-
-  (et--alias-call name args 'MATCHER))
 
 (defun et-expand-all-aliases (type)
   (et--verify-type type)
@@ -1138,12 +1135,13 @@ DNF is the struct representing the matcher."
                (@return EtMR)))
 
   (cl-loop for case in (et-repr-dnf mr)
-           nconc
+           append
            (cl-loop for factor in case
                     collect
                     (pcase factor
                       (`(S:ALIAS ,name . ,args)
-                       (et--mr-expand-aliases (et--alias-call-matcher name args)))
+                       (et-repr-dnf
+                        (et--mr-expand-aliases (et--alias-call name args 'MATCHER))))
                       (other (list (list other))))
                     into and-terms
                     finally return (apply #'et--dnf-and and-terms))
@@ -1658,6 +1656,7 @@ which are invalid for types."
                (@return EtMR)))
 
   (cl-loop with sub = (lambda (r) (et--repr-substitute-generics r gen-repls))
+           ;; case : *et-repr
            for case in (et-repr-dnf repr)
            nconc
            (cl-loop for factor in case
@@ -1665,7 +1664,8 @@ which are invalid for types."
                     (pcase factor
                       (`(S:GENERIC ,var)
                        ;; Don't use alist-get, because the value of the replacement can be nil
-                       (if-let* ((entry (assq var gen-repls))) (cdr entry)
+                       (if-let* ((entry (assq var gen-repls)))
+                           (et-repr-dnf (cdr entry))
                          (error "Replacement for %s not provided" var)))
                       (`(S:DT ,name . ,args)
                        (et-q (((S:DT ,name . ,(et--datatype-map-type-args name args sub))))))
@@ -1862,7 +1862,7 @@ which are invalid for types."
 
 (et--define-repr-segment S:SET set (dnf type)
   :parse (list (et--parse-sub dnf) (et-parse-type type))
-  :print (format "{match %s to %s}" (et-repr-to-string dnf) (et-repr-to-string type)))
+  :print (format "{match %s to %s}" (et-repr-to-string dnf) (et-pp-type type)))
 
 (et--define-repr-segment S:DT dt (name &rest args)
   :parse (cons name (et--datatype-map-type-args name args #'et--parse-sub))
@@ -2405,17 +2405,17 @@ returning A itself is a valid approximation."
                   (cl-loop for arg in args
                            thereis (and (et-type-p arg) (et--type-contains-binds arg))))))))
 
-(defvar et--cache-matches t)
+(defvar et-cache-matches t)
 
 (defun et--sub-match (matcher type)
-  (if et--cache-matches
+  (if et-cache-matches
       (et-cache (list #'et--sub-match matcher type) #'et-var-p
         (et--sub-match-logic matcher type))
 
     (et--sub-match-logic matcher type)))
 
 (defun et--super-match (matcher type)
-  (if et--cache-matches
+  (if et-cache-matches
       (et-cache (list #'et--super-match matcher type) #'et-var-p
         (et--super-match-logic matcher type))
     (et--super-match-logic matcher type)))
