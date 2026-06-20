@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026  Adam Tillou
 
-;; Author: Adam Tillou <benzanol@nixos>
+;; Author: Adam Tillou <adam.tillou@gmail.com>
 ;; Keywords: tools
 
 ;; This program is free software; you can redistribute it and/or modify

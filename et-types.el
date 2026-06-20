@@ -1,8 +1,8 @@
-;;; et-types.el --- Typesystem for emacs lisp        -*- lexical-binding: t; -*-
+;;; et-types.el --- Typesystem for emacs lisp -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Adam Tillou
 
-;; Author: Adam Tillou;; -*- lexical-binding: t; -*- <benzanol@nixos>
+;; Author: Adam Tillou <adam.tillou@gmail.com>
 ;; Keywords: tools
 
 ;; This program is free software; you can redistribute it and/or modify

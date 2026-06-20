@@ -1,8 +1,8 @@
-;;; et-flycheck.el --- Flycheck checker for et.el    -*- lexical-binding: t; -*-
+;;; et-flycheck.el --- Flycheck checker for et.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Adam Tillou
 
-;; Author: Adam Tillou <benzanol@nixos>
+;; Author: Adam Tillou <adam.tillou@gmail.com>
 ;; Keywords: tools
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -83,8 +83,6 @@
   :next-checkers ((t . emacs-lisp) (t . emacs-lisp-checkdoc)))
 
 (add-to-list 'flycheck-checkers 'et-flycheck-checker)
-
-
 
 
 (provide 'et-flycheck)
