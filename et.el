@@ -396,6 +396,12 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
          (et--cache-store subst-key (et--subst-with-placeholders value repls))
          value))))
 
+(defmacro et-cache-if (bool key ph-pred &rest body)
+  (declare (indent 3))
+  `(if ,bool
+       (et-cache ,key ,ph-pred ,@body)
+     ,@body))
+
 (defun et-clear-cache ()
   (interactive)
   (setq et-cache (make-hash-table))
@@ -846,10 +852,10 @@ MK-SUPER argument of `et--cons-is-plist' when matching against matchers."
   (let ((any-mr (et-make-mr (et-q (((S:DT Any)))))))
     (et-make-mr
      (et-q (((S:ALIAS ConsR
-              ,(or car any-mr)
-              ,(if rest-plist
-                   (et-make-mr (et-q (((S:DT PList ,@rest-plist)))))
-                 any-mr))))))))
+                      ,(or car any-mr)
+                      ,(if rest-plist
+                           (et-make-mr (et-q (((S:DT PList ,@rest-plist)))))
+                         any-mr))))))))
 
 
 ;;;; Datatype mappers
@@ -1179,7 +1185,10 @@ DNF is the struct representing the matcher."
                       (et--super-constraints matcher type))))
 
 
-;;;; Sub match
+;;;; Sub constraints
+
+(defvar et-cache-constraints nil
+  "Cache calls to `et--sub/super-constraints'.")
 
 (defvar et--constraints-stack nil
   "Stack of calls to `et--sub/super-constraints' for preventing loops.
@@ -1197,9 +1206,14 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
       (delete-dups qs))))
 
 (defun et--sub-constraints (matcher type)
-  (declare (et (matcher *et-matcher)
-               (type *et-type)
-               (@return List<EtConstraint>)))
+  (declare (et (matcher *et-matcher) (type *et-type) (@return List<EtConstraint>)))
+
+  (et-cache-if et-cache-constraints
+      (list #'et--sub-constraints matcher type) #'et-var-p
+    (et--sub-constraints-1 matcher type)))
+
+(defun et--sub-constraints-1 (matcher type)
+  (declare (et (matcher *et-matcher) (type *et-type) (@return List<EtConstraint>)))
 
   (et--verify-matcher matcher)
   (et--verify-type type)
@@ -1303,12 +1317,17 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
        #'et--cons-plist-super-type))))
 
 
-;;;; Super match
+;;;; Super constraints
 
 (defun et--super-constraints (matcher type)
-  (declare (et (matcher *et-matcher)
-               (type *et-type)
-               (@return List<EtConstraint>)))
+  (declare (et (matcher *et-matcher) (type *et-type) (@return List<EtConstraint>)))
+
+  (et-cache-if et-cache-constraints
+      (list #'et--super-constraints matcher type) #'et-var-p
+    (et--super-constraints-1 matcher type)))
+
+(defun et--super-constraints-1 (matcher type)
+  (declare (et (matcher *et-matcher) (type *et-type) (@return List<EtConstraint>)))
 
   (et--stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type) nil
     (et--verify-matcher matcher)
@@ -2458,28 +2477,13 @@ returning A itself is a valid approximation."
                   (cl-loop for arg in args
                            thereis (and (et-type-p arg) (et--type-contains-binds arg))))))))
 
-(defvar et-cache-matches t)
-
 (defun et--sub-match (matcher type)
-  (if et-cache-matches
-      (et-cache (list #'et--sub-match matcher type) #'et-var-p
-        (et--sub-match-logic matcher type))
-
-    (et--sub-match-logic matcher type)))
-
-(defun et--super-match (matcher type)
-  (if et-cache-matches
-      (et-cache (list #'et--super-match matcher type) #'et-var-p
-        (et--super-match-logic matcher type))
-    (et--super-match-logic matcher type)))
-
-(defun et--sub-match-logic (matcher type)
   (let ((constraints (append (et--sub-constraints matcher type)
                              (et-matcher-constraints matcher))))
     (et--match-satisfy-constraints-smallest
      (et-matcher-generics matcher) constraints)))
 
-(defun et--super-match-logic (matcher type)
+(defun et--super-match (matcher type)
   (let ((constraints (append (et--super-constraints matcher type)
                              (et-matcher-constraints matcher))))
     (et--match-satisfy-constraints-biggest

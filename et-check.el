@@ -343,7 +343,7 @@ RETURN is a parsable expression for the return type.
          (return-spec (cadr arguments)))
     (unless (eq (length arguments) 2)
       (error "Incorrect number of arguments"))
-    `(et--define-type-checker ,gen-vec ',arglist-spec ',return-spec)))
+    `(et--define-type-checker ',funcs ,gen-vec (backquote ,arglist-spec) (backquote ,return-spec))))
 
 (defun et--define-type-checker (funcs gen-vec arglist-spec return-spec)
   (let* ((func-type
@@ -407,15 +407,19 @@ PATH is the path to the subexpression."
 ;;;; Infer
 
 (defmacro et-checker-infer (type gen-vec matcher-spec output-spec)
-  (pcase-let* ((gens (et--gen-vec-generics gen-vec)))
-    `(let* ((infer
-             (et--infer ,(make-et-matcher
-                          :generics gens
-                          :constraints (et--gen-vec-constraints gen-vec)
-                          :repr (et-parse-repr matcher-spec gens 'MATCHER))
-                        ,type
-                        (et-q ,(et-parse-repr output-spec gens 'TYPE)))))
-       (when (et-type-p infer) infer))))
+  (let* ((gens (et--gen-vec-generics gen-vec))
+         (constraints (et--gen-vec-constraints gen-vec)))
+    `(et--checker-infer ,type ',gens ',constraints ,(list '\` matcher-spec) ,(list '\` output-spec))))
+
+(defun et--checker-infer (type gens constraints matcher-spec output-spec)
+  (let* ((infer
+          (et--infer (make-et-matcher
+                      :generics gens
+                      :constraints constraints
+                      :repr (et-parse-repr matcher-spec gens 'MATCHER))
+                     type
+                     (et-parse-repr output-spec gens 'TYPE))))
+    (when (et-type-p infer) infer)))
 
 
 ;;; ============================================================
@@ -844,9 +848,9 @@ Returns a plist with :constrain and :populate functions."
                              (et-fatal nil "Alias `%s' not declared" name)))
                   (spec (plist-get props :spec))
                   (generics (plist-get props :generics))
-                  (restrict (plist-get props :restrict)))
+                  (target (plist-get props :target)))
              (plist-put props :repr
-                        (et-parse-repr spec generics restrict)))))))))
+                        (et-parse-repr spec generics (or target 'BOTH))))))))))
 
 
 ;;;; Identify variable def
@@ -1017,8 +1021,11 @@ Returns a plist with :declare to set the variable type."
     (cl-loop for test in body
              for pos upfrom 1
              do (et-at pos
-                  (or (eval test)
-                      (et-warn nil "Evaluated to nil")))))
+                  (pcase (eval test)
+                    ('nil (et-warn nil "Evaluated to nil"))
+                    ((and result (pred et-result-p))
+                     (when (et-result-failed result)
+                       (et-propagate-result result)))))))
   (et Nil))
 
 
