@@ -727,7 +727,7 @@ the two args respectively."
                  collect new-arg))
     (_ 'INVALID)))
 
-(defun et--datatype-constraints (sub-name sub-args super-name super-args co contra iso co-literal)
+(defun et--datatype-constraints (sub-name sub-args super-name super-args co contra iso co-literal mk-super)
   "Determine when one datatype to be a subtype of another.
 
 Returns the list of constraints required for (SUB-NAME SUB-ARGS) to be a
@@ -742,7 +742,13 @@ datatypes may have different arg types. For example one might be a
 matcher and another might be a type.
 
 Also, (funcall CO-LITERAL val super-arg) checks if the literal val is a
-subtype of super-arg."
+subtype of super-arg.
+
+The ConsFull/PList case is the only one that synthesizes a brand new
+super value (a `ConsR') instead of passing existing super-args to CO.
+Since super-args may be either types or matcher reprs depending on the
+caller, MK-SUPER builds that synthesized super value in the caller's
+language. See `et--cons-is-plist'."
 
   (cl-flet ((valid-if (valid) (if valid nil (list (et--never-constraint)))))
 
@@ -779,7 +785,7 @@ subtype of super-arg."
       (`(,_ NonNilSymbol) (valid-if (eq sub-name 'Var)))
 
       (`(ConsFull PList)
-       (et--cons-is-plist sub-args super-args co))
+       (et--cons-is-plist sub-args super-args co mk-super))
 
       (`(Plist Plist)
        (cl-loop for (prop super-val) on super-args by #'cddr
@@ -803,14 +809,18 @@ subtype of super-arg."
 
       (_ (valid-if nil)))))
 
-(defun et--cons-is-plist (cons-args plist-args co)
+(defun et--cons-is-plist (cons-args plist-args co mk-super)
   "Constraints for ConsFull to be a subtype of PList.
+
 A plist is a flat list (K1 V1 K2 V2 ...).  The ConsFull car is a key.
 If it matches a required PList key, the cdr must be a cons whose car
 satisfies that key's value type and whose cdr covers the remaining
 keys.  If it does not match, the cdr must be a cons (skipping the
 value) whose cdr still covers all required keys.  Extra keys are
-allowed and order does not matter."
+allowed and order does not matter.
+
+MK-SUPER builds the synthesized `ConsR' super value in the caller's
+language (a type or a matcher repr); see `et--datatype-constraints'."
   (let ((car-read (et-expand-all-aliases (nth 0 cons-args)))
         (cdr-read (nth 2 cons-args)))
     (pcase (et-type-cases car-read)
@@ -819,14 +829,27 @@ allowed and order does not matter."
        (let ((pval (plist-get plist-args prop))
              (rest-plist (copy-tree plist-args)))
          (when pval (cl-remf rest-plist prop))
-         (let ((tail (if rest-plist
-                         (apply #'et-dt 'PList rest-plist)
-                       (et-any))))
-           (funcall co cdr-read
-                    (if pval
-                        (et-alias 'ConsR pval tail)
-                      (et-alias 'ConsR (et-any) tail))))))
+         (funcall co cdr-read (funcall mk-super pval rest-plist))))
       (_ (list (et--never-constraint))))))
+
+(defun et--cons-plist-super-type (car rest-plist)
+  "Build the type `ConsR<CAR~tail>', where tail is `PList<REST-PLIST>' or Any.
+CAR is the matched value type, or nil for any value.  Used as the
+MK-SUPER argument of `et--cons-is-plist' when matching against types."
+  (et-alias 'ConsR (or car (et-any))
+            (if rest-plist (apply #'et-dt 'PList rest-plist) (et-any))))
+
+(defun et--cons-plist-super-matcher (car rest-plist)
+  "Build the matcher repr `ConsR<CAR~tail>', tail being `PList<REST-PLIST>' or Any.
+CAR is the matched value repr, or nil for any value.  Used as the
+MK-SUPER argument of `et--cons-is-plist' when matching against matchers."
+  (let ((any-mr (et-make-mr (et-q (((S:DT Any)))))))
+    (et-make-mr
+     (et-q (((S:ALIAS ConsR
+              ,(or car any-mr)
+              ,(if rest-plist
+                   (et-make-mr (et-q (((S:DT PList ,@rest-plist)))))
+                 any-mr))))))))
 
 
 ;;;; Datatype mappers
@@ -1264,7 +1287,9 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          (lambda (type ms) (et--sub-constraints (make-matcher ms) type))
          (lambda (type ms) (et--super-constraints (make-matcher ms) type))
          (lambda (type ms) (et-iso-match (make-matcher ms) type))
-         (lambda (literal ms) (et--sub-constraints (make-matcher ms) (et-literal literal))))
+         (lambda (literal ms) (et--sub-constraints (make-matcher ms) (et-literal literal)))
+         ;; The synthesized super (PList side, m-args) is a matcher repr
+         #'et--cons-plist-super-matcher)
       ;; supertype matching (sub=MATCHER < super=TYPE)
       (et--datatype-constraints
        m-name m-args t-name t-args
@@ -1273,7 +1298,9 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
        (lambda (ms type) (et-iso-match (make-matcher ms) type))
        (lambda (literal type)
          (let ((literal-m (make-matcher (et-make-mr (et-q (((S:DT Literal ,literal))))))))
-           (et--super-constraints literal-m type)))))))
+           (et--super-constraints literal-m type)))
+       ;; The synthesized super (PList side, t-args) is a type
+       #'et--cons-plist-super-type))))
 
 
 ;;;; Super match
@@ -2096,7 +2123,8 @@ same as [T (<= T Number)]."
             (lambda (a b) (valid-if (et-subtype? a b)))
             (lambda (a b) (valid-if (et-subtype? b a)))
             (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
-            (lambda (literal b) (valid-if (and (et-subtype? (et-literal literal) b)))))))
+            (lambda (literal b) (valid-if (and (et-subtype? (et-literal literal) b))))
+            #'et--cons-plist-super-type)))
 
       (not (assq 'Q:NEVER constraints)))))
 
