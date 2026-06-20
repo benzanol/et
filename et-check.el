@@ -340,20 +340,21 @@ RETURN is a parsable expression for the return type.
 
   (let* ((gen-vec (when (vectorp (car arguments)) (pop arguments)))
          (arglist-spec (car arguments))
-         (return-spec (cadr arguments))
-         (func-type
+         (return-spec (cadr arguments)))
+    (unless (eq (length arguments) 2)
+      (error "Incorrect number of arguments"))
+    `(et--define-type-checker ,gen-vec ',arglist-spec ',return-spec)))
+
+(defun et--define-type-checker (funcs gen-vec arglist-spec return-spec)
+  (let* ((func-type
           (if gen-vec
               (let* ((matcher (et-parse-matcher arglist-spec gen-vec))
                      (output-repr (et-parse-repr return-spec (et-matcher-generics matcher) 'TYPE)))
                 (et-dt 'DynFunction matcher output-repr))
             (et-dt 'Function (et-parse-type arglist-spec) (et-parse-type return-spec)))))
-    (unless (eq (length arguments) 2)
-      (error "Incorrect number of arguments"))
-
-    (cl-loop for func in (if (symbolp funcs) (list funcs) funcs)
-             collect `(put ',func 'et-checker nil) into exprs
-             collect `(put ',func 'et-function-type ,func-type) into exprs
-             finally return `(ignore ,@exprs))))
+    (dolist (func (if (symbolp funcs) (list funcs) funcs))
+      (put func 'et-checker nil)
+      (put func 'et-function-type func-type))))
 
 
 ;;; ============================================================
