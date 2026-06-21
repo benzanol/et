@@ -479,7 +479,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 (defun et--make-scoped-datatypes (matcher)
   (declare (et (matcher Nil|*et-matcher)
-               (@return (List (Tuple Var Var List<EtConstraint>)))))
+               (@return (List (Tuple Var Var List<EtTypeConstraint>)))))
 
   (cl-loop for name in (when matcher (et-matcher-generics matcher))
            for qs = (cl-loop for q in (when matcher (et-matcher-constraints matcher))
@@ -729,7 +729,7 @@ FUNC is called with one argument, the current argument"
                     (PList :target T
                            :custom (or Nil (Function Args<List<Any>> *et-repr<T>))
                            :generics List<EtGeneric>
-                           :constraints List<EtConstraint>
+                           :constraints List<EtTypeConstraint>
                            :repr (or Nil EtRepr<T>)
                            :type (or Nil *et-type))))
 
@@ -764,7 +764,7 @@ FUNC is called with one argument, the current argument"
 
 (defun et--gen-vec-constraints (gen-vec)
   "Parse a generic vector to a list of generics and constraints."
-  (declare (et (gen-vec EtGenVec) (@return List<EtConstraint>) (@skip)))
+  (declare (et (gen-vec EtGenVec) (@return List<EtTypeConstraint>) (@skip)))
 
   (when gen-vec
     (cl-loop for gen-spec across gen-vec
@@ -948,7 +948,7 @@ a valid `et-type-case-value'."
 DNF is the struct representing the matcher."
   (generics nil :et List<EtGeneric>)
   (repr nil :et EtMR)
-  (constraints nil :et List<EtConstraint>))
+  (constraints nil :et List<EtTypeConstraint>))
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
@@ -1210,11 +1210,13 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
  (@alias EtLabel (PList :field Symbol :position Number))
 
  (@alias EtConstraintStack (List (Tuple @SUB|@SUPER EtMR *et-type)))
- (@alias EtConstraint
-         (or (Tuple @Q:NEVER EtConstraintStack)
-             (Tuple @Q:EQ EtGeneric *et-type)
+ (@alias EtTypeConstraint
+         (or (Tuple @Q:EQ EtGeneric *et-type)
              (Tuple @Q:GEQ EtGeneric *et-type)
              (Tuple @Q:LEQ EtGeneric *et-type)))
+ (@alias EtConstraint
+         (or (Tuple @Q:NEVER EtConstraintStack)
+             EtTypeConstraint))
 
  (@alias EtBRFactor
          (or (TupleStar @S:DT EtDatatypeName List<Any>)
@@ -1230,7 +1232,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
              (Tuple @S:EXTENDS EtTR EtTR EtTR EtTR)
              (TupleStar @S:EVAL Function<List<*et-type>~*et-type> List<EtTR>)))
  (@alias EtMatcherOnlyFactor
-         (or (Tuple @S:SET EtMR EtTR)))
+         (or (Tuple @S:SET EtMR *et-type)))
  (@alias EtTRFactor (or EtBRFactor EtTypeOnlyFactor))
  (@alias EtMRFactor (or EtBRFactor EtMatcherOnlyFactor))
 
