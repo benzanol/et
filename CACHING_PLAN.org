@@ -1,0 +1,108 @@
+* Hashing
+*type-hash* is an algorithm which turns an =et-type= into a unique string.
+It is based entirely on structure, and not at all on naming. If =A= and =B= are two aliases with the same type-hash, then =List<A>= and =List<B>= will also have the same type-hash. However, an alias does not have the same type-hash as its definition (the level of indirection of being wrapped in an alias changes the hash.)
+
+For example, if ~A = Number~ and ~B = Number~, then =A= and =B= will have the same type-hash, but it will be different from =Number=. Similarly, if ~C = A~ and ~D = B~, then =C= and =D= will share a type hash (they are both =Number= wrapped in two levels of aliases,) but it will be distinct from the type-hash of =A= and =B=, and the type-hash of =Number=.
+
+** Strategy
+*** State
+Initialize a list of variables that have been encountered so far in hashing. Since variables are ephemeral, then creating a hash based on /variable identity/ would be useless, as we would get a different hash every time, even when calculating the exact same thing. Instead, two types are considered equal if they have variables in the same places.
+
+*Variable Storage:* Since variables are ephemeral, it is obviously impossible to store a literal variable in the cache. To solve this, hashing will return not just the hash, but also a list of variables that were encountered.
+For example, say we have a function =f=. We calculate =f(OLD)= in one session, then we later calculate =f(NEW)=, where =NEW= has the same structure as =OLD=.
+When we hash =OLD= (and get the list /oldVars/), we see that its hash does not exist in storage, so we compute =f(OLD)=. Then, each variable in =f(OLD)= will be replaced with the symbols =$var0=, =$var1=, etc as determined by /oldVars/.
+Later, when we hash =NEW= (and get the list /newVars/), we see that it is in the cache. We load it from the cache, then replace the symbols =$var0=, =$var1=, etc with the variables in /newVars/. Thus, we have an output value with the correct ephemeral variables inside of it.
+This works because a variable is just an identity token, so only a variable's positions matter, not its structure.
+
+We will also do the same process with scoped datatypes, storing the symbols =$scoped0=, =$scoped1=, etc.
+
+*** What is a hash?
+While hashing is occurring, we will use accumulation based hashing, with new values to hash being pushed onto a list.
+To "hash" a number just means to push it into the beginning of that list.
+At the end, this list will be reversed and hashed into a number.
+
+*** Hashing struct
+At the entrypoint for hashing, a struct =et--hashing-state= should be created with the following fields:
+=variables= : ~List<*et-var>~ - The list of encountered variables
+=scoped= : ~List<(NAME UNIQUE CONSTRAINTS)>~ - The list of encountered scoped datatypes
+=hash-list= : ~List<Number|Symbol>~ - accumulating hash
+
+=hash-list= is in reverse order to allow for easy pushing.
+=variables= and =scoped= are in forwards order (use =nconc= to add), because the index of items needs to be preserved, and writing is fairly uncommon.
+
+*** Hashing a type
+1. Hash the number of cases, then hash each case.
+
+*** Hashing a type-case
+1. Hash the number of "binds", then hash each bind.
+2. Hash the number of "typeofs", then hash each variable.
+3. Hash the string "alias" or "datatype" depending on the value type.
+4. Hash the value (either a datatype or alias).
+
+*** Hashing a bind
+1. Hash the variable.
+2. Hash the type.
+
+*** Hashing a variable
+If the variable does not exist in the variable list (comparison by =eq=), append it.
+1. Hash its index in the variable list.
+
+*** Hashing a datatype
+1. Hash the index that the datatype is in =et-datatypes=
+2. For each argument, it is known based on its position whether it is a literal value (=Literal=), matcher (=DynFunction=), repr (=DynFunction=), or type (all others.)
+
+There is no need to hash the number of arguments passed to the datatype, as each datatype takes a fixed number of arguments.
+
+For scoped datatypes, check if the tuple ~(NAME UNIQUE CONSTRAINTS)~ has been encountered (compare by =equal=). If not, add it to the list.
+2.1. Hash the index in the list
+2.2. Hash the constraints (the name does not matter)
+
+*** Hashing an alias
+1. Hash the alias definition.
+2. Hash the number of arguments passed to the alias.
+3. Each argument should be a type, so hash each type.
+
+*** Hashing an alias definition
+To handle recursive aliases, hashing is done with an "alias definition stack", which is a list of alias names currently being hashed.
+Check if the alias definition exists in the alias stack. If it does, then hash its index in the stack. Otherwise:
+
+It is assumed that "custom" aliases are immutable and never change. So, just hash the alias name.
+For "repr" aliases, add the current alias to the "alias definition stack", and then hash the repr.
+
+*** Hashing a matcher
+1. Hash the number of generics, then hash each generic.
+2. Hash the number of constraints, then hash each constraint.
+3. Hash the repr.
+
+*** Hashing a type constraint
+1. Hash =0= for =EQ=, =1= for =GEQ=, and =2= for =LEQ=
+2. Hash the name of the generic
+3. Hash the type
+
+*** Hashing a repr
+1. Hash the repr target
+2. Hash the  number of cases, then hash each case
+
+**** Hashing a repr case
+1. Hash the number of factors, then hash each factor.
+
+**** Hashing a repr factor
+1. Hash the factor type (based on a fixed indexing).
+2. Use the following strategy based on the factor type:
+=S:DT= - Same as hashing a datatype, but type arguments are hashed as reprs instead of types.
+=S:ALIAS= - Same as hashing an alias, but arguments are hashed as reprs instead of types.
+=S:GENERIC= - Hash the name of the generic.
+=S:TYPE= - Hash the inner type.
+=S:BIND= - Hash the variable symbol, and hash the repr.
+=S:TYPEOF= - Hash the variable symbol.
+=S:BINDS-OF=, =S:SUBTRACT=, =S:EXTENDS= - Hash the reprs.
+=S:INFER= - Hash the number of generics, hash each generic symbol, then hash the reprs.
+=S:EVAL= - Hash the function name, hash the number of reprs, then hash each repr.
+=S:SET= - Hash the reprs.
+
+
+
+Each datatype can be identified with an index by its position in =et--datatypes=.
+
+
+

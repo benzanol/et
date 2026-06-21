@@ -110,6 +110,260 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 
 
 ;;; ============================================================
+;;; Hashing
+;;;; Documentation
+
+;; `et-hash-type' turns an `et-type' into a digest string based purely
+;; on structure, never on naming. Two structurally identical types hash
+;; identically; an alias never hashes the same as its definition.
+;;
+;; Hashing accumulates values onto `et--hashing-state-acc' (pushed in
+;; reverse, then reversed and digested at the end). To "hash" a value
+;; just means to push it. Lengths are pushed before every
+;; variable-length sequence so that distinct structures cannot flatten
+;; to the same accumulator.
+;;
+;; Variables and scoped datatypes are ephemeral (fresh symbols every
+;; session), so hashing them by identity would be useless. Instead each
+;; is replaced by its index in `vars'/`scoped' -- two types differing
+;; only in which ephemeral objects they contain hash identically. The
+;; encountered objects are returned alongside the hash, so the caller
+;; can restore the correct ephemeral objects into a cached result.
+;;
+;; The alias-definition stack is threaded as a plain parameter (newest
+;; first, extended with `cons') rather than living on the state: a
+;; recursive alias hashes its index in the stack instead of looping.
+
+;;;; State
+
+(cl-defstruct (et--hashing-state (:constructor et--make-hashing-state))
+  (acc nil)     ; Accumulated values, in reverse order
+  (vars nil)    ; `et-var's encountered so far, in order (index = position)
+  (scoped nil)) ; Scoped arg-tuples encountered so far (compared by `equal')
+
+(defun et--hash-push (state value)
+  "Accumulate VALUE onto STATE's hash."
+  (push value (et--hashing-state-acc state)))
+
+(defun et--hash-var-index (state var)
+  "Return the index of VAR in STATE's variable list, appending if new."
+  (let ((vars (et--hashing-state-vars state)))
+    (or (cl-position var vars :test #'eq)
+        (prog1 (length vars)
+          (setf (et--hashing-state-vars state) (append vars (list var)))))))
+
+(defun et--hash-scoped-index (state tuple)
+  "Return the index of scoped TUPLE in STATE, appending if new.
+TUPLE is the (NAME UNIQUE CONSTRAINTS) arg list of a `Scoped' datatype."
+  (let ((scoped (et--hashing-state-scoped state)))
+    (or (cl-position tuple scoped :test #'equal)
+        (prog1 (length scoped)
+          (setf (et--hashing-state-scoped state) (append scoped (list tuple)))))))
+
+(defconst et--hash-repr-factor-types
+  '(S:DT S:ALIAS S:GENERIC S:TYPE S:BIND S:TYPEOF
+         S:BINDS-OF S:SUBTRACT S:INFER S:EXTENDS S:EVAL S:SET)
+  "Fixed ordering of repr factor types, used to hash a factor's type.")
+
+
+;;;; Types
+
+(defun et--hash-type (state type alias-stack)
+  (et--hash-push state (et-type-label type))
+  (let ((cases (et-type-cases type)))
+    (et--hash-push state (length cases))
+    (dolist (case cases)
+      (et--hash-type-case state case alias-stack))))
+
+(defun et--hash-type-case (state case alias-stack)
+  (let ((binds (et-type-case-binds case))
+        (typeofs (et-type-case-typeofs case))
+        (value (et-type-case-value case)))
+    ;; Binds: (et-var . et-type)
+    (et--hash-push state (length binds))
+    (dolist (bind binds)
+      (et--hash-push state (et--hash-var-index state (car bind)))
+      (et--hash-type state (cdr bind) alias-stack))
+    ;; Typeofs: et-var
+    (et--hash-push state (length typeofs))
+    (dolist (var typeofs)
+      (et--hash-push state (et--hash-var-index state var)))
+    ;; Value: datatype or alias
+    (cond
+     ((et-datatype-p value)
+      (et--hash-push state "datatype")
+      (et--hash-datatype state (et-datatype-name value) (et-datatype-args value)
+                         alias-stack nil))
+     ((et-alias-p value)
+      (et--hash-push state "alias")
+      (et--hash-alias state (et-alias-name value) (et-alias-args value)
+                      alias-stack nil))
+     (t (error "Invalid type-case value: %s" value)))))
+
+
+;;;; Datatypes
+
+(defun et--hash-datatype (state name args alias-stack as-repr)
+  "Hash datatype NAME applied to ARGS.
+When AS-REPR is non-nil the variant arguments are reprs; otherwise they
+are types.  The argument count is fixed per datatype, so it is not
+hashed."
+  (et--hash-push state (or (cl-position name et--datatypes :key #'car)
+                           (error "Invalid datatype: %s" name)))
+  (cond
+   ;; Scoped: the (NAME UNIQUE CONSTRAINTS) tuple is ephemeral, so it is
+   ;; treated like a variable -- hash its index -- plus its constraints
+   ;; (the generic name is irrelevant).
+   ((eq name 'Scoped)
+    (et--hash-push state (et--hash-scoped-index state args))
+    (et--hash-constraints state (nth 2 args) alias-stack))
+   ;; DynFunction: arg 0 is a matcher, arg 1 an output repr.
+   ((eq name 'DynFunction)
+    (et--hash-matcher state (nth 0 args) alias-stack)
+    (et--hash-repr state (nth 1 args) alias-stack))
+   ;; Otherwise: CONST args are literal values, variant args are types
+   ;; (or reprs, when hashing a repr factor).
+   (t
+    (cl-loop for arg in args
+             for role in (et--datatype-arg-roles name args)
+             do (pcase role
+                  ('CONST (et--hash-push state arg))
+                  ((or 'CO 'CONTRA 'ISO)
+                   (if as-repr
+                       (et--hash-repr state arg alias-stack)
+                     (et--hash-type state arg alias-stack)))
+                  (_ (error "Unknown datatype arg role: %s" role)))))))
+
+
+;;;; Aliases
+
+(defun et--hash-alias (state name args alias-stack as-repr)
+  "Hash alias reference NAME applied to ARGS.
+When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
+  (et--hash-alias-def state name alias-stack)
+  (et--hash-push state (length args))
+  (dolist (arg args)
+    (if as-repr
+        (et--hash-repr state arg alias-stack)
+      (et--hash-type state arg alias-stack))))
+
+(defun et--hash-alias-def (state name alias-stack)
+  "Hash the definition of alias NAME under the current ALIAS-STACK."
+  (if-let* ((idx (cl-position name alias-stack :test #'eq)))
+      ;; Recursive reference: hash its depth in the stack and stop.
+      (et--hash-push state idx)
+    (let ((plist (or (get name 'et-alias) (error "Alias %s not defined" name))))
+      (if (plist-get plist :custom)
+          ;; Custom aliases are assumed immutable, so the name suffices.
+          (et--hash-push state name)
+        ;; Repr aliases: descend into the definition, guarding recursion.
+        (et--hash-repr state
+                       (or (plist-get plist :repr)
+                           (error "Alias %s missing repr" name))
+                       (cons name alias-stack))))))
+
+
+;;;; Constraints
+
+(defun et--hash-constraints (state constraints alias-stack)
+  (et--hash-push state (length constraints))
+  (dolist (q constraints)
+    (et--hash-type-constraint state q alias-stack)))
+
+(defun et--hash-type-constraint (state q alias-stack)
+  (pcase q
+    (`(,op ,gen ,type)
+     (et--hash-push state (pcase op
+                            ('Q:EQ 0) ('Q:GEQ 1) ('Q:LEQ 2)
+                            (_ (error "Invalid constraint operator: %s" op))))
+     (et--hash-push state gen)
+     (et--hash-type state type alias-stack))
+    (_ (error "Invalid type constraint: %s" q))))
+
+
+;;;; Matchers
+
+(defun et--hash-matcher (state matcher alias-stack)
+  (let ((generics (et-matcher-generics matcher)))
+    (et--hash-push state (length generics))
+    (dolist (g generics) (et--hash-push state g)))
+  (et--hash-constraints state (et-matcher-constraints matcher) alias-stack)
+  (et--hash-repr state (et-matcher-repr matcher) alias-stack))
+
+
+;;;; Reprs
+
+(defun et--hash-repr (state repr alias-stack)
+  (et--hash-push state (et-repr-target repr))
+  (et--hash-push state (et-repr-label repr))
+  (let ((cases (et-repr-dnf repr)))
+    (et--hash-push state (length cases))
+    (dolist (case cases)
+      (et--hash-push state (length case))
+      (dolist (factor case)
+        (et--hash-repr-factor state factor alias-stack)))))
+
+(defun et--hash-repr-factor (state factor alias-stack)
+  (et--hash-push state (or (cl-position (car factor) et--hash-repr-factor-types)
+                           (error "Invalid repr factor: %s" factor)))
+  (pcase factor
+    ;; Datatype/alias args are reprs here, hence the AS-REPR flag.
+    (`(S:DT ,name . ,args) (et--hash-datatype state name args alias-stack t))
+    (`(S:ALIAS ,name . ,args) (et--hash-alias state name args alias-stack t))
+    (`(S:GENERIC ,var) (et--hash-push state var))
+    (`(S:TYPE ,type) (et--hash-type state type alias-stack))
+    (`(S:BIND ,var ,repr)
+     (et--hash-push state var)
+     (et--hash-repr state repr alias-stack))
+    (`(S:TYPEOF ,var) (et--hash-push state var))
+    (`(S:BINDS-OF ,repr) (et--hash-repr state repr alias-stack))
+    (`(S:SUBTRACT ,a ,b)
+     (et--hash-repr state a alias-stack)
+     (et--hash-repr state b alias-stack))
+    (`(S:INFER ,type ,generics ,matcher ,yes ,no)
+     (et--hash-push state (length generics))
+     (dolist (g generics) (et--hash-push state g))
+     (et--hash-repr state type alias-stack)
+     (et--hash-matcher state matcher alias-stack)
+     (et--hash-repr state yes alias-stack)
+     (et--hash-repr state no alias-stack))
+    (`(S:EXTENDS ,sub ,super ,yes ,no)
+     (et--hash-repr state sub alias-stack)
+     (et--hash-repr state super alias-stack)
+     (et--hash-repr state yes alias-stack)
+     (et--hash-repr state no alias-stack))
+    (`(S:EVAL ,func . ,reprs)
+     (et--hash-push state func)
+     (et--hash-push state (length reprs))
+     (dolist (r reprs) (et--hash-repr state r alias-stack)))
+    ;; The second element of S:SET is a fully parsed type, not a repr.
+    (`(S:SET ,matcher-repr ,type)
+     (et--hash-repr state matcher-repr alias-stack)
+     (et--hash-type state type alias-stack))
+    (_ (error "Invalid repr factor: %s" factor))))
+
+
+;;;; Entry point
+
+(defun et--hash-finalize (state)
+  "Digest STATE's accumulated values into a string."
+  (secure-hash 'md5 (prin1-to-string (nreverse (et--hashing-state-acc state)))))
+
+(defun et-hash-type (type)
+  "Hash TYPE into a purely structural digest.
+
+Return (HASH VARS SCOPED), where HASH is a string, VARS is the list of
+`et-var's encountered (in the order their indices were assigned), and
+SCOPED is the list of `Scoped' datatype arg-tuples encountered.  VARS and
+SCOPED let the caller restore the ephemeral objects of a cached result."
+  (let ((state (et--make-hashing-state)))
+    (et--hash-type state type nil)
+    (list (et--hash-finalize state)
+          (et--hashing-state-vars state)
+          (et--hashing-state-scoped state))))
+
+
+;;; ============================================================
 ;;; Caching
 ;;;; Variables
 
