@@ -639,9 +639,14 @@ language. See `et--cons-is-plist'."
                 unless sub-val return (list (et--never-constraint))
                 nconc (funcall co sub-val super-val)))
 
+      (`(Struct Struct)
+       ;; TODO: be more specific
+       (valid-if (equal sub-args super-args)))
+
       ((guard (eq sub-name super-name))
-       ;; Datatypes of the same type (except PList) should have the same number of arguments
-       (cl-assert (eq (length sub-args) (length super-args)))
+       ;; Datatypes of the same type (except PList and Struct) should have the same number of arguments
+       (unless (eq (length sub-args) (length super-args))
+         (error "Arg length mismatch: %s %s %s %s" sub-name sub-args super-name super-args))
        (cl-loop for sub-arg in sub-args
                 for super-arg in super-args
                 for role in (et--datatype-arg-roles super-name super-args)
@@ -1236,12 +1241,13 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
  (@alias EtTRFactor (or EtBRFactor EtTypeOnlyFactor))
  (@alias EtMRFactor (or EtBRFactor EtMatcherOnlyFactor))
 
- (@alias EtTRCase (List EtTRFactor))
- (@alias EtMRCase (List EtMRFactor))
+ (@alias EtBRCase (ListR EtBRFactor))
+ (@alias EtTRCase (ListR EtTRFactor))
+ (@alias EtMRCase (ListR EtMRFactor))
 
- (@alias EtBRDnf (List (List EtBRFactor)))
- (@alias EtTRDnf (List EtTRCase))
- (@alias EtMRDnf (List EtMRCase))
+ (@alias EtBRDnf (ListR EtBRCase))
+ (@alias EtTRDnf (ListR EtTRCase))
+ (@alias EtMRDnf (ListR EtMRCase))
 
  (@alias EtRepr [(<= T EtTarget)] *et-repr<T>)
  (@alias EtBR EtRepr<@BOTH>)

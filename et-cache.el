@@ -454,9 +454,268 @@ collides with an atom of the same shape."
 
 
 ;;; ============================================================
+;;; Caching
+;;;; Documentation
+
+;; The cache is partitioned per source file so that a single run only
+;; ever loads the cached results for the exact file being checked,
+;; rather than one monolithic store. `et--cache-table' is the
+;; in-memory index: it maps a source identity (a file path, or nil for
+;; a non-file buffer) to the `et-cache' that was loaded for it. Each
+;; `et-cache' is written verbatim to its own file under
+;; `et-cache-directory' (named after the escaped source path), or to
+;; `et-cache-nonfile-file' for the nil source.
+;;
+;; `et--cache-source' names the *original* file whose cache should be
+;; used. Note this is deliberately distinct from `et--checking-file':
+;; under flycheck we actually check a temp copy, so `et--checking-file'
+;; (the temp path) is the thing being checked, while `et--cache-source'
+;; (the real path) is the thing the cache is keyed on.
+
+
+;;;; Variables
+
+(defvar et-cache-directory
+  (expand-file-name ".cache/et-cache/" user-emacs-directory)
+  "Directory holding one cache file per checked source file.")
+
+(defvar et-cache-nonfile-file
+  (expand-file-name "et-cache-nonfile.eld" temporary-file-directory)
+  "Cache file used when type checking a buffer with no source file.")
+
+(defvar et--cache-source nil
+  "Identity of the source file whose cache is in use, or nil for none.
+This is the real file, even when a temp copy is what's being checked.")
+
+(defvar et--cache-table (make-hash-table :test 'equal)
+  "In-memory map from a source identity to its loaded `et-cache'.")
+
+
+;;;; Structs
+
+(cl-defstruct et-cache
+  "The whole in-memory cache for one source file, serialized to disk.
+
+DEFUN-CACHE maps a function name to its `et--cached-defun'."
+  (defun-cache (make-hash-table :test 'eq)))
+
+(cl-defstruct et--cached-defun
+  "A cached defun check: its FINGERPRINT and the `et-result' VALUE."
+  fingerprint value)
+
+
+;;;; Cache files
+
+(defun et--cache-file-for (source)
+  "Return the cache file path for SOURCE (nil means the non-file cache)."
+  (if (null source)
+      et-cache-nonfile-file
+    (expand-file-name
+     (concat (replace-regexp-in-string
+              "[^A-Za-z0-9_.-]" (lambda (s) (format "%%%02x" (aref s 0))) source)
+             ".eld")
+     et-cache-directory)))
+
+(defun et--load-cache (source)
+  "Read SOURCE's `et-cache' from disk, or return a fresh empty one."
+  (let ((file (et--cache-file-for source)))
+    (or (and (file-exists-p file)
+             (ignore-errors
+               (with-temp-buffer
+                 (insert-file-contents file)
+                 (let ((obj (read (current-buffer))))
+                   (and (et-cache-p obj) obj)))))
+        (make-et-cache))))
+
+(defun et--current-cache ()
+  "Return the `et-cache' for `et--cache-source', loading it if needed."
+  (or (gethash et--cache-source et--cache-table)
+      (puthash et--cache-source (et--load-cache et--cache-source) et--cache-table)))
+
+(defun et-flush-cache (&optional source)
+  "Write SOURCE's in-memory `et-cache' back to disk.
+SOURCE defaults to `et--cache-source'. Does nothing if no cache was
+loaded for SOURCE during this session."
+  (setq source (or source et--cache-source))
+  (when-let* ((cache (gethash source et--cache-table))
+              (file (et--cache-file-for source)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (let ((print-level nil) (print-length nil) (print-circle t))
+        (prin1 cache (current-buffer))))))
+
+
+;;; ============================================================
+;;; Defun Caching
+;;;; Documentation
+
+;; A defun's body check is cached keyed on the defun name. The cached
+;; payload is the full `et-result' (its value is just `(et-literal
+;; name)', but it also carries the diagnostics and the failed flag,
+;; which are the real output of checking a body).
+;;
+;; An `et-defun-fingerprint' records everything whose change should
+;; invalidate that result:
+;;   SOURCE    - hash of the defun's own source (from its `et-func-sig')
+;;   SIGNATURE - hash of the defun's own function type
+;;   TYPES     - alist of (SPEC . HASH) for every type spec the body
+;;               parsed, so an alias changing under an unchanged body
+;;               is caught by re-parsing
+;;   FUNCTIONS - alist of (NAME . HASH) for every typed function the
+;;               body called, hashed by that function's *signature*
+;;               (the body never depends on a callee's body)
+;; A nil HASH means "not defined when cached"; if it later resolves,
+;; the recomputed hash differs and the entry is invalidated.
+;;
+;; The dependency identities are captured as side effects of the
+;; original check (advice on `et-parse-type' and `et--check'), so on a
+;; miss the check runs once and the fingerprint falls out of it. On a
+;; hit, validation re-hashes those stored identities without ever
+;; re-checking the body.
+
+(cl-defstruct et-defun-fingerprint
+  "What must be unchanged for a cached defun result to stay valid."
+  source signature types functions)
+
+
+;;;; Dependency capture
+
+(defvar et--fp-active nil
+  "Non-nil while capturing a defun's referenced types and functions.")
+(defvar et--fp-specs nil
+  "Type specs parsed while `et--fp-active', newest first.")
+(defvar et--fp-funcs nil
+  "Typed function names checked while `et--fp-active', newest first.")
+
+(defun et--cache-capture-type (spec &rest _)
+  "Advice on `et-parse-type': record SPEC as a body type dependency."
+  (when et--fp-active
+    (cl-pushnew spec et--fp-specs :test #'equal)))
+
+(defun et--cache-capture-function (expr)
+  "Advice on `et--check': record a called typed function as a dependency."
+  (when (and et--fp-active (consp expr)
+             (symbolp (car expr)) (car expr)
+             (get (car expr) 'et-function-type))
+    (cl-pushnew (car expr) et--fp-funcs :test #'eq)))
+
+
+;;;; Fingerprint computation
+
+(defun et--hash-name-func-type (name)
+  "Hash NAME's function type, or nil if it has none."
+  (when-let* ((ft (get name 'et-function-type)))
+    (et-hash-value (et-hash-items (list ft)))))
+
+(defun et--hash-type-spec (spec)
+  "Hash the type SPEC parses to, or nil if it does not resolve."
+  (ignore-errors (et-hash-value (et-hash-items (list (et-parse-type spec))))))
+
+(defun et--hash-defun-source (name)
+  "Hash the source of the defun NAME, or nil if it has no signature."
+  (when-let* ((sig (get name 'et-function-signature)))
+    (secure-hash 'md5 (let ((print-level nil) (print-length nil))
+                        (prin1-to-string (et-func-sig-source sig))))))
+
+(defun et--compute-defun-fingerprint (name specs funcs)
+  "Build an `et-defun-fingerprint' for NAME from its captured deps."
+  (make-et-defun-fingerprint
+   :source (et--hash-defun-source name)
+   :signature (et--hash-name-func-type name)
+   :types (mapcar (lambda (s) (cons s (et--hash-type-spec s))) specs)
+   :functions (mapcar (lambda (f) (cons f (et--hash-name-func-type f))) funcs)))
+
+(defun et--defun-fingerprint-current-p (name fp)
+  "Return non-nil if FP still matches the current state for NAME."
+  (and (equal (et-defun-fingerprint-source fp) (et--hash-defun-source name))
+       (equal (et-defun-fingerprint-signature fp) (et--hash-name-func-type name))
+       (cl-every (lambda (c) (equal (cdr c) (et--hash-type-spec (car c))))
+                 (et-defun-fingerprint-types fp))
+       (cl-every (lambda (c) (equal (cdr c) (et--hash-name-func-type (car c))))
+                 (et-defun-fingerprint-functions fp))))
+
+
+;;;; Cached check
+
+(defun et--check-cached (orig expr)
+  "Around advice on `et--check' implementing the defun cache.
+
+For a root defun with a parsed signature, return its cached result when
+the fingerprint still holds; otherwise run ORIG once, fingerprint the
+dependencies it touched, and store the result. All other expressions
+pass straight through to ORIG."
+  (if (not (and (eq (car-safe expr) 'defun)
+                (symbolp (cadr expr))
+                (get (cadr expr) 'et-function-signature)))
+      (funcall orig expr)
+
+    (let* ((name (cadr expr))
+           (table (et-cache-defun-cache (et--current-cache)))
+           (cached (gethash name table)))
+      (if (and cached
+               (et--defun-fingerprint-current-p
+                name (et--cached-defun-fingerprint cached)))
+          ;; Hit: replay the cached diagnostics into the current context
+          ;; (re-anchoring their relative paths) and return the value.
+          (let ((result (et--cached-defun-value cached)))
+            (et-propagate-result result)
+            (et-result-value result))
+
+        ;; Miss: check in an isolated boundary so the diagnostics are
+        ;; captured relative to the defun, fingerprint what it touched,
+        ;; then propagate as usual.
+        (let* ((et--fp-active t)
+               (et--fp-specs nil)
+               (et--fp-funcs nil)
+               (result (et-result-boundary (funcall orig expr)))
+               (fp (et--compute-defun-fingerprint name et--fp-specs et--fp-funcs)))
+          (puthash name (make-et--cached-defun :fingerprint fp :value result) table)
+          (et-propagate-result result)
+          (et-result-value result))))))
+
+
+;;; ============================================================
+;;; Extra
+;;;; Flycheck entry point
+
+(defun et--flycheck-check-file-cached (temp-file source-file)
+  "Run `et--flycheck-check-file' on TEMP-FILE with caching for SOURCE-FILE.
+
+TEMP-FILE is the file actually checked; SOURCE-FILE is the real file
+whose on-disk cache is loaded and saved (nil for a non-file buffer)."
+  (let ((et--cache-source source-file)
+        (command-line-args-left (list temp-file)))
+    (unwind-protect
+        (et--flycheck-check-file)
+      (et-flush-cache))))
+
+
+;;;; Process buffer entry point
+
+(defun et--process-buffer-cached ()
+  "Like `et--process-buffer' but with on-disk caching for the buffer.
+
+The cache is keyed on the current buffer's file name (nil for a buffer
+with no file). Unlike `et--process-buffer', this brings its own result
+boundary and returns the resulting `et-result', so it can be called on
+its own (e.g. for testing)."
+  (let ((et--cache-source (buffer-file-name)))
+    (unwind-protect
+        (et-result-boundary (et--process-buffer))
+      (et-flush-cache))))
+
+
+;;;; Advice installation
+
+(advice-add 'et-parse-type :before #'et--cache-capture-type)
+(advice-add 'et--check :before #'et--cache-capture-function)
+(advice-add 'et--check :around #'et--check-cached)
+
+
+;;; ============================================================
 ;;; Provide
 
-(provide 'et)
+(provide 'et-cache)
 
 
-;;; et.el ends here
+;;; et-cache.el ends here

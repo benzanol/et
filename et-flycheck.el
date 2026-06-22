@@ -70,8 +70,10 @@
             "--eval" (eval (format "(add-to-list 'load-path %S)" et-source-directory))
             "--eval" "(setq load-prefer-newer t)"
             "-l" "et-types"
-            "-f" "et--flycheck-check-file"
-            (eval (et-flycheck--temp-file)))
+            "-l" "et-cache"
+            "--eval" (eval (format "(et--flycheck-check-file-cached %S %S)"
+                                   (et-flycheck--temp-file)
+                                   (buffer-file-name))))
   :error-patterns
   ((error line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": error: " (message) line-end)
    (warning line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": warning: " (message) line-end)
