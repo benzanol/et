@@ -352,26 +352,52 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
          (print-length nil))
     (secure-hash 'md5 (prin1-to-string (nreverse (et--hashing-state-acc state))))))
 
-(defun et-hash-type (type)
-  "Hash TYPE into a purely structural digest.
+(cl-defstruct et-hash
+  "The result of hashing a list of items.
 
-Return (HASH VARS SCOPED), where HASH is a string, VARS is the list of
-`et-var's encountered (in the order their indices were assigned), and
-SCOPED is the list of `Scoped' datatype arg-tuples encountered.  VARS and
-SCOPED let the caller restore the ephemeral objects of a cached result."
+VALUE is the digest string. VARS and SCOPED are the `et-var's and
+`Scoped' datatype arg-tuples encountered (in the order their indices
+were assigned), which let a caller restore the ephemeral objects of a
+cached result."
+  (value nil :et String)
+  (vars nil :et List<*et-var>)
+  (scoped nil :et List<Any>))
+
+(defun et-hash-items (items)
+  "Hash ITEMS into a structural `et-hash'.
+
+Each item must be an `et-type', `et-matcher', `et-repr', or an atom;
+anything else signals an error. Items are hashed in order into a single
+digest, each tagged by its kind so that, e.g., a type never collides
+with an atom of the same shape."
   (let ((state (et--make-hashing-state)))
-    (et--hash-type state type nil)
-    (list (et--hash-finalize state)
-          (et--hashing-state-vars state)
-          (et--hashing-state-scoped state))))
+    (dolist (item items)
+      (cond
+       ((et-type-p item)
+        (et--hash-push state 'type)
+        (et--hash-type state item nil))
+       ((et-matcher-p item)
+        (et--hash-push state 'matcher)
+        (et--hash-matcher state item nil))
+       ((et-repr-p item)
+        (et--hash-push state 'repr)
+        (et--hash-repr state item nil))
+       ((atom item)
+        (et--hash-push state 'atom)
+        (et--hash-push state item))
+       (t (error "Cannot hash item: %s" item))))
+    (make-et-hash
+     :value (et--hash-finalize state)
+     :vars (et--hashing-state-vars state)
+     :scoped (et--hashing-state-scoped state))))
 
 
 ;;;; Tests
 
 (defun et-same-hash? (t1 &rest rest)
-  (cl-loop with t1-hash = (car (et-hash-type t1))
+  (cl-loop with t1-hash = (et-hash-value (et-hash-items (list t1)))
            for type in rest
-           always (equal t1-hash (car (et-hash-type type)))))
+           always (equal t1-hash (et-hash-value (et-hash-items (list type))))))
 
 (et-test
  ;; Basic comparisons
