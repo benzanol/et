@@ -366,10 +366,10 @@ cached result."
 (defun et-hash-items (items)
   "Hash ITEMS into a structural `et-hash'.
 
-Each item must be an `et-type', `et-matcher', `et-repr', or an atom;
-anything else signals an error. Items are hashed in order into a single
-digest, each tagged by its kind so that, e.g., a type never collides
-with an atom of the same shape."
+Each item must be an `et-type', `et-matcher', `et-repr', or a lisp
+object; anything else signals an error. Items are hashed in order into a
+single digest, each tagged by its kind so that, e.g., a type never
+collides with an atom of the same shape."
   (let ((state (et--make-hashing-state)))
     (dolist (item items)
       (cond
@@ -382,8 +382,8 @@ with an atom of the same shape."
        ((et-repr-p item)
         (et--hash-push state 'repr)
         (et--hash-repr state item nil))
-       ((atom item)
-        (et--hash-push state 'atom)
+       ((or (numberp item) (stringp item) (symbolp item) (consp item))
+        (et--hash-push state 'object)
         (et--hash-push state item))
        (t (error "Cannot hash item: %s" item))))
     (make-et-hash
