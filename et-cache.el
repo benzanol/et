@@ -134,6 +134,7 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 ;; first, extended with `cons') rather than living on the state: a
 ;; recursive alias hashes its index in the stack instead of looping.
 
+
 ;;;; State
 
 (cl-defstruct (et--hashing-state (:constructor et--make-hashing-state))
@@ -347,7 +348,9 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
 
 (defun et--hash-finalize (state)
   "Digest STATE's accumulated values into a string."
-  (secure-hash 'md5 (prin1-to-string (nreverse (et--hashing-state-acc state)))))
+  (let* ((print-level nil)
+         (print-length nil))
+    (secure-hash 'md5 (prin1-to-string (nreverse (et--hashing-state-acc state))))))
 
 (defun et-hash-type (type)
   "Hash TYPE into a purely structural digest.
@@ -361,6 +364,67 @@ SCOPED let the caller restore the ephemeral objects of a cached result."
     (list (et--hash-finalize state)
           (et--hashing-state-vars state)
           (et--hashing-state-scoped state))))
+
+
+;;;; Tests
+
+(defun et-same-hash? (t1 &rest rest)
+  (cl-loop with t1-hash = (car (et-hash-type t1))
+           for type in rest
+           always (equal t1-hash (car (et-hash-type type)))))
+
+(et-test
+ ;; Basic comparisons
+ (not (et-same-hash? (et ConsR 1 2) (et ConsR 1 2)))
+ (not (et-same-hash? (et ConsR 1 2) (et ConsR 1 3)))
+ (not (et-same-hash? (et ConsR 1 2) (et ConsW 1 2)))
+
+ ;; Variable binds
+ (not (et-same-hash? (et ConsR 1 2) (et ConsR 1&{$a::Number} 2)))
+ (et-same-hash? (et ConsR 1&{$a::Number} 2) (et ConsR 1&{$a::Number} 2))
+ (et-same-hash? (et ConsR 1&{$b::Number} 2) (et ConsR 1&{$a::Number} 2))
+ (et-same-hash? (et ConsR 1&{$a::3} 2&{$b::4}) (et ConsR 1&{$a::3} 2&{$b::4}))
+ ;; Which variable is which doesn't matter
+ (et-same-hash? (et ConsR 1&{$a::3} 2&{$b::4}) (et ConsR 1&{$b::3} 2&{$a::4}))
+ ;; What the variable is narrowed to matters
+ (not (et-same-hash? (et ConsR 1&{$a::3} 2) (et ConsR 1&{$a::4} 2)))
+ ;; Relative variable order matters
+ (et-same-hash? (et Tuple 1&{$a::1} 2&{$b::2} 3&{$b::2})
+                (et Tuple 1&{$b::1} 2&{$a::2} 3&{$a::2}))
+ (not (et-same-hash? (et Tuple 1&{$a::1} 2&{$a::2} 3&{$b::2})
+                     (et Tuple 1&{$b::1} 2&{$a::2} 3&{$a::2})))
+
+ ;; Same but for typeofs
+ (not (et-same-hash? (et ConsR 1 2) (et ConsR 1&{::$a} 2)))
+ (et-same-hash? (et ConsR 1&{::$a} 2) (et ConsR 1&{::$b} 2))
+ (not (et-same-hash? (et ConsR 1&{$a::Any} 2) (et ConsR 1&{::$b} 2)))
+ (et-same-hash? (et ConsR 1&{::$a} 2&{::$b}) (et ConsR 1&{::$b} 2&{::$a}))
+ (et-same-hash? (et Tuple 1&{::$a} 2&{::$b} 3&{::$b})
+                (et Tuple 1&{::$b} 2&{::$a} 3&{::$a}))
+ (not (et-same-hash? (et Tuple 1&{::$a} 2&{::$a} 3&{::$b})
+                     (et Tuple 1&{::$b} 2&{::$a} 3&{::$a})))
+
+ ;; Structural alias equality and circular aliases
+ (progn
+   (et--process-exprs
+    '((et-declare
+       (@alias ConsR2 [L R] (ConsFull L Never R Never))
+       (@alias CircA [] (ConsR CircB Integer))
+       (@alias CircB [] (ConsR CircA Integer))
+       (@alias Circ2A [] (ConsR2 Circ2B Integer))
+       (@alias Circ2B [] (ConsR2 Circ2A Integer))
+       (@alias CircSolo [] (ConsR CircSolo Integer))
+
+       (@alias Circ3A [] (ConsR Circ3B Integer))
+       (@alias Circ3B [] (ConsR Circ3A Number)))))
+
+   (and
+    (et-same-hash? (et ConsR 1 2) (et ConsR2 1 2))
+    (not (et-same-hash? (et ConsR 1 2) (et ConsR2 1 3)))
+
+    (et-same-hash? (et CircA) (et CircB) (et Circ2A) (et Circ2B))
+    (not (et-same-hash? (et CircA) (et CircSolo)))
+    (not (et-same-hash? (et Circ3A) (et Circ3B))))))
 
 
 ;;; ============================================================
@@ -450,3 +514,12 @@ SCOPED let the caller restore the ephemeral objects of a cached result."
 (defun et-refresh-cache ()
   (interactive)
   (setq et-cache (et--load-cache)))
+
+
+;;; ============================================================
+;;; Provide
+
+(provide 'et)
+
+
+;;; et.el ends here
