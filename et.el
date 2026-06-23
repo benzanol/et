@@ -1287,10 +1287,10 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (cl-defstruct et-repr
   "A general representation for both types and matchers."
   (target nil :et-generics [(<= T EtTarget)] :et T)
-  ;; (dnf nil :et (and (extends? @TYPE T EtTRDnf Never)
-  ;;                   (extends? @MATCHER T EtMRDnf Never)
-  ;;                   (extends? @BOTH T EtBRDnf Never)))
-  (dnf nil :et EtEitherDnf)
+  (dnf nil :et (noinfer
+                (or (extends? @TYPE T EtTRDnf Never)
+                    (extends? @MATCHER T EtMRDnf Never)
+                    (extends? @BOTH T EtBRDnf Never))))
   (label nil :et EtLabel))
 
 (defun et-make-mr (dnf &optional label)
@@ -1311,7 +1311,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
  (@alias EtBRFactor
          (or (TupleStar @S:DT EtDatatypeName List<Any>)
              (TupleStar @S:ALIAS EtAliasName List<*et-type>)
-             (Tuple @S:GENERIC EtGeneric)))
+             (Tuple @S:GENERIC EtGeneric)
+             (Tuple @S:NOINFER EtTR)))
  (@alias EtTypeOnlyFactor
          (or (Tuple @S:TYPE *et-type) ; Used for expanding type aliases
              (Tuple @S:BIND Var EtTR)
@@ -1322,8 +1323,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
              (Tuple @S:EXTENDS EtTR EtTR EtTR EtTR)
              (TupleStar @S:EVAL Function<List<*et-type>~*et-type> List<EtTR>)))
  (@alias EtMatcherOnlyFactor
-         (or (Tuple @S:SET EtMR *et-type)
-             (Tuple @S:NOINFER EtTR)))
+         (or (Tuple @S:SET EtMR *et-type)))
  (@alias EtTRFactor (or EtBRFactor EtTypeOnlyFactor))
  (@alias EtMRFactor (or EtBRFactor EtMatcherOnlyFactor))
  (@alias EtEitherFactor (or EtBRFactor EtTypeOnlyFactor EtMatcherOnlyFactor))
@@ -1357,6 +1357,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 ;; \(`S:GENERIC' VAR) - In matchers, this compiles to a matcher generic. In
 ;;   types, you must provide replacements for each generic when parsing the
 ;;   repr to a type.
+;; \(`S:NOINFER' TYPE-REPR)
 ;;
 ;; Types only:
 ;; \(`S:TYPE' TYPE) - an already compiled type
@@ -1370,7 +1371,6 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 ;;
 ;; Matchers only:
 ;; \(`S:SET' MATCHER TYPE)
-;; \(`S:NOINFER' TYPE-REPR)
 
 
 ;;;; Parsing
@@ -1864,6 +1864,7 @@ which are invalid for types."
 
 (et--define-repr-segment S:NOINFER noinfer (repr)
   :parse (list (et-parse-repr repr et--parsing-generics 'TYPE))
+  :to-type (et--totype-sub repr)
   :print (format "{noinfer %s}" (et-repr-to-string repr)))
 
 (et--define-repr-segment S:DT dt (name &rest args)

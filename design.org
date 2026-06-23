@@ -70,7 +70,7 @@ Each clause is a sequence of match factors, where all factors have to match for 
 C_M^{a^\ast} := (F_M^{a^\ast})^\ast
 \end{align*}
 \begin{align*}
-F_M^{a_1,...,a_n} = \operatorname{datatype} D_{M^{a_1,...,a_n}} \mid \operatorname{alias} A_{M^{a_1,...,a_n}} \mid \operatorname{generic} a_i \mid \operatorname{set} (M^{a_1,...,a_n},t)
+F_M^{a_1,...,a_n} = \operatorname{datatype} D_{M^{a_1,...,a_n}} \mid \operatorname{alias} A_{M^{a_1,...,a_n}} \mid \operatorname{generic} a_i \mid \operatorname{set} (M^{a_1,...,a_n},t) \mid \operatorname{noinfer} T
 \end{align*}
 The function $\operatorname{M-expand-aliases} : M^{a^\ast} \rightarrow M'^{a^\ast}$ will recursively expand all /root-level/ aliases, where $M'^{a^\ast} = C_M'^{a^\ast}$, $C_M'^{a^\ast} = (F_M'^{a^\ast})^\ast$, and $F_M'^{a^\ast} = \operatorname{datatype} D_{M^{a^\ast}} \mid \operatorname{var} a_i \mid \operatorname{set} (a_i,t)$. Note that the subscript of $D$ is still the standard (not prime) $M^{a^\ast}$, signifying that expanding does not expand the nested aliases. This allows for expanding indirectly recursive types such as $\operatorname{List}$.
 Additionally, in both $\operatorname{sub1}$ and $\operatorname{sup1}$, we will store a scoped mapping of all nested subtypes/supertypes currently being evaluated. If we recursively encounter the same subtype/supertype check, it must be because of an indirectly recursive alias. Thus, whatever constraints are required to satisfy the check will be returned by the parent call, so the child (duplicate) call can safely return an empty list of constraints.
@@ -80,6 +80,9 @@ There are three types of matching: In subtype matching, we try to find generics 
 ** match-constraints
 Matching a types against a match factor results in a list of constraints for our generics, where each constraint looks like:
 $Q_{a_1,...,a_n} := \operatorname{Q_\emptyset} \mid \operatorname{Q_{=}} a_i \, T \mid \operatorname{Q_{\le}} a_i \, T \mid \operatorname{Q_{\ge}} a_i \, T$
+
+Noinfers can also lead to type requirements, where one type must be a sub/super type of a particular type defined in the matcher.
+$T_{a_1,...,a_n} := (R_{\le,\ge}) \, T_{(a_1,...,a_n)}, \, T$
 
 ** Converting constraints to a type
 Once we have a collection of constraints ${q_{a_1,...,a_n}}^{\ast} \in {Q_{a_1,...,a_n}}^{\ast}$, we need to determine whether a solution is possible.
@@ -126,6 +129,7 @@ using
 &= \begin{cases} 
 \left\{ \operatorname{Q_{\ge}} a_i, c_T \text{ as type} \right\} & f= \operatorname{generic} a_i \\
 \operatorname{sub1}(m,t) & f= \operatorname{set} (m,t) \\
+\left\{ \operatorname{R_{\ge}} r, c_T \text{ as type} \right\} & f = \operatorname{noinfer} r \\
 \left\{ \operatorname{Q_{\emptyset}} \right\} & f= \operatorname{datatype} d \text{ and } c_T \text{ is alias} \text{ (defer to 2.2)} \\
 \operatorname{sub4}(d, c_T) & f= \operatorname{datatype} d_M \text{ and } c_T = \operatorname{datatype} d_T \\
 \left\{ \operatorname{Q_\emptyset} \right\} & f= \operatorname{datatype} d \text{ otherwise} \\
@@ -171,6 +175,7 @@ using
 &= \begin{cases} 
 \left\{ \operatorname{Q_{\le}} a_i, c_T \text{ as type} \right\} & f = \operatorname{generic} a_i \\
 \operatorname{super1}(m,t) & f = \operatorname{set} (m,t) \\
+\left\{ \operatorname{R_{\le}} r, c_T \text{ as type} \right\} & f = \operatorname{noinfer} r \\
 \operatorname{sup1}(d \text{ as } M, \operatorname{expand-alias} a_T) & f = \operatorname{datatype} d \text{ and } c_T = \operatorname{alias} a_T \\
 \operatorname{sub4}(d_M, d_T) & f = \operatorname{datatype} d_M \text{ and } c_T = \operatorname{datatype} d_T \\
 \left\{ \operatorname{Q_\emptyset} \right\} & f = \operatorname{datatype} d \text{ otherwise} \\
