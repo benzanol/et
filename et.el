@@ -950,6 +950,7 @@ FUNC is called with one argument, the current argument"
 
 Each of CASES should be an instance of `et-type-case', or alternatively
 a valid `et-type-case-value'."
+  (declare (et (cases ListR<*et-type-case>) (@return *et-type)))
   (cl-loop for c in cases
            collect (if (et-type-case-p c) c
                      ;; Checking is done inside of `make-et-type'
@@ -1021,6 +1022,7 @@ DNF is the struct representing the matcher."
                (dolist (arg args) (make-et-matcher :generics generics :repr arg)))
               (`(S:GENERIC ,(pred genericp)))
               (`(S:SET ,_ ,(pred et-type-p)))
+              (`(S:NOINFER ,(pred et-repr-p)))
               (_ (error "Invalid match factor: %s" factor))))))))
 
   matcher)
@@ -1082,7 +1084,7 @@ Used by `et--stop-recursion', with ELEM=(`sub'|`super' M-REPR TYPE).
 Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (et-declare
- (@alias EtMatchResult *et-match-result<List<EtTypeConstraint>>))
+ (@alias EtMatchResult *et-match-result<List<EtMatchConstraint>>))
 
 (defun et-sub-constraints (matcher type)
   "Entrypoint for calculating constraints."
@@ -1185,6 +1187,9 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
     (`(S:SET ,mr ,type)
      (funcall (if is-super #'et--super-constraints-0 #'et--sub-constraints-0)
               (make-et-matcher :repr mr :generics generics) type))
+    (`(S:NOINFER ,tr)
+     (let* ((req (list (if is-super 'R:LEQ 'R:GEQ) tr (et-type case))))
+       (make-et-match-result :success t :value (list req))))
     (`(S:DT ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
        ((and alias (pred et-alias-p))
@@ -1299,7 +1304,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
  (@alias EtTypeConstraint
          (Tuple (or @Q:EQ @Q:GEQ @Q:LEQ) EtGeneric *et-type))
  (@alias EtNoinferConstraint
-         (Tuple (or @T:EQ @T:GEQ @T:LEQ) *et-repr<@TYPE> *et-type))
+         (Tuple (or @R:LEQ @R:GEQ) *et-repr<@TYPE> *et-type))
  (@alias EtMatchConstraint
          (or EtTypeConstraint EtNoinferConstraint))
 
@@ -1317,7 +1322,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
              (Tuple @S:EXTENDS EtTR EtTR EtTR EtTR)
              (TupleStar @S:EVAL Function<List<*et-type>~*et-type> List<EtTR>)))
  (@alias EtMatcherOnlyFactor
-         (or (Tuple @S:SET EtMR *et-type)))
+         (or (Tuple @S:SET EtMR *et-type)
+             (Tuple @S:NOINFER EtTR)))
  (@alias EtTRFactor (or EtBRFactor EtTypeOnlyFactor))
  (@alias EtMRFactor (or EtBRFactor EtMatcherOnlyFactor))
  (@alias EtEitherFactor (or EtBRFactor EtTypeOnlyFactor EtMatcherOnlyFactor))
@@ -1364,6 +1370,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 ;;
 ;; Matchers only:
 ;; \(`S:SET' MATCHER TYPE)
+;; \(`S:NOINFER' TYPE-REPR)
 
 
 ;;;; Parsing
@@ -1433,7 +1440,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
           (unless (get (car handler) 'et-repr-to-type)
             (error "Invalid type repr: %s" name)))
         (when (memq et--parsing-target '(MATCHER BOTH))
-          (unless (memq (car handler) '(S:DT S:ALIAS S:GENERIC S:SET))
+          (unless (memq (car handler) '(S:DT S:ALIAS S:GENERIC S:SET S:NOINFER))
             (error "Invalid matcher repr: %s" name)))
         ;; Base case: wrap a factor in a list of lists
         (make-et-repr :target et--parsing-target
@@ -1639,6 +1646,8 @@ which are invalid for types."
       ;; But that means every type matcher needs a substitution function
       (`(S:SET ,matcher ,type)
        (et-q (((S:SET ,(funcall sub matcher) ,type)))))
+      ;; Don't do anything for noinfer
+      (`(S:NOINFER ,tr) (et-q (((S:NOINFER ,tr)))))
       (_ (error "Invalid matcher repr factor: %s" factor)))))
 
 (defun et--repr-substitute-generics (repr gen-repls)
@@ -1852,6 +1861,10 @@ which are invalid for types."
 (et--define-repr-segment S:SET set (dnf type)
   :parse (list (et--parse-sub dnf) (et-parse-type type))
   :print (format "{match %s to %s}" (et-repr-to-string dnf) (et-pp-type type)))
+
+(et--define-repr-segment S:NOINFER noinfer (repr)
+  :parse (list (et-parse-repr repr et--parsing-generics 'TYPE))
+  :print (format "{noinfer %s}" (et-repr-to-string repr)))
 
 (et--define-repr-segment S:DT dt (name &rest args)
   :parse (cons name (et--datatype-map-type-args name args #'et--parse-sub))
@@ -2422,27 +2435,36 @@ returning A itself is a valid approximation."
 Returns `INVALID' if impossible. This function allows the resulting
 types to be the never type."
   (declare (et (generics List<EtGeneric>)
-               (constraints List<EtTypeConstraint>)
+               (constraints List<EtMatchConstraint>)
                (@return List<*et-type>|@INVALID)))
 
   (cl-loop
    for gen in generics
    for gen-result =
-   (let ((guess
-          (cl-loop for (fact g type) in constraints
-                   when (and (eq g gen) (memq fact '(Q:EQ Q:GEQ)))
-                   collect type into types
-                   finally return (et-simplify-type (apply #'et--or types)))))
+   (let* ((guess
+           (cl-loop for (fact g type) in constraints
+                    when (and (eq g gen) (memq fact '(Q:EQ Q:GEQ)))
+                    collect type into types
+                    finally return (et-simplify-type (apply #'et--or types)))))
      (if (cl-loop for (fact g type) in constraints
                   always
                   (or (not (eq g gen))
                       (not (memq fact '(Q:EQ Q:LEQ)))
                       (et-subtype? guess type)))
          guess 'INVALID))
-   ;; Unlike biggest, the never type actually represents a valid possible answer
    when (equal gen-result 'INVALID)
    do (cl-return 'INVALID)
-   collect gen-result))
+
+   collect (cons gen gen-result) into gen-repls
+
+   finally return
+   (cl-loop for (fact tr type) in constraints
+            when (memq fact '(R:LEQ R:GEQ))
+            do
+            (let* ((replaced (et-repr-to-type tr gen-repls))
+                   (valid? (if (eq fact 'R:LEQ) (et-subtype? replaced type) (et-subtype? type replaced))))
+              (unless valid? (cl-return 'INVALID)))
+            finally return (mapcar #'cdr gen-repls))))
 
 
 ;;;; Binds utils
