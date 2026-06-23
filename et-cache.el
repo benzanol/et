@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'et-check)
+(require 'subr-x)
 
 
 ;;; ============================================================
@@ -550,16 +551,26 @@ with ephemeral variables and scoped datatypes replaced by placeholders."
              ".eld")
      et-cache-directory)))
 
+(defun et--read-cache-file (file)
+  "Read an `et-cache' from FILE, or nil if it is absent or unreadable."
+  (and (file-exists-p file)
+       (ignore-errors
+         (with-temp-buffer
+           (insert-file-contents file)
+           (let ((obj (read (current-buffer))))
+             (and (et-cache-p obj) obj))))))
+
+(defun et--write-cache-file (cache file)
+  "Write CACHE to FILE, creating its parent directory if needed."
+  (make-directory (file-name-directory file) t)
+  (with-temp-file file
+    (let ((print-level nil) (print-length nil) (print-circle t))
+      (prin1 cache (current-buffer)))))
+
 (defun et--load-cache (source)
   "Read SOURCE's `et-cache' from disk, or return a fresh empty one."
-  (let ((file (et--cache-file-for source)))
-    (or (and (file-exists-p file)
-             (ignore-errors
-               (with-temp-buffer
-                 (insert-file-contents file)
-                 (let ((obj (read (current-buffer))))
-                   (and (et-cache-p obj) obj)))))
-        (make-et-cache))))
+  (or (et--read-cache-file (et--cache-file-for source))
+      (make-et-cache)))
 
 (defun et--current-cache ()
   "Return the `et-cache' for `et--cache-source', loading it if needed."
@@ -571,12 +582,8 @@ with ephemeral variables and scoped datatypes replaced by placeholders."
 SOURCE defaults to `et--cache-source'. Does nothing if no cache was
 loaded for SOURCE during this session."
   (setq source (or source et--cache-source))
-  (when-let* ((cache (gethash source et--cache-table))
-              (file (et--cache-file-for source)))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (let ((print-level nil) (print-length nil) (print-circle t))
-        (prin1 cache (current-buffer))))))
+  (when-let* ((cache (gethash source et--cache-table)))
+    (et--write-cache-file cache (et--cache-file-for source))))
 
 (defun et-clear-source-cache (source)
   "Delete SOURCE's cached results, both in memory and on disk.
@@ -597,6 +604,21 @@ Interactively, clears the cache for the current buffer's file."
       (delete-file file)))
   (when (file-exists-p et-cache-nonfile-file)
     (delete-file et-cache-nonfile-file)))
+
+
+;;;; Clearing the defun cache
+
+(defun et-clear-defun-cache (source &optional all-loaded)
+  "Clear cached defun check results, leaving the call cache intact.
+Clear SOURCE's defun cache, or every loaded source's when ALL-LOADED is
+non-nil, then write the affected caches back to disk.  Only loaded
+caches (those in `et--cache-table') are touched.  Called interactively,
+clears every loaded source's defun cache."
+  (interactive (list nil t))
+  (dolist (s (if all-loaded (hash-table-keys et--cache-table) (list source)))
+    (when-let* ((cache (gethash s et--cache-table)))
+      (clrhash (et-cache-defun-cache cache))
+      (et--write-cache-file cache (et--cache-file-for s)))))
 
 
 ;;;; Error guard
