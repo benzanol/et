@@ -780,7 +780,7 @@ OUTPUT-REPR each converted to concrete types."
                               (and Nil (bindsof (subtract T (Struct ,name ,@never-args))))))
                     '(T) 'TYPE)))
              (put predicate 'et-function-type
-                  (et-dt 'DynFunction (et-parse-matcher 'Any [T]) output-repr))))
+                  (et-dt 'DynFunction (et-parse-matcher 'T [T]) output-repr))))
 
          ;; --- Accessors ---
          (dolist (slot slots)
