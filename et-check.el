@@ -882,11 +882,13 @@ Returns a plist with :declare to set the variable type."
     (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
 
 (et-define-pcase-checker defvar `(,(and (pred symbolp) name) . ,rest)
-  (when-let* ((declared-type (get name 'et-variable-type))
-              (value-type (or (when (car rest) (et-checker-sub 2)) (et Nil))))
+  (if-let* ((declared-type (get name 'et-variable-type))
+            (value-type (or (when (car rest) (et-checker-sub 2)) (et Nil))))
+      (unless (et-subtype? value-type declared-type)
+        (et-err 2 "Expected %s, found %s" declared-type value-type))
 
-    (unless (et-subtype? value-type declared-type)
-      (et-err 2 "Expected %s, found %s" declared-type value-type)))
+    ;; Otherwise, declare it as any
+    (put name 'et-variable-type (et Any)))
 
   (et-literal name))
 
