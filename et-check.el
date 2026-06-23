@@ -119,7 +119,7 @@ the final value of `et--checker-expr'.
 
 If FUNC is a symbol with the `et-function-type' property set to an
 `et-type', then the arguments to the function will first be checked
-individually, and then will be passed to `et--funcall' as a list to
+individually, and then will be passed to `et-funcall' as a list to
 determine the output type."
   (let* ((et--checker-expr expr))
     (et-failed-boundary
@@ -143,7 +143,7 @@ determine the output type."
         (let* ((arg-types (cl-loop for type in (et-checker-remaining 1) for pos upfrom 1
                                    collect (et-copy-with type :label (list :position pos))))
                (args-type (et--tuple 'Cons arg-types))
-               (output-result (et--funcall func-type args-type)))
+               (output-result (et-funcall func-type args-type)))
           (cond
            ((et-match-result-success output-result) (et-match-result-value output-result))
            ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
@@ -229,17 +229,16 @@ determine the output type."
   `(et-result-boundary
     (let* ((type (et ,type-spec))
            (params (cl-loop for a in ',arg-types collect (list :type a)))
-           (result (et--check (cons ',func params))))
-      (or (equal type (et-result-type result))
-          (et-err 0 "Expected %s, got %s" type (et-result-type result))))))
+           (ret-type (et--check (cons ',func params))))
+      (or (equal type ret-type)
+          (et-err 0 "Expected %s, got %s" type ret-type)))))
 
 (defmacro et-assert-call-errors (func &rest arg-types)
   `(et-result-boundary
     (let* ((params (cl-loop for a in ',arg-types collect (list :type a)))
-           (result (et--check (cons ',func params))))
-      (unless (et-result-diagnostics result)
-        (error "Succeeded with %s" (cl-prin1-to-string (et-result-type result))))
-      t)))
+           (result (et-result-boundary (et--check (cons ',func params)))))
+      (unless (et-result-failed result)
+        (error "Succeeded with %s" (cl-prin1-to-string (et-result-type result)))))))
 
 (et-test
  (et-assert-resolve Integer 1)
@@ -412,12 +411,12 @@ PATH is the path to the subexpression."
 
 (defun et--checker-infer (type gens constraints matcher-spec output-spec)
   (let* ((result
-          (et--infer (make-et-matcher
-                      :generics gens
-                      :constraints constraints
-                      :repr (et-parse-repr matcher-spec gens 'MATCHER))
-                     type
-                     (et-parse-repr output-spec gens 'TYPE))))
+          (et-infer (make-et-matcher
+                     :generics gens
+                     :constraints constraints
+                     :repr (et-parse-repr matcher-spec gens 'MATCHER))
+                    type
+                    (et-parse-repr output-spec gens 'TYPE))))
     (when (et-match-result-success result)
       (et-match-result-value result))))
 
@@ -427,7 +426,7 @@ PATH is the path to the subexpression."
 (defun et-checker-funcall (func-type arglist-type)
   (declare (et (func-type *et-type) (arglist-type *et-type)
                (@return *et-type)))
-  (let* ((result (et--funcall func-type arglist-type)))
+  (let* ((result (et-funcall func-type arglist-type)))
     (when (et-match-result-success result)
       (et-match-result-value result))))
 

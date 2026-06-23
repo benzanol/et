@@ -548,6 +548,9 @@
 (et-define-type-checker (assq assoc rassq rassoc) [C] (Args Any ListR<C&Cons>) C|Nil)
 (et-define-type-checker alist-get [V] (Args Any ListR<ConsR<Any~V>>) V|Nil)
 
+(et-typecheck-call alist-get Integer ConsR<ConsR<1~2>~ConsR<3~Nil>>)
+
+
 (et-test
  (et-assert-call-errors alist-get Integer ConsR<ConsR<1~2>~ConsR<3~Nil>>)
  (et-assert-call 2|Nil alist-get Integer AList<1~2>)
@@ -582,7 +585,7 @@
 (et-test
  (equal (list (et Number))
         (et-match-result-value
-         (et--sub-match
+         (et-sub-match
           (et-matcher [T] List<T>)
           (et-result-value (et-typecheck-call append List<1> List<Integer> List<Number>)))))
 
@@ -593,15 +596,15 @@
  ;; adding Nil to the end make the check valid, as is shown in the
  ;; following tests
  (equal 'INVALID
-        (et--sub-match
+        (et-sub-match
          (et-matcher [T] List<T>)
          (et-typecheck-call append List<1> List<Number> List<Integer>)))
  (equal (list (et Number))
-        (et--sub-match
+        (et-sub-match
          (et-matcher [T] List<T>)
          (et-typecheck-call append List<1> List<Number> List<Integer> Nil)))
  (equal (list (et Number))
-        (et--sub-match
+        (et-sub-match
          (et-matcher [T] ListR<T>)
          (et-typecheck-call append List<1> List<Integer> List<Number> List<1>))))
 

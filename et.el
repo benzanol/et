@@ -629,8 +629,8 @@ language. See `et--cons-is-plist'."
        (if-let* ((func-input (car super-args))
                  (func-output (cadr super-args))
                  ((and (et-type-p func-input) (et-type-p func-output)))
-                 (dyn-result (et--funcall (apply #'et-dt 'DynFunction sub-args)
-                                          (car super-args)))
+                 (dyn-result (et-funcall (apply #'et-dt 'DynFunction sub-args)
+                                         (car super-args)))
                  ((et-match-result-success dyn-result))
                  ((et-subtype? (et-match-result-value dyn-result) func-output)))
            (valid-if t)
@@ -1039,9 +1039,9 @@ DNF is the struct representing the matcher."
 
 ;;;; Iso match
 
-(defun et-iso-match (matcher type)
+(defun et--iso-constraints (matcher type)
   (et--merge-match-results
-   (et--sub-constraints matcher type)
+   (et--sub-constraints-0 matcher type)
    (et--super-constraints matcher type)))
 
 
@@ -1065,6 +1065,14 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (et-declare
  (@alias EtMatchResult *et-match-result<List<EtTypeConstraint>>))
 
+(defun et-sub-constraints (matcher type)
+  "Entrypoint for calculating constraints."
+  (declare (et (matcher *et-matcher) (type *et-type)
+               (@return EtMatchResult)))
+
+  (let* ((et--constraints-stack nil))
+    (et--sub-constraints-0 matcher type)))
+
 (defun et--failed-match-result ()
   (make-et-match-result
    :success nil
@@ -1082,7 +1090,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
             :success t
             :value (delete-dups constraints))))
 
-(defun et--sub-constraints (matcher type)
+(defun et--sub-constraints-0 (matcher type)
   (declare (et (matcher *et-matcher) (type *et-type)
                (@return EtMatchResult)))
 
@@ -1133,7 +1141,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
            finally return
            (let* ((val (et-type-case-value case)))
              (if (et-alias-p val)
-                 (et--sub-constraints
+                 (et--sub-constraints-0
                   matcher
                   (cl-loop with exp = (et-alias-expand val)
                            for c in (et-type-cases exp)
@@ -1182,18 +1190,18 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
         ;; subtype matching (super=MATCHER > sub=TYPE)
         (et--datatype-constraints
          t-name t-args m-name m-args
-         (lambda (type ms) (et--sub-constraints (make-matcher ms) type))
+         (lambda (type ms) (et--sub-constraints-0 (make-matcher ms) type))
          (lambda (type ms) (et--super-constraints (make-matcher ms) type))
-         (lambda (type ms) (et-iso-match (make-matcher ms) type))
-         (lambda (literal ms) (et--sub-constraints (make-matcher ms) (et-literal literal)))
+         (lambda (type ms) (et--iso-constraints (make-matcher ms) type))
+         (lambda (literal ms) (et--sub-constraints-0 (make-matcher ms) (et-literal literal)))
          ;; The synthesized super (PList side, m-args) is a matcher repr
          #'et--cons-plist-super-matcher)
       ;; supertype matching (sub=MATCHER < super=TYPE)
       (et--datatype-constraints
        m-name m-args t-name t-args
        (lambda (ms type) (et--super-constraints (make-matcher ms) type))
-       (lambda (ms type) (et--sub-constraints (make-matcher ms) type))
-       (lambda (ms type) (et-iso-match (make-matcher ms) type))
+       (lambda (ms type) (et--sub-constraints-0 (make-matcher ms) type))
+       (lambda (ms type) (et--iso-constraints (make-matcher ms) type))
        (lambda (literal type)
          (let ((literal-m (make-matcher (et-make-mr (et-q (((S:DT Literal ,literal))))))))
            (et--super-constraints literal-m type)))
@@ -1788,8 +1796,8 @@ which are invalid for types."
           (et--parse-sub yes generics)
           (et--parse-sub no)))
   :to-type
-  (let* ((result (et--infer matcher (et--totype-sub type) yes
-                            et--totype-gen-repls)))
+  (let* ((result (et-infer matcher (et--totype-sub type) yes
+                           et--totype-gen-repls)))
     (if (et-match-result-success result) (et-match-result-value result)
       (et--totype-sub no)))
   :print
@@ -2026,10 +2034,10 @@ same as [T (<= T Number)]."
             (et--datatype-constraints
              (et-datatype-name sub) (et-datatype-args sub)
              (et-datatype-name super) (et-datatype-args super)
-             (lambda (a b) (valid-if (et-subtype? a b)))
-             (lambda (a b) (valid-if (et-subtype? b a)))
-             (lambda (a b) (valid-if (and (et-subtype? a b) (et-subtype? b a))))
-             (lambda (literal b) (valid-if (and (et-subtype? (et-literal literal) b))))
+             (lambda (a b) (valid-if (et--subtype?-0 a b)))
+             (lambda (a b) (valid-if (et--subtype?-0 b a)))
+             (lambda (a b) (valid-if (and (et--subtype?-0 a b) (et--subtype?-0 b a))))
+             (lambda (literal b) (valid-if (and (et--subtype?-0 (et-literal literal) b))))
              #'et--cons-plist-super-type)))
 
       (et-match-result-success result))))
@@ -2037,7 +2045,7 @@ same as [T (<= T Number)]."
 (defun et--binds-subtype? (sub-binds super-binds)
   (cl-loop for (var . super-type) in super-binds
            for sub-type = (alist-get var sub-binds)
-           always (and sub-type (et-subtype? sub-type super-type))))
+           always (and sub-type (et--subtype?-0 sub-type super-type))))
 
 (defun et--case-subtype? (sub super)
   (cl-assert (et-type-case-p sub))
@@ -2046,7 +2054,7 @@ same as [T (<= T Number)]."
   (and (cl-loop with sub-vars = (et-type-case-typeofs sub)
                 for super-var in (et-type-case-typeofs super)
                 always (memq super-var sub-vars))
-       ;; Macro expansion in `et-subtype?' means that the value should always be a datatype
+       ;; Macro expansion in `et--subtype?-0' means that the value should always be a datatype
        (et-datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
        (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))))
 
@@ -2054,9 +2062,14 @@ same as [T (<= T Number)]."
 ;; into account binds.
 
 (defvar et--subtype-stack nil
-  "Stack of calls to `et-subtype?' with the form (SUB-TYPE . SUPER-TYPE).")
+  "Stack of calls to `et--subtype?-0' with the form (SUBTYPE . SUPERTYPE).")
 
 (defun et-subtype? (sub super)
+  "Entrypoint for determining subtype."
+  (let* ((et--subtype-stack nil))
+    (et--subtype?-0 sub super)))
+
+(defun et--subtype?-0 (sub super)
   (et--verify-type sub)
   (et--verify-type super)
 
@@ -2366,11 +2379,11 @@ returning A itself is a valid approximation."
                   (cl-loop for arg in args
                            thereis (and (et-type-p arg) (et--type-contains-binds arg))))))))
 
-(defun et--sub-match (matcher type)
+(defun et-sub-match (matcher type)
   (declare (et (matcher *et-matcher) (type *et-type)
                (@return *et-match-result<List<*et-type>>)))
 
-  (let* ((result (et--sub-constraints matcher type)))
+  (let* ((result (et-sub-constraints matcher type)))
     (if (not (et-match-result-success result)) result
       ;; If matching succeeded, try to determine the optimal generic types
       (let* ((qs (append (et-match-result-value result) (et-matcher-constraints matcher)))
@@ -2378,51 +2391,11 @@ returning A itself is a valid approximation."
         (if (eq type 'INVALID) (et--failed-match-result)
           (make-et-match-result :success t :value type))))))
 
-(defun et--super-match (matcher type)
-  (declare (et (matcher *et-matcher) (type *et-type)
-               (@return *et-match-result<List<*et-type>>)))
-
-  (let* ((result (et--super-constraints matcher type)))
-    (if (not (et-match-result-success result)) result
-      ;; If matching succeeded, try to determine the optimal generic types
-      (let* ((qs (append (et-match-result-value result) (et-matcher-constraints matcher)))
-             (type (et--match-satisfy-constraints-biggest (et-matcher-generics matcher) qs)))
-        (if (eq type 'INVALID) (et--failed-match-result)
-          (make-et-match-result :success t :value type))))))
-
-(defun et--match-satisfy-constraints-biggest (generics constraints)
-  "Return a list of types for GENERICS satisfying CONSTRAINTS.
-
-Returns `INVALID' if impossible."
-  (declare (et (generics List<EtGeneric>)
-               (constraints ListR<EtTypeConstraint>)
-               (@return List<*et-type>|@INVALID)))
-
-  (cl-loop
-   for gen in generics
-   for gen-result =
-   (let ((guess
-          (cl-loop for (fact g type) in constraints
-                   when (and (eq g gen) (memq fact '(Q:EQ Q:LEQ)))
-                   collect type into types
-                   finally return (et-simplify-type (apply #'et--subsect types)))))
-     (if (cl-loop for (fact g type) in constraints
-                  always
-                  (or (not (eq g gen))
-                      (not (memq fact '(Q:EQ Q:GEQ)))
-                      (et-subtype? type guess)))
-         guess (et-never)))
-   when (equal gen-result (et-never))
-   do (cl-return 'INVALID)
-   collect gen-result))
-
 (defun et--match-satisfy-constraints-smallest (generics constraints)
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
-Returns `INVALID' if impossible.
-
-However, unlike `et--match-satisfy-constraints-biggest', this function
-allows the resulting types to be the never type."
+Returns `INVALID' if impossible. This function allows the resulting
+types to be the never type."
   (declare (et (generics List<EtGeneric>)
                (constraints List<EtTypeConstraint>)
                (@return List<*et-type>|@INVALID)))
@@ -2529,13 +2502,13 @@ allows the resulting types to be the never type."
 
 ;;;; Infer
 
-(defun et--infer (matcher type output-repr &optional extra-repls)
+(defun et-infer (matcher type output-repr &optional extra-repls)
   "Infer TYPE against MATCHER, then convert OUTPUT-REPR to a type.
 
-Specifically, this will first call `et--sub-match' on MATCHER and TYPE
+Specifically, this will first call `et-sub-match' on MATCHER and TYPE
 to determine values for the generics defined in MATCHER. Then, if this
 succeeds, it will convert OUTPUT-REPR to a type, replacing each generic
-with the value determined by `et--sub-match', as well as EXTRA-REPLS if
+with the value determined by `et-sub-match', as well as EXTRA-REPLS if
 provided.
 
 This returns an `et-match-result' in case matching fails."
@@ -2543,7 +2516,7 @@ This returns an `et-match-result' in case matching fails."
                (extra-repls AList<EtGeneric~*et-type>)
                (@return *et-match-result<*et-type>)))
 
-  (let* ((gens-result (et--sub-match matcher type)))
+  (let* ((gens-result (et-sub-match matcher type)))
     (if (not (et-match-result-success gens-result)) gens-result
 
       (cl-loop for gen in (et-matcher-generics matcher)
@@ -2559,7 +2532,7 @@ This returns an `et-match-result' in case matching fails."
 
 ;;;; Funcall
 
-(defun et--funcall (func-type arglist-type)
+(defun et-funcall (func-type arglist-type)
   "Determine the return type of calling FUNC-TYPE with ARGLIST-TYPE."
   (declare (et (func-type *et-type) (arglist-type *et-type)
                (@return *et-match-result<*et-type>)))
@@ -2577,7 +2550,7 @@ This returns an `et-match-result' in case matching fails."
                   (make-et-match-result :success t :value return-type)
                 (et--failed-match-result)))
              ((cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,output-repr)))
-              (et--infer matcher arglist-type output-repr))
+              (et-infer matcher arglist-type output-repr))
              (_ (et--failed-match-result)))
            unless (et-match-result-success result) return result
            collect (et-match-result-value result) into types
