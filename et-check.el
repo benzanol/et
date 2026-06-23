@@ -701,7 +701,7 @@ OUTPUT-REPR each converted to concrete types."
         (let* ((actual-ret (et-checker-tail (+ 2 (et-func-sig-source-pos sig))))
                (expected-ret (et-func-sig-expected-return sig)))
           (or (et-subtype? actual-ret expected-ret)
-              (et-err 0 "Expected %s, found %s" actual-ret expected-ret))))))
+              (et-err 0 "Expected %s, found %s" expected-ret actual-ret))))))
   (et-literal name))
 
 
