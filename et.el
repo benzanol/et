@@ -458,6 +458,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
              (cl-loop for (_prop _val) on args by #'cddr
                       nconc (list 'CONST 'ISO)))
      :overlap nil
+     :predicate et--literal-is-plist
      :intersect et--plist-intersect-args)
 
     ;; Struct<NAME~GENERCIC-PARAMS...>
@@ -686,6 +687,31 @@ language. See `et--cons-is-plist'."
                 finally return (apply #'et--merge-match-results results)))
 
       (_ (valid-if nil)))))
+
+
+;;;; Plist helpers
+;;;;; Literal is plist
+
+(defun et--literal-is-plist (v &rest plist-args)
+  "Predicate for a `Literal' value V being a subtype of a PList.
+
+PLIST-ARGS are the PList datatype's arguments (K1 V1 K2 V2 ...). This is
+the `:predicate' of the PList datatype, so it follows that contract: a
+nil return fails the match, a t return succeeds it, and a list of
+\(SUB-VAL . ARG) pairs requires each literal SUB-VAL to be a subtype of
+ARG (see the `Literal' case of `et--datatype-constraints').
+
+V matches when it is a plist and, for each key, its value is a subtype
+of that key's type. A key absent from V yields a nil value, so a key is
+\"optional\" exactly when its type admits nil. Extra keys in V are
+allowed, and order does not matter."
+  (when (plistp v)
+    (or (cl-loop for (prop val) on plist-args by #'cddr
+                 collect (cons (plist-get v prop) val))
+        t)))
+
+
+;;;;; Type is plist
 
 (defun et--cons-is-plist (cons-args plist-args co mk-super)
   "Constraints for ConsFull to be a subtype of PList.
@@ -1298,7 +1324,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (et-declare
  (@alias EtTarget (or @TYPE @MATCHER @BOTH))
- (@alias EtLabel (PList :field Symbol :position Number))
+ (@alias EtLabel (PList :field Symbol :position Number|Nil))
 
  (@alias EtMatchStack (List (Tuple @SUB|@SUPER EtMR *et-type)))
  (@alias EtTypeConstraint
