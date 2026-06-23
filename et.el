@@ -976,7 +976,7 @@ FUNC is called with one argument, the current argument"
 
 Each of CASES should be an instance of `et-type-case', or alternatively
 a valid `et-type-case-value'."
-  (declare (et (cases ListR<*et-type-case>) (@return *et-type)))
+  (declare (et (cases ListR<*et-type-case|*et-datatype|*et-alias>) (@return *et-type)))
   (cl-loop for c in cases
            collect (if (et-type-case-p c) c
                      ;; Checking is done inside of `make-et-type'
@@ -2498,6 +2498,7 @@ types to be the never type."
 
 (defun et--remove-type-binds (type)
   "Recursively remove bindings/typeofs from TYPE."
+  (declare (et (type *et-type) (@return *et-type)))
   (cl-assert (et-type-p type))
 
   (cl-loop for case in (et-type-cases type)
@@ -2509,15 +2510,17 @@ types to be the never type."
               ((cl-struct et-alias name args)
                (make-et-alias :name name :args (mapcar #'et--remove-type-binds args)))
               ((cl-struct et-datatype name args)
-               (let ((new-args (et--datatype-map-type-args name args #'et--remove-type-binds)))
+               (let* ((new-args (et--datatype-map-type-args name args #'et--remove-type-binds)))
                  (make-et-datatype :name name :args new-args)))
               (_ (error "Invalid case val: %s" val))))
            into cases
            finally return (make-et-type :label (et-type-label type) :cases cases)))
 
 (defun et--type-binds (type)
+  (declare (et (type *et-type) (@return AList<*et-var~*et-type>)))
+
   ;; binds is an alist of `et-var' to a list of types (which will be `et--or'ed)
-  (let ((binds-alist nil))
+  (let* ((binds-alist nil))
     (dolist (case (et-type-cases type))
       (let* ((binds (et-type-case-binds case))
              (typeofs (et-type-case-typeofs case)))
@@ -2687,7 +2690,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
                     (alias-type (cdar et--rec-transform-stack)))
                (when (not (eq alias-type et--stop-recursion-unset-marker))
                  (let* ((alias (et-type-case-value (car (et-type-cases alias-type)))))
-                   (et--define-alias (et-alias-name alias) [] no-binds :target 'TYPE)))
+                   (et--define-alias (et-alias-name alias) [] no-binds :type-only t)))
                type))))
 
 
