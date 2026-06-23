@@ -937,6 +937,11 @@ Returns a plist with :declare to set the variable type."
 (defvar et--processing-phase nil)
 (defvar et--processing-expr nil)
 
+(defvar et-run-tests t)
+
+(defvar et--checking-file nil)
+(defvar et--loaded-files nil)
+
 (defun et--process-exprs (exprs &optional no-check)
   (let* ((identified (et-result-map #'et--identify-expr exprs)))
 
@@ -956,8 +961,8 @@ Returns a plist with :declare to set the variable type."
                             for func = (plist-get plist phase)
                             when func do (et-error-boundary path (funcall func)))))))
 
-    ;; Check all root-level expressions
     (unless no-check
+      ;; Check all root-level expressions
       (cl-loop for expr in exprs
                for pos upfrom 0
                when (and (consp expr)
@@ -966,7 +971,35 @@ Returns a plist with :declare to set the variable type."
                do
                (let* ((et--processing-phase :check)
                       (et--processing-expr expr))
-                 (et-error-boundary pos (et--check expr)))))))
+                 (et-error-boundary pos (et--check expr))))
+
+      ;; Run tests
+      (when et-run-tests
+        ;; Evaluate the buffer
+        (unless (member et--checking-file et--loaded-files)
+          (push et--checking-file et--loaded-files)
+          (cl-loop for expr in (et--buffer-exprs)
+                   for pos upfrom 0
+                   do (et-error-boundary pos
+                        (et-wrap-errors "Runtime error: %s" (eval expr)))))
+
+        ;; Run the tests
+        (cl-loop
+         for expr in exprs
+         for pos upfrom 0
+         when (eq #'et-test (car expr))
+         do
+         (cl-loop for test in (cdr expr)
+                  for test-idx upfrom 1
+                  do
+                  (let* ((et--processing-phase :test)
+                         (et--processing-expr test))
+                    (et-at (list pos test-idx)
+                      (pcase (eval test)
+                        ('nil (et-warn nil "Evaluated to nil"))
+                        ((and result (pred et-result-p))
+                         (when (et-result-failed result)
+                           (et-propagate-result result))))))))))))
 
 (defun et--buffer-exprs ()
   (save-excursion
@@ -1004,8 +1037,6 @@ Returns a plist with :declare to set the variable type."
 
     (forward-comment (buffer-size))))
 
-(defvar et--checking-file nil)
-
 (defun et--flycheck-check-file ()
   "Entry point for batch-mode type checking."
   (let* ((filename (pop command-line-args-left))
@@ -1025,31 +1056,6 @@ Returns a plist with :declare to set the variable type."
                                      start-line start-col
                                      (line-number-at-pos) (1+ (current-column))
                                      severity msg path))))))))
-
-
-;;;; Testing
-
-(defvar et--loaded-files nil)
-
-(et-define-pcase-checker et-test body
-  (when et--checking-file
-    (unless (member et--checking-file et--loaded-files)
-      (push et--checking-file et--loaded-files)
-      (et-at nil ; will restore the original path on finish
-        (cl-loop for expr in (et--buffer-exprs)
-                 for pos upfrom 0
-                 do (setq et--path (list pos))
-                 do (et-error-boundary nil (et-wrap-errors "Runtime error: %s" (eval expr))))))
-
-    (cl-loop for test in body
-             for pos upfrom 1
-             do (et-at pos
-                  (pcase (eval test)
-                    ('nil (et-warn nil "Evaluated to nil"))
-                    ((and result (pred et-result-p))
-                     (when (et-result-failed result)
-                       (et-propagate-result result)))))))
-  (et Nil))
 
 
 ;;; ============================================================

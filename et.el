@@ -1277,7 +1277,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 ;;; ============================================================
 ;;; Reprs
-;;;; Documentation
+;;;; Types
 
 (cl-defstruct et-repr
   "A general representation for both types and matchers."
@@ -1299,7 +1299,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
  (@alias EtTypeConstraint
          (Tuple (or @Q:EQ @Q:GEQ @Q:LEQ) EtGeneric *et-type))
  (@alias EtNoinferConstraint
-         (Tuple (or @T:EQ @T:GEQ @T:LEQ) *et-type *et-repr<@TYPE>))
+         (Tuple (or @T:EQ @T:GEQ @T:LEQ) *et-repr<@TYPE> *et-type))
  (@alias EtMatchConstraint
          (or EtTypeConstraint EtNoinferConstraint))
 
