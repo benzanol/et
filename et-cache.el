@@ -637,16 +637,15 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 (defun et--cache-capture-type (spec &rest _)
   "Advice on `et-parse-type': record SPEC as a body type dependency."
   (et--cache-try
-    (when et--fp-active
-      (cl-pushnew spec et--fp-specs :test #'equal))))
+   (when et--fp-active
+     (cl-pushnew spec et--fp-specs :test #'equal))))
 
 (defun et--cache-capture-function (expr)
   "Advice on `et--check': record a called typed function as a dependency."
   (et--cache-try
-    (when (and et--fp-active (consp expr)
-               (symbolp (car expr)) (car expr)
-               (get (car expr) 'et-function-type))
-      (cl-pushnew (car expr) et--fp-funcs :test #'eq))))
+   (when (and et--fp-active (consp expr)
+              (symbolp (car expr)) (car expr))
+     (cl-pushnew (car expr) et--fp-funcs :test #'eq))))
 
 
 ;;;; Fingerprint computation
@@ -704,12 +703,12 @@ pass straight through to ORIG."
     ;; bail safely falls through to recompute.
     (let* ((name (cadr expr))
            (hit (et--cache-try
-                  (let* ((table (et-cache-defun-cache (et--current-cache)))
-                         (cached (gethash name table)))
-                    (when (and cached
-                               (et--defun-fingerprint-current-p
-                                name (et--cached-defun-fingerprint cached)))
-                      (list (et--cached-defun-value cached)))))))
+                 (let* ((table (et-cache-defun-cache (et--current-cache)))
+                        (cached (gethash name table)))
+                   (when (and cached
+                              (et--defun-fingerprint-current-p
+                               name (et--cached-defun-fingerprint cached)))
+                     (list (et--cached-defun-value cached)))))))
       (pcase hit
         ;; Hit: replay the cached diagnostics into the current context
         ;; (re-anchoring their relative paths) and return the value.
@@ -726,12 +725,12 @@ pass straight through to ORIG."
                 (et--fp-funcs nil)
                 (result (et-result-boundary (funcall orig expr))))
            (et--cache-try
-             (puthash name
-                      (make-et--cached-defun
-                       :fingerprint (et--compute-defun-fingerprint
-                                     name et--fp-specs et--fp-funcs)
-                       :value result)
-                      (et-cache-defun-cache (et--current-cache))))
+            (puthash name
+                     (make-et--cached-defun
+                      :fingerprint (et--compute-defun-fingerprint
+                                    name et--fp-specs et--fp-funcs)
+                      :value result)
+                     (et-cache-defun-cache (et--current-cache))))
            (et-propagate-result result)
            (et-result-value result)))))))
 
@@ -817,16 +816,16 @@ at any depth; a non-success result is confined to the root level."
   ;; store phase needs on a miss. No side effects, so a bail safely falls
   ;; through to running ORIG uncached.
   (pcase (et--cache-try
-           (let* ((cache (et-cache-call-cache (et--current-cache)))
-                  (hash (et-hash-items (cons name args)))
-                  (key (et-hash-value hash))
-                  (root (null (cdr stack)))
-                  (cached (gethash key cache 'et--call-miss)))
-             (if (and (not (eq cached 'et--call-miss))
-                      (or (funcall success-p cached) root))
-                 (cons 'hit (et--subst-with-placeholders
-                             cached (et--call-ephemeral-alist hash nil)))
-               (list 'miss cache key hash root))))
+          (let* ((cache (et-cache-call-cache (et--current-cache)))
+                 (hash (et-hash-items (cons name args)))
+                 (key (et-hash-value hash))
+                 (root (null (cdr stack)))
+                 (cached (gethash key cache 'et--call-miss)))
+            (if (and (not (eq cached 'et--call-miss))
+                     (or (funcall success-p cached) root))
+                (cons 'hit (et--subst-with-placeholders
+                            cached (et--call-ephemeral-alist hash nil)))
+              (list 'miss cache key hash root))))
 
     (`(hit . ,value) value)
 
@@ -836,9 +835,9 @@ at any depth; a non-success result is confined to the root level."
        (when (and (or (funcall success-p result) root)
                   (et--call-uncompromised-p stack))
          (et--cache-try
-           (puthash key (et--subst-with-placeholders
-                         result (et--call-ephemeral-alist hash t))
-                    cache)))
+          (puthash key (et--subst-with-placeholders
+                        result (et--call-ephemeral-alist hash t))
+                   cache)))
        result))
 
     ;; Bail: cache bookkeeping failed; behave as the unadvised function.
