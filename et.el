@@ -361,6 +361,9 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 (defun et--verify-type (type)
   "Check that a matcher is valid."
+  (declare (et (type *et-type)
+               (@return *et-type)))
+
   (unless (et-type-p type)
     (error "Not a type: %s" type))
 
@@ -580,6 +583,9 @@ the two args respectively."
                  collect new-arg))
     (_ 'INVALID)))
 
+
+;;;; Datatype matching
+
 (defun et--datatype-constraints (sub-name sub-args super-name super-args co contra iso co-literal mk-super)
   "Determine when one datatype to be a subtype of another.
 
@@ -602,7 +608,6 @@ super value (a `ConsR') instead of passing existing super-args to CO.
 Since super-args may be either types or matcher reprs depending on the
 caller, MK-SUPER builds that synthesized super value in the caller's
 language. See `et--cons-is-plist'."
-
   (cl-flet ((valid-if (valid)
               (if valid (make-et-match-result :success t)
                 (et--failed-match-result))))
@@ -653,8 +658,14 @@ language. See `et--cons-is-plist'."
                 finally return (apply #'et--merge-match-results results)))
 
       (`(Struct Struct)
-       ;; TODO: be more specific
-       (valid-if (equal sub-args super-args)))
+       (apply
+        #'et--merge-match-results
+        (valid-if (eq (car sub-args) (car super-args)))
+        (valid-if (eq (length sub-args) (length super-args)))
+        ;; For now, assume that all struct args are isovariant
+        (cl-loop for sub in (cdr sub-args)
+                 for super in (cdr super-args)
+                 collect (funcall iso sub super))))
 
       ((guard (eq sub-name super-name))
        ;; Datatypes of the same type (except PList and Struct) should have the same number of arguments
@@ -974,6 +985,9 @@ DNF is the struct representing the matcher."
 
 (defun et--verify-matcher (matcher)
   "Check that a matcher is valid."
+  (declare (et (matcher *et-matcher)
+               (@return *et-matcher)))
+
   (or (et-matcher-p matcher)
       (error "Not a matcher: %s" matcher))
 
@@ -1017,6 +1031,8 @@ DNF is the struct representing the matcher."
 ;;;; Expand matcher aliases
 
 (defun et--matcher-expand-aliases (matcher)
+  (declare (et (matcher *et-matcher) (@return *et-matcher)))
+
   (make-et-matcher :repr (et--mr-expand-aliases (et-matcher-repr matcher))
                    :generics (et-matcher-generics matcher)
                    :constraints (et-matcher-constraints matcher)))
@@ -1045,7 +1061,7 @@ DNF is the struct representing the matcher."
 (defun et--iso-constraints (matcher type)
   (et--merge-match-results
    (et--sub-constraints-0 matcher type)
-   (et--super-constraints matcher type)))
+   (et--super-constraints-0 matcher type)))
 
 
 ;;;; Sub constraints
@@ -1167,14 +1183,14 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
      (let* ((q (list (if is-super 'Q:LEQ 'Q:GEQ) var (et-type case))))
        (make-et-match-result :success t :value (list q))))
     (`(S:SET ,mr ,type)
-     (funcall (if is-super #'et--super-constraints #'et--sub-constraints)
+     (funcall (if is-super #'et--super-constraints-0 #'et--sub-constraints-0)
               (make-et-matcher :repr mr :generics generics) type))
     (`(S:DT ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
        ((and alias (pred et-alias-p))
         (if (not is-super) (et--failed-match-result)
-          (et--super-constraints (make-et-matcher :generics generics :repr (et-make-mr (list (list match-factor))))
-                                 (et-alias-expand alias))))
+          (et--super-constraints-0 (make-et-matcher :generics generics :repr (et-make-mr (list (list match-factor))))
+                                   (et-alias-expand alias))))
        ((and dt (pred et-datatype-p))
         (et--sub-or-super-constraints-4
          mdt-name mdt-args (et-datatype-name dt) (et-datatype-args dt)
@@ -1194,7 +1210,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
         (et--datatype-constraints
          t-name t-args m-name m-args
          (lambda (type ms) (et--sub-constraints-0 (make-matcher ms) type))
-         (lambda (type ms) (et--super-constraints (make-matcher ms) type))
+         (lambda (type ms) (et--super-constraints-0 (make-matcher ms) type))
          (lambda (type ms) (et--iso-constraints (make-matcher ms) type))
          (lambda (literal ms) (et--sub-constraints-0 (make-matcher ms) (et-literal literal)))
          ;; The synthesized super (PList side, m-args) is a matcher repr
@@ -1202,19 +1218,19 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
       ;; supertype matching (sub=MATCHER < super=TYPE)
       (et--datatype-constraints
        m-name m-args t-name t-args
-       (lambda (ms type) (et--super-constraints (make-matcher ms) type))
+       (lambda (ms type) (et--super-constraints-0 (make-matcher ms) type))
        (lambda (ms type) (et--sub-constraints-0 (make-matcher ms) type))
        (lambda (ms type) (et--iso-constraints (make-matcher ms) type))
        (lambda (literal type)
          (let ((literal-m (make-matcher (et-make-mr (et-q (((S:DT Literal ,literal))))))))
-           (et--super-constraints literal-m type)))
+           (et--super-constraints-0 literal-m type)))
        ;; The synthesized super (PList side, t-args) is a type
        #'et--cons-plist-super-type))))
 
 
 ;;;; Super constraints
 
-(defun et--super-constraints (matcher type)
+(defun et--super-constraints-0 (matcher type)
   (declare (et (matcher *et-matcher) (type *et-type)
                (@return EtMatchResult)))
 
@@ -1281,9 +1297,11 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
  (@alias EtMatchStack (List (Tuple @SUB|@SUPER EtMR *et-type)))
  (@alias EtTypeConstraint
-         (or (Tuple @Q:EQ EtGeneric *et-type)
-             (Tuple @Q:GEQ EtGeneric *et-type)
-             (Tuple @Q:LEQ EtGeneric *et-type)))
+         (Tuple (or @Q:EQ @Q:GEQ @Q:LEQ) EtGeneric *et-type))
+ (@alias EtNoinferConstraint
+         (Tuple (or @T:EQ @T:GEQ @T:LEQ) *et-type *et-repr<@TYPE>))
+ (@alias EtMatchConstraint
+         (or EtTypeConstraint EtNoinferConstraint))
 
  (@alias EtBRFactor
          (or (TupleStar @S:DT EtDatatypeName List<Any>)
