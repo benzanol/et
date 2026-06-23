@@ -298,6 +298,8 @@ priority."
 
 ;;;; Stop recursion
 
+(defvar et--stop-recursion-unset-marker (gensym "unset@"))
+
 (defmacro et--stop-recursion (var elem default &rest body)
   "This allows defining recursive algorithms that loop.
 
@@ -313,8 +315,11 @@ variable."
   (declare (indent 3))
   `(let ((elem ,elem))
      (if-let* ((entry (assoc elem ,var)))
-         (setcdr entry (or (cdr entry) ,default))
-       (let ((,var (cons (cons elem nil) ,var)))
+         (if (eq (cdr entry) et--stop-recursion-unset-marker)
+             (setcdr entry ,default)
+           (cdr entry))
+
+       (let ((,var (cons (cons elem et--stop-recursion-unset-marker) ,var)))
          ,@body))))
 
 
@@ -2058,15 +2063,17 @@ same as [T (<= T Number)]."
   (if (equal sub super) t ; Not strictly necessary, but improves efficiency
 
     (et--stop-recursion et--subtype-stack (cons sub super) t
+      (et--subtype?-1 sub super))))
 
-      (setq sub (et-expand-all-aliases sub))
-      (setq super (et-expand-all-aliases super))
+(defun et--subtype?-1 (sub super)
+  (setq sub (et-expand-all-aliases sub))
+  (setq super (et-expand-all-aliases super))
 
-      (cl-loop for sub-case in (et-type-cases sub)
-               always
-               (cl-loop for super-case in (et-type-cases super)
-                        thereis
-                        (et--case-subtype? sub-case super-case))))))
+  (cl-loop for sub-case in (et-type-cases sub)
+           always
+           (cl-loop for super-case in (et-type-cases super)
+                    thereis
+                    (et--case-subtype? sub-case super-case))))
 
 (et-test
  (et-subtype? (et Integer) (et Number))
