@@ -471,7 +471,7 @@ PATH is the path to the subexpression."
            (param-reprs ; (name . repr)[][]
             (et-at 0
               (cl-loop for group in (et--parse-arglist-params arglist)
-                       collect (cl-loop for name in group collect (cons name nil)))))
+                       collect (cl-loop for name in group collect (cons name (et-repr Nil))))))
            any-params return-repr gen-vec generics constraints props)
 
       ;; Parse the fields of the declare block
@@ -594,13 +594,15 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
   (declare (et (always-matcher Boolean)
                (generics ListR<EtGeneric>)
                (constraints ListR<EtTypeConstraint>)
-               (required AList<Symbol~EtBR>)
-               (optional AList<Symbol~EtBR>)
-               (key-params AList<Symbol~EtBR>)
-               (rest-params AList<Symbol~EtBR>)))
+               (required AList<Symbol~EtBR|Nil>)
+               (optional AList<Symbol~EtBR|Nil>)
+               (key-params AList<Symbol~EtBR|Nil>)
+               (rest-params AList<Symbol~EtBR|Nil>)))
 
   ;; Convert an entry (VAR . REPR) to a labeled repr
-  (let* ((fn (lambda (var repr) (et-copy-with repr :label (list :field var))))
+  (let* ((fn (lambda (var repr)
+               (et-copy-with (or repr (et-repr Nil))
+                             :label (list :field var))))
          (fn1 (lambda (e) (funcall fn (car e) (cdr e))))
          (rest-repr
           (pcase (car rest-params)
@@ -804,7 +806,7 @@ OUTPUT-REPR each converted to concrete types."
                                                     (et-parse-repr (cdr type-info) generics input-target)))
                                               (et-repr Any))
                             nconc (list (intern (format ":%s" slot-name)) slot-repr) into args
-                            finally return (if args (et-repr PList ,@args) (et-repr Nil)))))
+                            finally return (et-parse-repr (if args `(PList ,@args) 'Nil) nil 'TYPE))))
              (put constructor 'et-function-type
                   (et--make-function-type generics constraints
                                           input-repr struct-repr))))
@@ -892,45 +894,50 @@ Returns a plist with :declare to set the variable type."
 ;;;; Identify expr
 
 (defun et--identify-expr (expr)
-  (et-error-boundary nil
-    (pcase expr
+  (cons
+   expr
+   (et-error-boundary nil
+     (pcase expr
 
-      ;; Load required files
-      (`(require ,name)
-       (with-temp-buffer
-         (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
-                (load-path (cons dir load-path))
-                (library (locate-library (symbol-name (eval name)))))
-           (insert-file-contents (or library (error "Library `%s' not found" name))))
-         ;; Process the buffer without propagating diagnostics
-         (et-result-boundary (et--process-buffer))))
+       ;; Load required files
+       (`(require ,name)
+        (with-temp-buffer
+          (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
+                 (load-path (cons dir load-path))
+                 (library (locate-library (symbol-name (eval name)))))
+            (insert-file-contents (or library (error "Library `%s' not found" name))))
+          ;; Process the buffer without propagating diagnostics
+          (et-result-boundary (et--process-buffer 'NOCHECK))))
 
-      ;; Process a root declaration block
-      ((or `(et-declare . ,forms)
-           (and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms))))
-       (cl-loop
-        for form in forms
-        for pos upfrom 1
-        for plist =
-        (et-error-boundary pos
-          (pcase form
-            (`(@alias . ,_) (et--identify-alias-def form))
-            (`(@variable . ,_) (et--identify-variable-def form))))
-        collect
-        (cons pos plist)))
+       ;; Process a root declaration block
+       ((or `(et-declare . ,forms)
+            (and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms))))
+        (cl-loop
+         for form in forms
+         for pos upfrom 1
+         for plist =
+         (et-error-boundary pos
+           (pcase form
+             (`(@alias . ,_) (et--identify-alias-def form))
+             (`(@variable . ,_) (et--identify-variable-def form))))
+         collect
+         (cons pos plist)))
 
-      ;; Process a defun
-      (`(defun ,(pred symbolp) ,(pred listp) . ,_)
-       (list (cons nil (et--identify-defun expr))))
+       ;; Process a defun
+       (`(defun ,(pred symbolp) ,(pred listp) . ,_)
+        (list (cons nil (et--identify-defun expr))))
 
-      ;; Process a struct
-      (`(cl-defstruct . ,_)
-       (list (cons nil (et--identify-cl-defstruct expr)))))))
+       ;; Process a struct
+       (`(cl-defstruct . ,_)
+        (list (cons nil (et--identify-cl-defstruct expr))))))))
 
 
 ;;;; Process exprs
 
-(defun et--process-exprs (exprs)
+(defvar et--processing-phase nil)
+(defvar et--processing-expr nil)
+
+(defun et--process-exprs (exprs &optional no-check)
   (let* ((identified (et-result-map #'et--identify-expr exprs)))
 
     ;; For each expression, et--identify-expr returns a list of
@@ -939,20 +946,27 @@ Returns a plist with :declare to set the variable type."
     ;; the correct action across all expressions.
 
     (dolist (phase '(:constrain :populate :declare))
-      (cl-loop for expr-plists in identified
+      (cl-loop for (expr . expr-plists) in identified
                for idx upfrom 0
-               do (et-at idx
-                    (cl-loop for (path . plist) in expr-plists
-                             for func = (plist-get plist phase)
-                             when func do (et-error-boundary path (funcall func))))))
+               do
+               (let* ((et--processing-phase phase)
+                      (et--processing-expr expr))
+                 (et-at idx
+                   (cl-loop for (path . plist) in expr-plists
+                            for func = (plist-get plist phase)
+                            when func do (et-error-boundary path (funcall func)))))))
 
     ;; Check all root-level expressions
-    (cl-loop for expr in exprs
-             for pos upfrom 0
-             when (and (consp expr)
-                       (or (get (car expr) 'et-function-type)
-                           (get (car expr) 'et-checker)))
-             do (et-error-boundary pos (et--check expr)))))
+    (unless no-check
+      (cl-loop for expr in exprs
+               for pos upfrom 0
+               when (and (consp expr)
+                         (or (get (car expr) 'et-function-type)
+                             (get (car expr) 'et-checker)))
+               do
+               (let* ((et--processing-phase :check)
+                      (et--processing-expr expr))
+                 (et-error-boundary pos (et--check expr)))))))
 
 (defun et--buffer-exprs ()
   (save-excursion
@@ -962,8 +976,8 @@ Returns a plist with :declare to set the variable type."
                           (error (cl-return exprs)))
              collect expr into exprs)))
 
-(defun et--process-buffer ()
-  (et--process-exprs (et--buffer-exprs)))
+(defun et--process-buffer (&optional no-check)
+  (et--process-exprs (et--buffer-exprs) no-check))
 
 
 ;;;; Flycheck check

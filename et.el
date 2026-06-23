@@ -234,6 +234,8 @@ be non-nil."
 
 (defun et-copy-with (struct &rest changes)
   "Return a copy of STRUCT with properties CHANGES."
+  (unless (cl-struct-p struct)
+    (error "Not a struct: %s" struct))
   (cl-loop with type = (type-of struct)
            with copy = (funcall (intern (format "copy-%s" type)) struct)
            for (key val) on changes by #'cddr
@@ -355,7 +357,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
   CASES is a list of `et-type-case' instances being unioned."
   (cases nil :et List<*et-type-case>)
-  (label nil :et Nil|EtTypeLabel))
+  (label nil :et Nil|EtLabel))
 
 (defun et--verify-type (type)
   "Check that a matcher is valid."
@@ -881,8 +883,9 @@ FUNC is called with one argument, the current argument"
   "Expand the alias with name NAME, passing arguments ARGS."
   (declare (et (@generics [(<= T @TYPE|@MATCHER)])
                (name EtAliasName)
-               (args (ListR (and (extends? @TYPE T *et-type Never)
-                                 (extends? @MATCHER T EtMR Never))))
+               ;; (args (ListR (and (extends? @TYPE T *et-type Never)
+               ;;                   (extends? @MATCHER T EtMR Never))))
+               (args (ListR (or *et-type EtMR)))
                (target T)
                (@return (or (extends? @TYPE T *et-type Never)
                             (extends? @MATCHER T EtMR Never)))
@@ -1263,9 +1266,10 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (cl-defstruct et-repr
   "A general representation for both types and matchers."
   (target nil :et-generics [(<= T EtTarget)] :et T)
-  (dnf nil :et (and (extends? @TYPE T EtTRDnf Never)
-                    (extends? @MATCHER T EtMRDnf Never)
-                    (extends? @BOTH T EtBRDnf Never)))
+  ;; (dnf nil :et (and (extends? @TYPE T EtTRDnf Never)
+  ;;                   (extends? @MATCHER T EtMRDnf Never)
+  ;;                   (extends? @BOTH T EtBRDnf Never)))
+  (dnf nil :et EtEitherDnf)
   (label nil :et EtLabel))
 
 (defun et-make-mr (dnf &optional label)
@@ -1298,14 +1302,17 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          (or (Tuple @S:SET EtMR *et-type)))
  (@alias EtTRFactor (or EtBRFactor EtTypeOnlyFactor))
  (@alias EtMRFactor (or EtBRFactor EtMatcherOnlyFactor))
+ (@alias EtEitherFactor (or EtBRFactor EtTypeOnlyFactor EtMatcherOnlyFactor))
 
  (@alias EtBRCase (ListR EtBRFactor))
  (@alias EtTRCase (ListR EtTRFactor))
  (@alias EtMRCase (ListR EtMRFactor))
+ (@alias EtEitherCase (ListR EtEitherFactor))
 
  (@alias EtBRDnf (ListR EtBRCase))
  (@alias EtTRDnf (ListR EtTRCase))
  (@alias EtMRDnf (ListR EtMRCase))
+ (@alias EtEitherDnf (ListR EtEitherCase))
 
  (@alias EtRepr [(<= T EtTarget)] *et-repr<T>)
  (@alias EtBR EtRepr<@BOTH>)
@@ -1353,7 +1360,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (defvar et--parsing-target nil)
 
 (defun et-parse-repr (spec generics target &optional label)
-  (declare (et (@generics (<= T EtTarget))
+  (declare (et (@generics [(<= T EtTarget)])
                (spec EtSpec)
                (generics List<EtGeneric>)
                (target T)
@@ -1372,7 +1379,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (defun et--parse-sub (spec &optional extra-generics)
   (declare (et (spec EtSpec)
                (extra-generics List<EtGeneric>)
-               (@return *et-repr)))
+               (@return *et-repr<Any>)))
 
   (unless (memq et--parsing-target '(TYPE MATCHER BOTH))
     (error "Invalid parsing target: %s" (mapcar #'cadr (backtrace-frames))))
@@ -1396,7 +1403,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (defun et--parse-spec-factor (name args)
   (declare (et (name Symbol)
                (args List<EtSpec>)
-               (@return *et-repr)))
+               (@return *et-repr<Any>)))
 
   (if-let* ((handler (get name 'et-spec-parse)))
       (if (eq :full (car handler))
@@ -1443,7 +1450,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (defun et--parse-string (s)
   (declare (et (s String)
-               (@return *et-repr)))
+               (@return *et-repr<Any>)))
 
   (when (string-empty-p s) (error "Empty type expression"))
 
@@ -1465,7 +1472,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (defun et--parse-atom (s)
   "Parse a single type atom into an `et-type'."
   (declare (et (s String)
-               (@return *et-repr)))
+               (@return *et-repr<Any>)))
 
   (cond
    ;; Literal number
@@ -2611,7 +2618,7 @@ TRANSFORM is a function which takes (dt-name dt-args) and returns a new
              (let* ((type (make-et-type :label (et-type-label type) :cases new-cases))
                     (no-binds (et--remove-type-binds type))
                     (alias-type (cdar et--rec-transform-stack)))
-               (when alias-type
+               (when (not (eq alias-type et--stop-recursion-unset-marker))
                  (let* ((alias (et-type-case-value (car (et-type-cases alias-type)))))
                    (et--define-alias (et-alias-name alias) [] no-binds :target 'TYPE)))
                type))))
