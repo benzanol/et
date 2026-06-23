@@ -780,7 +780,7 @@ OUTPUT-REPR each converted to concrete types."
                               (and Nil (bindsof (subtract T (Struct ,name ,@never-args))))))
                     '(T) 'TYPE)))
              (put predicate 'et-function-type
-                  (et-dt 'DynFunction (et-parse-matcher 'T [T]) output-repr))))
+                  (et-dt 'DynFunction (et-parse-matcher '(Args T) [T]) output-repr))))
 
          ;; --- Accessors ---
          (dolist (slot slots)
@@ -1003,6 +1003,9 @@ Returns a plist with :declare to set the variable type."
                          (when (et-result-failed result)
                            (et-propagate-result result))))))))))))
 
+
+;;;; Process expr functions
+
 (defun et--buffer-exprs ()
   (save-excursion
     (goto-char (point-min))
@@ -1011,8 +1014,15 @@ Returns a plist with :declare to set the variable type."
                           (error (cl-return exprs)))
              collect expr into exprs)))
 
-(defun et--process-buffer (&optional no-check)
-  (et--process-exprs (et--buffer-exprs) no-check))
+(defun et-process-buffer (&optional no-check)
+  (interactive "P")
+  (et-result-boundary
+   (et--process-exprs (et--buffer-exprs) no-check)))
+
+(defun et-process-expr (expr)
+  (interactive (list (save-excursion (beginning-of-defun) (read (current-buffer)))))
+  (et-result-boundary
+   (et--process-exprs (list expr))))
 
 
 ;;;; Flycheck check
@@ -1047,7 +1057,7 @@ Returns a plist with :declare to set the variable type."
       (insert-file-contents filename)
       (emacs-lisp-mode)
       (cl-loop for (path severity msg)
-               in (et-result-diagnostics (et-result-boundary (et--process-buffer)))
+               in (et-result-diagnostics (et-process-buffer))
                do (ignore-errors
                     (ignore-errors (et--traverse-buffer-expr path))
                     (let* ((start-line (line-number-at-pos))
