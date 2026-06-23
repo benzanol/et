@@ -450,7 +450,25 @@ collides with an atom of the same shape."
 
     (et-same-hash? (et CircA) (et CircB) (et Circ2A) (et Circ2B))
     (not (et-same-hash? (et CircA) (et CircSolo)))
-    (not (et-same-hash? (et Circ3A) (et Circ3B))))))
+    (not (et-same-hash? (et Circ3A) (et Circ3B)))))
+
+ ;; Hash of alias depends on alias structure, not name
+ (progn
+   (et--process-exprs
+    '((et-declare (@alias Test1 [] (ConsR Integer String)))
+      (et-declare (@alias Test2 [] (ConsR 1 2)))))
+   (let* ((h1 (et-hash-value (et-hash-items (list (et Test1)))))
+          (h2 (et-hash-value (et-hash-items (list (et Test2))))))
+     ;; Swap the definitions
+     (et--process-exprs
+      '((et-declare (@alias Test1 [] (ConsR 1 2)))
+        (et-declare (@alias Test2 [] (ConsR Integer String)))))
+     (let* ((h3 (et-hash-value (et-hash-items (list (et Test1)))))
+            (h4 (et-hash-value (et-hash-items (list (et Test2))))))
+       (and (equal h1 h4)
+            (equal h2 h3)
+            (not (equal h1 h3))
+            (not (equal h2 h4)))))))
 
 
 ;;; ============================================================
@@ -496,8 +514,11 @@ This is the real file, even when a temp copy is what's being checked.")
 (cl-defstruct et-cache
   "The whole in-memory cache for one source file, serialized to disk.
 
-DEFUN-CACHE maps a function name to its `et--cached-defun'."
-  (defun-cache (make-hash-table :test 'eq)))
+DEFUN-CACHE maps a function name to its `et--cached-defun'.
+CALL-CACHE maps a call hash (see `et--call-cached') to a cached result,
+with ephemeral variables and scoped datatypes replaced by placeholders."
+  (defun-cache (make-hash-table :test 'eq))
+  (call-cache (make-hash-table :test 'equal)))
 
 (cl-defstruct et--cached-defun
   "A cached defun check: its FINGERPRINT and the `et-result' VALUE."
@@ -675,6 +696,116 @@ pass straight through to ORIG."
 
 
 ;;; ============================================================
+;;; Call Caching
+;;;; Documentation
+
+;; Subtyping (`et-subtype?') and constraint solving (`et-sub-constraints'
+;; and `et--super-constraints') are pure functions of their arguments --
+;; all of which are hashable -- so their results are memoized in the
+;; per-file `call-cache', keyed on the hash of (FUNCNAME ARGS...). The
+;; advice sits on the inner recursive bodies (`et--subtype?-1',
+;; `et--sub-constraints-1', `et--super-constraints-1'); see "The recursion
+;; stack" below for why. Two wrinkles make this more than a plain memo
+;; table.
+;;
+;; Ephemerals. A constraint result can contain `et-var's and scoped
+;; datatypes, fresh identity tokens with no meaning across sessions.
+;; Their identities in a result are always a subset of the input's, and
+;; hashing the input already enumerates them: an `et-hash' carries the
+;; `vars' and `scoped' it encountered, in index order. On a store we swap
+;; each ephemeral for a positional placeholder; on a hit we swap the
+;; placeholders back for the *current* call's ephemerals, reconstituting
+;; an answer with the right fresh tokens.
+;;
+;; The recursion stack. Each function wraps its body in
+;; `et--stop-recursion', which breaks cycles by optimistically assuming a
+;; result and recording it on the stack frame. The advice sits on the
+;; inner `-1' function, so a frame is already pushed when it runs -- the
+;; car of the stack is this very call. Hence:
+;;
+;;   * A result is safe to cache only if no *strict ancestor* frame was
+;;     touched while computing it. A touched ancestor (its mark flipped
+;;     away from `et--stop-recursion-unset-marker') means the result
+;;     leaned on a parent's optimistic assumption and is context-bound. A
+;;     touched car is fine -- that is mere self-recursion, reproduced
+;;     identically every time.
+;;
+;;   * A failing constraint result carries a `stack' field built from the
+;;     live frames, so it only means anything in the context it was born
+;;     in. We therefore cache a failure only at the root (no ancestors,
+;;     so the field spans this call's own subtree) and only *serve* a
+;;     cached failure at the root. Successful results carry no stack and
+;;     are served at any depth.
+
+
+;;;; Placeholders
+
+(defun et--call-ph (kind idx)
+  "Return the placeholder symbol for an ephemeral of KIND at index IDX."
+  (intern (format "@@et-ph-%s-%d@@" kind idx)))
+
+(defun et--call-ephemeral-alist (hash store)
+  "Substitution alist between HASH's ephemerals and their placeholders.
+With STORE non-nil, map each ephemeral to its placeholder; otherwise map
+each placeholder back to the ephemeral. A variable is keyed by its
+`et-var', a scoped datatype by its unique symbol."
+  (cl-loop for kind in '(var scoped)
+           for ephemerals in (list (et-hash-vars hash)
+                                   (mapcar #'cadr (et-hash-scoped hash)))
+           nconc (cl-loop for e in ephemerals for i from 0
+                          for ph = (et--call-ph kind i)
+                          collect (if store (cons e ph) (cons ph e)))))
+
+
+;;;; Cache policy
+
+(defun et--call-uncompromised-p (stack)
+  "Non-nil if no strict ancestor frame on STACK was touched by a cutoff.
+STACK's car is this call's own frame; self-recursion there is harmless."
+  (cl-every (lambda (frame) (eq (cdr frame) et--stop-recursion-unset-marker))
+            (cdr stack)))
+
+(defun et--call-cached (name orig args stack success-p)
+  "Around-advice body memoizing a recursive type function.
+
+NAME identifies the function in the cache key; ORIG and ARGS are the
+advised call. STACK is the function's `et--stop-recursion' stack, whose
+car is this call's frame. SUCCESS-P tests whether a result may be served
+at any depth; a non-success result is confined to the root level."
+  (let* ((cache (et-cache-call-cache (et--current-cache)))
+         (hash (et-hash-items (cons name args)))
+         (key (et-hash-value hash))
+         (root (null (cdr stack)))
+         (cached (gethash key cache 'et--call-miss)))
+    (if (and (not (eq cached 'et--call-miss))
+             (or (funcall success-p cached) root))
+        (et--subst-with-placeholders cached (et--call-ephemeral-alist hash nil))
+
+      (let ((result (apply orig args)))
+        (when (and (or (funcall success-p result) root)
+                   (et--call-uncompromised-p stack))
+          (puthash key (et--subst-with-placeholders
+                        result (et--call-ephemeral-alist hash t))
+                   cache))
+        result))))
+
+
+;;;; Advice
+
+(defun et--sub-constraints-cached (orig &rest args)
+  (et--call-cached 'et--sub-constraints-1 orig args
+                   et--constraints-stack #'et-match-result-success))
+
+(defun et--super-constraints-cached (orig &rest args)
+  (et--call-cached 'et--super-constraints-1 orig args
+                   et--constraints-stack #'et-match-result-success))
+
+(defun et--subtype?-cached (orig &rest args)
+  (et--call-cached 'et--subtype?-1 orig args
+                   et--subtype-stack (lambda (&rest _) t)))
+
+
+;;; ============================================================
 ;;; Extra
 ;;;; Flycheck entry point
 
@@ -710,6 +841,10 @@ its own (e.g. for testing)."
 (advice-add 'et-parse-type :before #'et--cache-capture-type)
 (advice-add 'et--check :before #'et--cache-capture-function)
 (advice-add 'et--check :around #'et--check-cached)
+
+(advice-add 'et--sub-constraints-1 :around #'et--sub-constraints-cached)
+(advice-add 'et--super-constraints-1 :around #'et--super-constraints-cached)
+(advice-add 'et--subtype?-1 :around #'et--subtype?-cached)
 
 
 ;;; ============================================================
