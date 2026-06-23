@@ -566,6 +566,27 @@ loaded for SOURCE during this session."
         (prin1 cache (current-buffer))))))
 
 
+;;;; Error guard
+
+;; The cache is supposed to be a transparent optimization: it slots in
+;; alongside the real logic without ever changing behavior, so its own
+;; bookkeeping (hashing, lookups, stores, possibly-stale on-disk structs)
+;; must never let an error escape into the type checker. `et--cache-try'
+;; runs a piece of cache bookkeeping and, if it signals, yields the
+;; sentinel `et--cache-bail' so the caller can fall back to the uncached
+;; path. `debug-on-error' is honored, so a real bug still surfaces while
+;; debugging.
+
+(defvar et--cache-bail (make-symbol "et--cache-bail")
+  "Sentinel returned by `et--cache-try' when cache bookkeeping signals.")
+
+(defmacro et--cache-try (&rest body)
+  "Evaluate BODY, shielding the checker from cache-machinery errors.
+Return BODY's value, or `et--cache-bail' if BODY signals."
+  (declare (indent 0) (debug t))
+  `(condition-case-unless-debug _ (progn ,@body) (error et--cache-bail)))
+
+
 ;;; ============================================================
 ;;; Defun Caching
 ;;;; Documentation
@@ -608,17 +629,24 @@ loaded for SOURCE during this session."
 (defvar et--fp-funcs nil
   "Typed function names checked while `et--fp-active', newest first.")
 
+;; These are `:before' advices: a signal here would abort the advised
+;; call itself, so their bodies are fully guarded. Their results are
+;; discarded, so swallowing is safe -- a failed capture just means the
+;; fingerprint omits a dependency, which only forgoes a future cache hit.
+
 (defun et--cache-capture-type (spec &rest _)
   "Advice on `et-parse-type': record SPEC as a body type dependency."
-  (when et--fp-active
-    (cl-pushnew spec et--fp-specs :test #'equal)))
+  (et--cache-try
+    (when et--fp-active
+      (cl-pushnew spec et--fp-specs :test #'equal))))
 
 (defun et--cache-capture-function (expr)
   "Advice on `et--check': record a called typed function as a dependency."
-  (when (and et--fp-active (consp expr)
-             (symbolp (car expr)) (car expr)
-             (get (car expr) 'et-function-type))
-    (cl-pushnew (car expr) et--fp-funcs :test #'eq)))
+  (et--cache-try
+    (when (and et--fp-active (consp expr)
+               (symbolp (car expr)) (car expr)
+               (get (car expr) 'et-function-type))
+      (cl-pushnew (car expr) et--fp-funcs :test #'eq))))
 
 
 ;;;; Fingerprint computation
@@ -670,29 +698,42 @@ pass straight through to ORIG."
                 (get (cadr expr) 'et-function-signature)))
       (funcall orig expr)
 
+    ;; Guarded lookup: a fresh, fingerprint-valid entry is wrapped in a
+    ;; list so a hit (any value, even nil) is distinguishable from a miss
+    ;; (nil) or a bail (`et--cache-bail'). No side effects here, so a
+    ;; bail safely falls through to recompute.
     (let* ((name (cadr expr))
-           (table (et-cache-defun-cache (et--current-cache)))
-           (cached (gethash name table)))
-      (if (and cached
-               (et--defun-fingerprint-current-p
-                name (et--cached-defun-fingerprint cached)))
-          ;; Hit: replay the cached diagnostics into the current context
-          ;; (re-anchoring their relative paths) and return the value.
-          (let ((result (et--cached-defun-value cached)))
-            (et-propagate-result result)
-            (et-result-value result))
+           (hit (et--cache-try
+                  (let* ((table (et-cache-defun-cache (et--current-cache)))
+                         (cached (gethash name table)))
+                    (when (and cached
+                               (et--defun-fingerprint-current-p
+                                name (et--cached-defun-fingerprint cached)))
+                      (list (et--cached-defun-value cached)))))))
+      (pcase hit
+        ;; Hit: replay the cached diagnostics into the current context
+        ;; (re-anchoring their relative paths) and return the value.
+        (`(,result)
+         (et-propagate-result result)
+         (et-result-value result))
 
-        ;; Miss: check in an isolated boundary so the diagnostics are
+        ;; Miss/bail: check in an isolated boundary so the diagnostics are
         ;; captured relative to the defun, fingerprint what it touched,
-        ;; then propagate as usual.
-        (let* ((et--fp-active t)
-               (et--fp-specs nil)
-               (et--fp-funcs nil)
-               (result (et-result-boundary (funcall orig expr)))
-               (fp (et--compute-defun-fingerprint name et--fp-specs et--fp-funcs)))
-          (puthash name (make-et--cached-defun :fingerprint fp :value result) table)
-          (et-propagate-result result)
-          (et-result-value result))))))
+        ;; store (guarded), then propagate as usual. ORIG runs exactly once.
+        (_
+         (let* ((et--fp-active t)
+                (et--fp-specs nil)
+                (et--fp-funcs nil)
+                (result (et-result-boundary (funcall orig expr))))
+           (et--cache-try
+             (puthash name
+                      (make-et--cached-defun
+                       :fingerprint (et--compute-defun-fingerprint
+                                     name et--fp-specs et--fp-funcs)
+                       :value result)
+                      (et-cache-defun-cache (et--current-cache))))
+           (et-propagate-result result)
+           (et-result-value result)))))))
 
 
 ;;; ============================================================
@@ -772,22 +813,36 @@ NAME identifies the function in the cache key; ORIG and ARGS are the
 advised call. STACK is the function's `et--stop-recursion' stack, whose
 car is this call's frame. SUCCESS-P tests whether a result may be served
 at any depth; a non-success result is confined to the root level."
-  (let* ((cache (et-cache-call-cache (et--current-cache)))
-         (hash (et-hash-items (cons name args)))
-         (key (et-hash-value hash))
-         (root (null (cdr stack)))
-         (cached (gethash key cache 'et--call-miss)))
-    (if (and (not (eq cached 'et--call-miss))
-             (or (funcall success-p cached) root))
-        (et--subst-with-placeholders cached (et--call-ephemeral-alist hash nil))
+  ;; Guarded lookup: resolve to a ready-to-return hit, or the data the
+  ;; store phase needs on a miss. No side effects, so a bail safely falls
+  ;; through to running ORIG uncached.
+  (pcase (et--cache-try
+           (let* ((cache (et-cache-call-cache (et--current-cache)))
+                  (hash (et-hash-items (cons name args)))
+                  (key (et-hash-value hash))
+                  (root (null (cdr stack)))
+                  (cached (gethash key cache 'et--call-miss)))
+             (if (and (not (eq cached 'et--call-miss))
+                      (or (funcall success-p cached) root))
+                 (cons 'hit (et--subst-with-placeholders
+                             cached (et--call-ephemeral-alist hash nil)))
+               (list 'miss cache key hash root))))
 
-      (let ((result (apply orig args)))
-        (when (and (or (funcall success-p result) root)
-                   (et--call-uncompromised-p stack))
-          (puthash key (et--subst-with-placeholders
-                        result (et--call-ephemeral-alist hash t))
-                   cache))
-        result))))
+    (`(hit . ,value) value)
+
+    ;; Miss: run ORIG exactly once, then store (guarded and discarded).
+    (`(miss ,cache ,key ,hash ,root)
+     (let ((result (apply orig args)))
+       (when (and (or (funcall success-p result) root)
+                  (et--call-uncompromised-p stack))
+         (et--cache-try
+           (puthash key (et--subst-with-placeholders
+                         result (et--call-ephemeral-alist hash t))
+                    cache)))
+       result))
+
+    ;; Bail: cache bookkeeping failed; behave as the unadvised function.
+    (_ (apply orig args))))
 
 
 ;;;; Advice
