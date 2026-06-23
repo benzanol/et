@@ -99,6 +99,7 @@ For "repr" aliases, add the current alias to the "alias definition stack", and t
 =S:INFER= - Hash the number of generics, hash each generic symbol, then hash the reprs.
 =S:EVAL= - Hash the function name, hash the number of reprs, then hash each repr.
 =S:SET= - Hash the reprs.
+=S:NOINFER= - Hash the inner repr.
 
 
 

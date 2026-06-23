@@ -163,7 +163,7 @@ TUPLE is the (NAME UNIQUE CONSTRAINTS) arg list of a `Scoped' datatype."
 
 (defconst et--hash-repr-factor-types
   '(S:DT S:ALIAS S:GENERIC S:TYPE S:BIND S:TYPEOF
-         S:BINDS-OF S:SUBTRACT S:INFER S:EXTENDS S:EVAL S:SET)
+         S:BINDS-OF S:SUBTRACT S:INFER S:EXTENDS S:EVAL S:SET S:NOINFER)
   "Fixed ordering of repr factor types, used to hash a factor's type.")
 
 
@@ -341,6 +341,8 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
     (`(S:SET ,matcher-repr ,type)
      (et--hash-repr state matcher-repr alias-stack)
      (et--hash-type state type alias-stack))
+    ;; S:NOINFER wraps a single type-target repr.
+    (`(S:NOINFER ,tr) (et--hash-repr state tr alias-stack))
     (_ (error "Invalid repr factor: %s" factor))))
 
 
