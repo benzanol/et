@@ -493,6 +493,17 @@ collides with an atom of the same shape."
 
 ;;;; Variables
 
+(defvar et-cache-enabled t
+  "Master switch for et's caching.  When nil, no caching happens at all.")
+
+(defvar et-cache-defuns t
+  "Whether to cache the result of checking a defun body.
+Has no effect unless `et-cache-enabled' is non-nil.")
+
+(defvar et-cache-calls t
+  "Whether to cache subtyping and constraint-solving calls.
+Has no effect unless `et-cache-enabled' is non-nil.")
+
 (defvar et-cache-directory
   (expand-file-name ".cache/et-cache/" user-emacs-directory)
   "Directory holding one cache file per checked source file.")
@@ -564,6 +575,26 @@ loaded for SOURCE during this session."
     (with-temp-file file
       (let ((print-level nil) (print-length nil) (print-circle t))
         (prin1 cache (current-buffer))))))
+
+(defun et-clear-source-cache (source)
+  "Delete SOURCE's cached results, both in memory and on disk.
+SOURCE is the original source file path, or nil for the non-file cache.
+Interactively, clears the cache for the current buffer's file."
+  (interactive (list (buffer-file-name)))
+  (remhash source et--cache-table)
+  (let ((file (et--cache-file-for source)))
+    (when (file-exists-p file)
+      (delete-file file))))
+
+(defun et-clear-cache ()
+  "Delete every source's cached results, both in memory and on disk."
+  (interactive)
+  (clrhash et--cache-table)
+  (when (file-directory-p et-cache-directory)
+    (dolist (file (directory-files et-cache-directory t "\\.eld\\'"))
+      (delete-file file)))
+  (when (file-exists-p et-cache-nonfile-file)
+    (delete-file et-cache-nonfile-file)))
 
 
 ;;;; Error guard
@@ -692,7 +723,8 @@ For a root defun with a parsed signature, return its cached result when
 the fingerprint still holds; otherwise run ORIG once, fingerprint the
 dependencies it touched, and store the result. All other expressions
 pass straight through to ORIG."
-  (if (not (and (eq (car-safe expr) 'defun)
+  (if (not (and et-cache-enabled et-cache-defuns
+                (eq (car-safe expr) 'defun)
                 (symbolp (cadr expr))
                 (get (cadr expr) 'et-function-signature)))
       (funcall orig expr)
@@ -814,18 +846,20 @@ car is this call's frame. SUCCESS-P tests whether a result may be served
 at any depth; a non-success result is confined to the root level."
   ;; Guarded lookup: resolve to a ready-to-return hit, or the data the
   ;; store phase needs on a miss. No side effects, so a bail safely falls
-  ;; through to running ORIG uncached.
-  (pcase (et--cache-try
-          (let* ((cache (et-cache-call-cache (et--current-cache)))
-                 (hash (et-hash-items (cons name args)))
-                 (key (et-hash-value hash))
-                 (root (null (cdr stack)))
-                 (cached (gethash key cache 'et--call-miss)))
-            (if (and (not (eq cached 'et--call-miss))
-                     (or (funcall success-p cached) root))
-                (cons 'hit (et--subst-with-placeholders
-                            cached (et--call-ephemeral-alist hash nil)))
-              (list 'miss cache key hash root))))
+  ;; through to running ORIG uncached. When caching is disabled the
+  ;; subject is nil, which matches no clause and falls through likewise.
+  (pcase (and et-cache-enabled et-cache-calls
+              (et--cache-try
+               (let* ((cache (et-cache-call-cache (et--current-cache)))
+                      (hash (et-hash-items (cons name args)))
+                      (key (et-hash-value hash))
+                      (root (null (cdr stack)))
+                      (cached (gethash key cache 'et--call-miss)))
+                 (if (and (not (eq cached 'et--call-miss))
+                          (or (funcall success-p cached) root))
+                     (cons 'hit (et--subst-with-placeholders
+                                 cached (et--call-ephemeral-alist hash nil)))
+                   (list 'miss cache key hash root)))))
 
     (`(hit . ,value) value)
 
@@ -840,7 +874,7 @@ at any depth; a non-success result is confined to the root level."
                    cache)))
        result))
 
-    ;; Bail: cache bookkeeping failed; behave as the unadvised function.
+    ;; Disabled or bailed: behave as the unadvised function.
     (_ (apply orig args))))
 
 
