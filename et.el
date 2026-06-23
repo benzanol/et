@@ -259,7 +259,7 @@ be non-nil."
 (eval-and-compile
   (defun et--copy-quotes (expr)
     (cond ((and (eq (car-safe expr) #'quote) (consp (cdr-safe expr)))
-           (list #'identity expr))
+           (list #'copy-tree expr))
           ((consp expr) (cons (et--copy-quotes (car expr)) (et--copy-quotes (cdr expr))))
           (t expr))))
 
