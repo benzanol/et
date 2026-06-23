@@ -278,7 +278,7 @@ domain can be determined."
               (arg (et-type (make-et-type-case
                              :value (make-et-datatype :name 'Any)
                              :typeofs (list synth))))
-              (out (et--funcall ftype (et--tuple 'ConsR (list arg))))
+              (out (et-funcall ftype (et--tuple 'ConsR (list arg))))
               ((et-type-p out)))
     (alist-get synth (et--type-binds (et--non-nil out)))))
 
@@ -311,7 +311,7 @@ FUN may be a symbol with an `et-function-type'. Other forms (lambdas,
 partial applications) are not analysed and yield Any."
   (or (when-let* (((symbolp fun))
                   (ftype (get fun 'et-function-type))
-                  (out (et--funcall ftype (et--tuple 'ConsR (list type))))
+                  (out (et-funcall ftype (et--tuple 'ConsR (list type))))
                   ((et-type-p out)))
         out)
       (et-any)))
@@ -1021,6 +1021,12 @@ assertions, each emitting an error diagnostic on failure. SPEC is anything
          (et-typecheck-call append List<1> List<Integer> List<Number> List<1>))))
 
 
+;;;;; reverse/nreverse
+
+(et-define-type-checker reverse [T] (Args ListR<T>) List<T>)
+(et-define-type-checker nreverse [T] (Args List<T>) List<T>)
+
+
 ;;;; Predicates
 
 (defmacro et-define-predicate (name type)
@@ -1633,7 +1639,7 @@ implicit accumulator combined with any body `return' values."
 
 ;;;; Some string/symbol functions
 
-(et-define-type-checker gensym [] Nil|Args<String> NonNilSymbol)
+(et-define-type-checker gensym [] Nil|Args<String> Var)
 (et-define-type-checker intern [] (Args String) Symbol)
 (et-define-type-checker symbol-name [] (Args Symbol) String)
 (et-define-type-checker format [] (ArgsWithTail String ListR<Any>) String)
