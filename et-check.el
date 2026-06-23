@@ -143,18 +143,18 @@ determine the output type."
         (let* ((arg-types (cl-loop for type in (et-checker-remaining 1) for pos upfrom 1
                                    collect (et-copy-with type :label (list :position pos))))
                (args-type (et--tuple 'Cons arg-types))
-               (output-type (et--funcall func-type args-type)))
+               (output-result (et--funcall func-type args-type)))
           (cond
-           ((et-type-p output-type) output-type)
+           ((et-match-result-success output-result) (et-match-result-value output-result))
            ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
            ;; which means the true error was in the arguments, not this call
            (et--result-failed nil)
-           ;; OUTPUT-TYPE is nil or the fail stack: a list of (`sub'/`super' MATCHER TYPE)
+           ;; The stack in OUTPUT-RESULT is a list of (`sub'/`super' MATCHER TYPE)
            (t
             ;; Find the stack frame corresponding to the position
             (cl-loop
              with (arg-pos arg-type param-name param-repr) = nil
-             for (_ mrepr type) in output-type
+             for (_ mrepr type) in (et-match-result-stack output-result)
              ;; Collect the argument position
              for pos = (plist-get (et-type-label type) :position)
              when pos do (setq arg-pos pos arg-type type)
@@ -165,8 +165,7 @@ determine the output type."
              finally do
              (if (and arg-type param-repr)
                  (et-err arg-pos "Parameter %s has type %s, found %s" param-name param-repr arg-type)
-               (et-err 0 "`%s' has type %s\\nInvalid arguments: %s\\n%s" func func-type args-type
-                       output-type)))))))
+               (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))
 
        (_ (et-err 0 "No type for `%s'" func))))
 
@@ -412,14 +411,25 @@ PATH is the path to the subexpression."
     `(et--checker-infer ,type ',gens ',constraints ,(list '\` matcher-spec) ,(list '\` output-spec))))
 
 (defun et--checker-infer (type gens constraints matcher-spec output-spec)
-  (let* ((infer
+  (let* ((result
           (et--infer (make-et-matcher
                       :generics gens
                       :constraints constraints
                       :repr (et-parse-repr matcher-spec gens 'MATCHER))
                      type
                      (et-parse-repr output-spec gens 'TYPE))))
-    (when (et-type-p infer) infer)))
+    (when (et-match-result-success result)
+      (et-match-result-value result))))
+
+
+;;;; Nicer funcall
+
+(defun et-checker-funcall (func-type arglist-type)
+  (declare (et (func-type *et-type) (arglist-type *et-type)
+               (@return *et-type)))
+  (let* ((result (et--funcall func-type arglist-type)))
+    (when (et-match-result-success result)
+      (et-match-result-value result))))
 
 
 ;;; ============================================================
@@ -442,7 +452,7 @@ PATH is the path to the subexpression."
   (source nil :et List<Any>) ; Some nthcdr of the function body containing the code
   (source-pos nil :et Integer) ; Position of source RELATIVE TO ARGLIST (1 if right after arglist)
   ;; Both vars and expected-return may contain the scoped types
-  (scoped nil :et (List (Tuple EtGeneric Symbol List<EtConstraint>)))
+  (scoped nil :et (List (Tuple EtGeneric Symbol List<EtTypeConstraint>)))
   (vars nil :et List<*et-var>)
   (expected-return nil :et *et-type))
 
@@ -584,7 +594,7 @@ REST-PARAMS will have at most 1 entry.
 Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
   (declare (et (always-matcher Boolean)
                (generics ListR<EtGeneric>)
-               (constraints ListR<EtConstraint>)
+               (constraints ListR<EtTypeConstraint>)
                (required AList<Symbol~EtBR>)
                (optional AList<Symbol~EtBR>)
                (key-params AList<Symbol~EtBR>)
@@ -652,7 +662,7 @@ GENERICS, CONSTRAINTS, and INPUT-REPR, and OUTPUT-REPR as the output.
 If GENERICS is nil, returns a Function with INPUT-REPR and
 OUTPUT-REPR each converted to concrete types."
   (declare (et (generics ListR<EtGeneric>)
-               (constraints ListR<EtConstraint>)
+               (constraints ListR<EtTypeConstraint>)
                (input-repr EtBR)
                (output-repr EtTR)))
 

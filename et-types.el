@@ -581,9 +581,10 @@
 
 (et-test
  (equal (list (et Number))
-        (et--sub-match
-         (et-matcher [T] List<T>)
-         (et-typecheck-call append List<1> List<Integer> List<Number>)))
+        (et-match-result-value
+         (et--sub-match
+          (et-matcher [T] List<T>)
+          (et-result-value (et-typecheck-call append List<1> List<Integer> List<Number>)))))
 
  ;; I thought this was a bug at first, but it is actually correct!
  ;; Since the tail is List<Integer>, this is NOT a valid List<Number>,
@@ -640,14 +641,14 @@
 (et-define-checker apply
   (let* ((func-type (et-checker-sub 1))
          (args-type (et--tailed-tuple 'ConsR (et-checker-remaining 2)))
-         (output-type (et--funcall func-type args-type)))
+         (output-type (et-checker-funcall func-type args-type)))
     (if (et-type-p output-type) output-type
       (et-err 0 "Cannot apply %s with args %s" func-type args-type))))
 
 (et-define-checker funcall
   (let* ((func-type (et-checker-sub 1))
          (args-type (et--tuple 'ConsR (et-checker-remaining 2)))
-         (output-type (et--funcall func-type args-type)))
+         (output-type (et-checker-funcall func-type args-type)))
     (if (et-type-p output-type) output-type
       (et-err 0 "Cannot call %s with args %s" func-type args-type))))
 
