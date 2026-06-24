@@ -1024,7 +1024,7 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
   (dolist (idx (cdr path))
     ;; Skip whitespace and comments before looking at the next form
     (cond
-     ((looking-at ",\\|,@\\|`\\|#?']")
+     ((looking-at ",@?\\|`\\|#?']")
       (if (eq idx 1)
           (goto-char (match-end 0))
         (error "Only valid subexpr of quote is 1")))

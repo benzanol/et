@@ -166,7 +166,8 @@ determine the output type."
              (if (and arg-type param-repr)
                  (et-err arg-pos "Parameter %s has type %s, found %s" param-name
                          (et-repr-to-string param-repr) arg-type)
-               (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))
+               (et-err (or arg-pos 0) ; its possible to have an arg label without a param label
+                       "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))
 
        (_ (et-err 0 "No type for `%s'" func))))
 
@@ -1214,11 +1215,45 @@ Example:
                             specs)))))))
 
 
-;;;; Macroexpand Checker
+;;;; Macroexpand checker
+
+(defvar et--macroexpand-expr nil
+  "An expression which got macroexpanded in an `et--check'.
+
+When macroexpanding an expression, the inner expressions will end up at
+different paths than the original expression. It is impossible to
+deterministically decide where the subexpressions ended up, but the best
+heuristic is by searching (using `equal') for each nested call to
+`et--check' inside of the original expression.")
+
+(defun et--path-in-tree (expr tree)
+  "If EXPR exists in TREE, return its path, or return `NO' otherwise."
+  (if (equal expr tree) nil
+    (cl-loop for subtree in tree ; safe even if tree is not a list
+             for idx upfrom 0
+             for path = (et--path-in-tree expr subtree)
+             unless (eq path 'NO) return (cons idx path)
+             finally return 'NO)))
+
+(defun et--macroexpand-check-advice (func expr)
+  (if (or (null et--macroexpand-expr)
+          (null et--sticky-path))
+      (funcall func expr)
+
+    (let* ((path (et--path-in-tree expr et--macroexpand-expr)))
+      (if (eq path 'NO) (funcall func expr)
+        (let* ((et--sticky-path nil))
+          (et-at path (funcall func expr)))))))
+
+(advice-add #'et--check :around #'et--macroexpand-check-advice)
 
 (defun et-macroexpand-checker ()
   "Type checker which expands a macro and type-checks the expansion."
-  (let* ((expanded (macroexpand-1 et--checker-expr)))
+
+  (let* ((expanded (macroexpand-1 et--checker-expr))
+         ;; Only the very root macroexpand expr exists in the actual code.
+         ;; If we get another expansion inside an expansion, keep the original root-level expr
+         (et--macroexpand-expr (or et--macroexpand-expr et--checker-expr)))
     (et-with-sticky-path
      (et--check expanded))))
 
