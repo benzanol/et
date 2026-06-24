@@ -762,6 +762,16 @@ OUTPUT-REPR each converted to concrete types."
           (decls (et-at-offset 3 (et--parse-function-declarations param-groups declares))))
        (et--assign-function-declarations name decls)))))
 
+(defun et--identify-macro-directive (form)
+  (let* ((name (cadr form)))
+    (list
+     :declare
+     (lambda ()
+       (put name 'et-checker
+            (or (when (plist-get form :expand) #'et-macroexpand-checker)
+                (plist-get form :checker)
+                (et-fatal 0 "No checker specified")))))))
+
 
 ;;;;; Checker
 
@@ -999,7 +1009,8 @@ Returns a plist with :declare to set the variable type."
            (pcase form
              (`(@alias . ,_) (et--identify-alias-directive form))
              (`(@variable . ,_) (et--identify-variable-directive form))
-             (`(@function . ,_) (et--identify-function-directive form))))
+             (`(@function . ,_) (et--identify-function-directive form))
+             (`(@macro . ,_) (et--identify-macro-directive form))))
          collect
          (cons pos plist)))
 
@@ -1138,6 +1149,41 @@ Returns a plist with :declare to set the variable type."
   (et-hint nil (cl-prin1-to-string (eval expr)))
   (setq et--checker-expr nil)
   (et Nil))
+
+
+;;;; Annotation macros
+
+;; `declare' forms carry no runtime value; type them as Nil so they are
+;; ignored wherever they appear.
+(et-define-checker declare (et Nil))
+
+;; The `et:'/`et!'/`et!!' annotation macros (defined in et-macros.el)
+;; assert a type on an expression at check time. `et:' requires the
+;; expression to be a subtype; `et!' only warns when there is no overlap;
+;; `et!!' suppresses the check entirely. All three resolve to the
+;; declared type.
+
+(et-define-pcase-checker et: `(,_expr ,type-spec)
+  (let* ((actual (et-checker-sub 1))
+         (declared (et-parse-type type-spec)))
+    (unless (et-subtype? actual declared)
+      (et-err 0 "Expected %s, found %s" (et-pp declared) (et-pp actual)))
+    declared))
+
+(et-define-pcase-checker et! `(,_expr ,type-spec)
+  (let* ((actual (et-checker-sub 1))
+         (declared (et-parse-type type-spec)))
+    (when (and (not (et-never-p actual))
+               (not (et-never-p declared))
+               (et-never-p (et--supersect actual declared)))
+      (et-err 0 "Types %s and %s have no overlap. Use et!! to supress this warning."
+              (et-pp declared) (et-pp actual)))
+    declared))
+
+(et-define-pcase-checker et!! `(,_expr ,type-spec)
+  (let* ((_actual (et-checker-sub 1))
+         (declared (et-parse-type type-spec)))
+    declared))
 
 
 ;;;; Pcase et-*

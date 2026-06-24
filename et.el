@@ -107,7 +107,14 @@ function which thinks it is operating on a buffer expression, with an
 expression that is not actually in the buffer, ensure that
 `et--sticky-path' is non-nil to avoid creating an invalid path.")
 
+(et-declare
+ (@variable et--path List<Integer>)
+ (@variable et--path-offset Integer)
+ (@variable et--sticky-path Boolean))
+
 (defun et--resolve-path (rel)
+  (declare (et (rel Tree<Integer>) (@return List<Integer>)))
+
   (if et--sticky-path et--path
     (if-let* ((flat (flatten-tree (list rel))))
         (append et--path (list (+ et--path-offset (car flat))) (cdr flat))
@@ -280,6 +287,7 @@ priority."
   (et--copy-quotes (cdr (backquote-process expr))))
 
 (defmacro et-ql (&rest exprs)
+  (declare (et (@expand)))
   (et--copy-quotes (cdr (backquote-process exprs))))
 
 
@@ -342,7 +350,7 @@ variable."
 
 (cl-defstruct et-datatype
   "A datatype factor of an `et-type'."
-  (name nil :et Symbol)
+  (name nil :et Var)
   (args nil :et List<*et-type|Any>))
 
 (cl-defstruct et-alias "A type alias factor of an `et-type'." name args)
@@ -538,6 +546,9 @@ corresponds to the role of each argument in `dt-args'. `CONST' indicates
 an argument which is a literal Lisp value. `CO'/`CONTRA'/`ISO' indicate
 that the argument is a type argument, and whether the type argument is
 covariant, contravariant, or isovariant."
+  (declare (et (dt-name Var) (dt-args List<Any>)
+               (@return List<@CONST|@CO|@CONTRA|@ISO>)))
+
   (pcase (plist-get (or (alist-get dt-name et--datatypes)
                         (error "Invalid datatype: %s %s" dt-name dt-args))
                     :args)
@@ -778,6 +789,11 @@ FUNC is called with two arguments, ARG and ROLE, where role is one of
   "Like `et--datatype-map-args', but the identify for CONST args.
 
 FUNC is called with one argument, the current argument"
+  (declare (et (@generics [T])
+               (dt-name Var) (dt-args List<Any>)
+               (func (Function (Args Any) T))
+               (@return List<Any>)))
+
   (cl-loop for arg in dt-args
            for role in (et--datatype-arg-roles dt-name dt-args)
            if (eq role 'CONST) collect arg
@@ -1032,10 +1048,9 @@ DNF is the struct representing the matcher."
 
       (cl-loop for q in (et-matcher-constraints matcher)
                do (pcase q
-                    (`(Q:NEVER ,_))
                     (`(,(or 'Q:EQ 'Q:LEQ 'Q:GEQ)
                        ,(and gen (guard (memq gen generics)))
-                       (pred et-type-p)))
+                       ,(pred et-type-p)))
                     (_ (error "Invalid constraint: %s" q))))
 
       (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
@@ -2889,7 +2904,6 @@ structural key -- a stale result is never served, only a cache miss."
 (et-defalias Nil [] (Literal nil))
 (et-defalias True [] (Literal t))
 (et-defalias Boolean [] (or (Literal nil) (Literal t)))
-(et-defalias Var [] (or (Literal nil) (Literal t)))
 
 ;; ConsR/ListR/*R can be thought of as "read only references" to a
 ;; type. It is merely a shortcut for "[(T <= Number)] List<T>" for
