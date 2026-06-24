@@ -231,8 +231,7 @@ structure."
 ;;; Extra checkers
 
 (et-declare
- (@function backquote-list* (first &rest list)
-            (@expand)))
+ (@macro backquote-list* :expand t))
 
 
 ;;; backquote.el ends here

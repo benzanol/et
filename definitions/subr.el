@@ -135,5 +135,57 @@
  (et-assert-resolve-errors (string-trim 5)))
 
 
+;;; ============================================================
+;;; Macros
+
+(et-declare
+ (@macro if-let* :expand t)
+ (@macro if-let :expand t)
+ (@macro when-let :expand t)
+ (@macro when-let* :expand t))
+
+
+;;; ============================================================
+;;; Control-flow macros
+
+;; `dolist'/`when'/`unless' are macros defined in lisp/subr.el. They
+;; carry runtime logic (binding a loop variable, narrowing the
+;; condition), so they are written as checkers rather than `@function'
+;; declarations. `when'/`unless' reuse the narrowing helpers
+;; `et--and-return-type'/`et--or-return-type' that live with `and'/`or'
+;; in eval.c.el.
+
+(et-define-pcase-checker dolist
+    `(,(or (and form `(,name ,elem-spec ,_lst)
+                (let elem-type (et-parse-type elem-spec))
+                (let _1 (setcdr form (cddr form)))
+                (let _2 (et-checker-resolve (et-alias 'ListR elem-type) 1 1)))
+           (and `(,name ,_lst)
+                (let elem-type (et-checker-infer (et-checker-sub 1 1) [T] ListR<T> T))))
+      . ,_body)
+  (et-with-vars (list (et-new-var name elem-type))
+    (et-checker-sub 2)))
+
+(et-define-pcase-checker when `(,_cond . ,then)
+  (let* ((cond-type (et-checker-sub 1)))
+    (et-checker-hint-narrows 0 "WHEN:\\n%s" (et--non-nil cond-type))
+    ;; Special case for empty then block because (when cond) always returns nil
+    (if (null then) (et Nil)
+      (et--and-return-type cond-type (lambda () (et-checker-tail 2))))))
+
+(et-define-pcase-checker unless `(,_cond . ,_else)
+  (let* ((cond-type (et-checker-sub 1)))
+    (et-checker-hint-narrows 0 "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
+    ;; Special case for empty then block because (when cond) always returns nil
+    (et--or-return-type cond-type (lambda () (et-checker-tail 2)))))
+
+(et-test
+ (equal (et String|Nil)
+        (et--remove-type-binds
+         (et-typecheck
+          (let* ((a String|Number 4))
+            (when (stringp a) a))))))
+
+
 (provide 'subr)
 ;;; subr.el ends here

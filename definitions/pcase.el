@@ -164,7 +164,7 @@ domain can be determined."
               (arg (et-type (make-et-type-case
                              :value (make-et-datatype :name 'Any)
                              :typeofs (list synth))))
-              (out (et-funcall ftype (et--tuple 'ConsR (list arg))))
+              (out (et-checker-funcall ftype (et--tuple 'ConsR (list arg))))
               ((et-type-p out)))
     (alist-get synth (et--type-binds (et--non-nil out)))))
 
@@ -197,7 +197,7 @@ FUN may be a symbol with an `et-function-type'. Other forms (lambdas,
 partial applications) are not analysed and yield Any."
   (or (when-let* (((symbolp fun))
                   (ftype (get fun 'et-function-type))
-                  (out (et-funcall ftype (et--tuple 'ConsR (list type))))
+                  (out (et-checker-funcall ftype (et--tuple 'ConsR (list type))))
                   ((et-type-p out)))
         out)
       (et-any)))

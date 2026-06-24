@@ -254,6 +254,22 @@
 
 
 ;;; ============================================================
+;;; Array access
+
+;; `aref' indexes a vector (yielding its element type) or a string
+;; (yielding an Integer character code). Kept as an `et-define-type-checker'
+;; because its argument type carries a binding constraint
+;; (`{String&T=Integer}') that the `@function' declaration form does not
+;; express.
+(et-define-type-checker aref [T] (Args VectorR<T>|{String&T=Integer} Integer) T)
+
+(et-test
+ (et-assert-call Integer aref String Integer)
+ (et-assert-call Symbol|Integer aref (or VectorR<Symbol> String) Integer)
+ (et-assert-call-errors aref (or VectorR<Symbol> String ListR<Any>) Integer))
+
+
+;;; ============================================================
 ;;; Symbols and conversions
 
 (et-declare

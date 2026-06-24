@@ -965,7 +965,6 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
 ;;;; Process directory
 
 (defun et-process-directory (dir &rest args)
-  ;; Ignores all diagnostics
   (et-result-boundary
    (dolist (file (directory-files dir t))
      (when (file-regular-p file)
@@ -987,10 +986,17 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
 
 (defun et-process-form (expr &optional cache-source &rest args)
   (interactive (list (save-excursion (beginning-of-defun) (read (current-buffer)))
-                     (et-buffer-cache-source)))
+                     (et-buffer-cache-source)
+                     :check (not (not current-prefix-arg))))
   (et-result-boundary
    (et-with-cache-source-if-enabled cache-source
      (apply #'et--process-exprs (list expr) args))))
+
+(defun et-check-form (expr &optional cache-source)
+  (interactive
+   (list (save-excursion (beginning-of-defun) (read (current-buffer)))
+         (et-buffer-cache-source)))
+  (et-process-form expr cache-source :check t))
 
 
 ;;;; Flycheck entry point
