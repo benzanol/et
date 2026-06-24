@@ -931,6 +931,9 @@ Returns a plist with :declare to set the variable type."
 
 ;;;; Identify expr
 
+(defvar et--processed-requires nil
+  "List of libraries which have been processed due to a `require'.")
+
 (defun et--identify-expr (expr)
   (cons
    expr
@@ -943,8 +946,10 @@ Returns a plist with :declare to set the variable type."
                (load-path (cons dir load-path))
                (library (or (locate-library (symbol-name (eval name)))
                             (error "Library `%s' not found" name))))
-          ;; Process the buffer without propagating diagnostics
-          (et--process-exprs (et--file-exprs library))))
+          (unless (member library et--processed-requires)
+            (push library et--processed-requires)
+            ;; Process the buffer without propagating diagnostics
+            (et--process-exprs (et--file-exprs library)))))
 
        ;; Process a root declaration block
        ((or `(et-declare . ,forms)
@@ -1008,7 +1013,7 @@ Returns a plist with :declare to set the variable type."
 
     ;; Evaluate the buffer
     (when (or test eval)
-      (cl-loop for expr in (et--buffer-exprs)
+      (cl-loop for expr in exprs
                for pos upfrom 0
                do (et-error-boundary pos
                     (et-wrap-errors "Runtime error: %s" (eval expr)))))
