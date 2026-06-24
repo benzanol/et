@@ -909,7 +909,7 @@ Returns a plist with :declare to set the variable type."
                  (library (locate-library (symbol-name (eval name)))))
             (insert-file-contents (or library (error "Library `%s' not found" name))))
           ;; Process the buffer without propagating diagnostics
-          (et-result-boundary (et--process-buffer 'NOCHECK))))
+          (et-result-boundary (et--process-exprs (et--buffer-exprs) 'NOCHECK))))
 
        ;; Process a root declaration block
        ((or `(et-declare . ,forms)
@@ -1004,7 +1004,7 @@ Returns a plist with :declare to set the variable type."
                            (et-propagate-result result))))))))))))
 
 
-;;;; Process expr functions
+;;;; Flycheck check
 
 (defun et--buffer-exprs ()
   (save-excursion
@@ -1014,18 +1014,6 @@ Returns a plist with :declare to set the variable type."
                           (error (cl-return exprs)))
              collect expr into exprs)))
 
-(defun et-process-buffer (&optional no-check)
-  (interactive "P")
-  (et-result-boundary
-   (et--process-exprs (et--buffer-exprs) no-check)))
-
-(defun et-process-expr (expr)
-  (interactive (list (save-excursion (beginning-of-defun) (read (current-buffer)))))
-  (et-result-boundary
-   (et--process-exprs (list expr))))
-
-
-;;;; Flycheck check
 
 (defun et--traverse-buffer-expr (path)
   (goto-char (point-min))
@@ -1057,7 +1045,9 @@ Returns a plist with :declare to set the variable type."
       (insert-file-contents filename)
       (emacs-lisp-mode)
       (cl-loop for (path severity msg)
-               in (et-result-diagnostics (et-process-buffer))
+               in (et-result-diagnostics
+                   (et-result-boundary
+                    (et--process-exprs (et--buffer-exprs))))
                do (ignore-errors
                     (ignore-errors (et--traverse-buffer-expr path))
                     (let* ((start-line (line-number-at-pos))
