@@ -42,25 +42,16 @@
 (defvar-local et--flycheck-temp-file nil
   "Path to the temp file for the current flycheck run.")
 
-(defun et--flycheck-buffer-file ()
+(defun et--flycheck-temp-file ()
   "Write current buffer contents to a temp file and return its path."
-  (or buffer-file-name
-      (let* ((temp-dir et-flycheck-temp-directory)
-             (temp-file (expand-file-name (format "%s.el" (abs (random))) temp-dir)))
-        (unless (file-directory-p temp-dir) (make-directory temp-dir t))
-        (write-region (point-min) (point-max) temp-file nil 'silent)
-        (setq-local et--flycheck-temp-file temp-file)
-        temp-file)))
+  (let* ((temp-dir et-flycheck-temp-directory)
+         (temp-file (expand-file-name (format "%s.el" (abs (random))) temp-dir)))
+    (unless (file-directory-p temp-dir) (make-directory temp-dir t))
+    (write-region (point-min) (point-max) temp-file nil 'silent)
+    (setq-local et--flycheck-temp-file temp-file)
+    temp-file))
 
 (defun et-flycheck--error-filter (errors)
-  "Rewrite temp file paths in ERRORS back to the original buffer file."
-  (let* ((original (buffer-file-name)))
-    (when original
-      (dolist (err errors)
-        (when (and et--flycheck-temp-file
-                   (equal (flycheck-error-filename err)
-                          et--flycheck-temp-file))
-          (setf (flycheck-error-filename err) original)))))
   ;; Delete the temp file
   (when (and et--flycheck-temp-file (file-exists-p et--flycheck-temp-file))
     (delete-file et--flycheck-temp-file))
@@ -72,9 +63,12 @@
             "--eval" (eval (format "(add-to-list 'load-path %S)" et-source-directory))
             "--eval" "(setq load-prefer-newer t)"
             "-l" "et-cache"
+            "-l" "et-types"
+            "--eval" (eval (format "(et-process-directory %S 'NOCHECK)"
+                                   (expand-file-name "definitions" et-source-directory)))
             "--eval" (eval (format "(et-flycheck-check-file-cached %S %S)"
-                                   (et--flycheck-buffer-file)
-                                   (buffer-file-name))))
+                                   (buffer-file-name)
+                                   (et--flycheck-temp-file))))
   :error-patterns
   ((error line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": error: " (message) line-end)
    (warning line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": warning: " (message) line-end)

@@ -944,7 +944,7 @@ Returns a plist with :declare to set the variable type."
                (library (or (locate-library (symbol-name (eval name)))
                             (error "Library `%s' not found" name))))
           ;; Process the buffer without propagating diagnostics
-          (et-result-boundary (et--process-file library 'NOCHECK))))
+          (et-process-file library 'NOCHECK)))
 
        ;; Process a root declaration block
        ((or `(et-declare . ,forms)
@@ -1054,13 +1054,20 @@ Returns a plist with :declare to set the variable type."
                           (error (cl-return exprs)))
              collect expr into exprs)))
 
-(defun et--process-file (file &optional no-check)
+(defun et-process-file (file &optional no-check)
   (let* ((et--checking-file file))
-    (et--process-exprs
-     (with-temp-buffer
-       (insert-file-contents file)
-       (et--buffer-exprs))
-     no-check)))
+    (et-result-boundary
+     (et--process-exprs
+      (with-temp-buffer
+        (insert-file-contents file)
+        (et--buffer-exprs))
+      no-check))))
+
+(defun et-process-directory (dir &optional no-check)
+  ;; Ignores all diagnostics
+  (dolist (file (directory-files dir t))
+    (when (file-regular-p file)
+      (et-process-file file no-check))))
 
 (defun et--traverse-buffer-expr (path)
   (goto-char (point-min))
@@ -1084,11 +1091,11 @@ Returns a plist with :declare to set the variable type."
 
     (forward-comment (buffer-size))))
 
-(defun et-flycheck-check-file (filename)
+(defun et-flycheck-check-file (true-file &optional content-file)
   "Entry point for batch-mode type checking."
-  (let* ((et--checking-file filename))
+  (let* ((et--checking-file true-file))
     (with-temp-buffer
-      (insert-file-contents filename)
+      (insert-file-contents (or content-file true-file))
       (emacs-lisp-mode)
       (cl-loop for (path severity msg)
                in (et-result-diagnostics
@@ -1100,7 +1107,7 @@ Returns a plist with :declare to set the variable type."
                            (start-col (1+ (current-column))))
                       (ignore-errors (forward-sexp))
                       (princ (format "%s:%d:%d:%s:%s: %s: %s path=%s\n"
-                                     filename
+                                     true-file
                                      start-line start-col
                                      (line-number-at-pos) (1+ (current-column))
                                      severity msg path))))))))

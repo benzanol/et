@@ -982,13 +982,9 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
                      (et-buffer-cache-source)))
   (apply #'et--cached-process-exprs cache-source (list expr) process-args))
 
-(defun et-flycheck-check-file-cached (filename source-file)
-  "Run `et-flycheck-check-file' on FILENAME with caching for SOURCE-FILE.
-
-FILENAME is the file actually checked; SOURCE-FILE is the real file
-whose on-disk cache is loaded and saved (nil for a non-file buffer)."
-  (et-with-cache-source-if-enabled source-file
-    (et-flycheck-check-file filename)))
+(defun et-flycheck-check-file-cached (true-file &optional content-file)
+  (et-with-cache-source-if-enabled true-file
+    (et-flycheck-check-file true-file content-file)))
 
 
 ;;;; Advice installation
