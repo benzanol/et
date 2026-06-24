@@ -434,7 +434,67 @@ PATH is the path to the subexpression."
 ;;; ============================================================
 ;;; Processing
 ;;;; Function definitions
-;;;;; Signature
+;;;;; Parse declarations
+
+(cl-defstruct et--func-declarations
+  "The result of parsing the function declarations."
+  param-reprs input-type return-repr generics constraints props)
+
+(defun et--parse-function-declarations (param-groups declares)
+  (let* ((param-reprs
+          (cl-loop for group in param-groups
+                   collect (cl-loop for name in group collect (cons name (et-repr Nil)))))
+         any-params return-repr gen-vec generics constraints props)
+
+    ;; Parse the fields of the declare block
+    (dotimes (form-idx (length declares))
+      (et-error-boundary form-idx
+        (pcase (nth form-idx declares)
+          (`(@return ,spec)
+           (when return-repr (et-fatal 0 "Multiple @return clauses"))
+           (et-at 1
+             (setq return-repr (et-parse-repr spec generics 'TYPE))))
+          (`(@return . ,_) (et-fatal 0 "Expected (@return TYPE)"))
+
+          (`(@generics ,(and gv (pred vectorp)))
+           (when gen-vec (et-fatal 0 "Multiple @generic clauses"))
+           (when return-repr (et-fatal 0 "@generic must come before @return"))
+           (when any-params (et-fatal 0 "@generic must come before parameter declarations"))
+           (et-at 1
+             (setq gen-vec gv
+                   generics (et--gen-vec-generics gv)
+                   constraints (et--gen-vec-constraints gv))))
+          (`(@generics . ,_) (et-fatal 0 "Expected (@generics [VARS...])"))
+
+          (`(@skip)
+           (when (plist-get props :skip) (et-fatal 0 "Multiple @skip clauses"))
+           (setq props (cl-list* :skip t props)))
+
+          ;; Can contain `narrows', `vars', `all'
+          (`(@show . ,show)
+           (when (plist-get props :show) (et-fatal 0 "Multiple @show clauses"))
+           (setq props (cl-list* :skip show props)))
+
+          (`(,(and name (pred symbolp)) ,spec)
+           (let* ((entry (cl-loop for group in param-reprs
+                                  for entry = (assq name group)
+                                  when entry return entry
+                                  finally do (et-fatal 0 "Not a parameter: %s" name))))
+             (et-at 1
+               (setq any-params t)
+               (setcdr entry (et-parse-repr spec generics 'BOTH)))))
+
+          (_ (error "Invalid format")))))
+
+    (make-et--func-declarations
+     :param-reprs param-reprs
+     :return-repr return-repr
+     :generics generics
+     :constraints constraints
+     :props props)))
+
+
+;;;;; Parse signature
 
 ;; Function processing happens in two phases:
 ;;
@@ -465,84 +525,43 @@ PATH is the path to the subexpression."
               (declare-pos (cl-position 'declare (cons nil (cdr body)) :key #'car-safe))
               (declare-block (nth declare-pos body))
               (et-pos (cl-position 'et declare-block :key #'car-safe))
-              (et-block (nth et-pos declare-block)))
+              (et-block (nth et-pos declare-block))
+              ;; Start the actual parsing
+              (param-groups (et-at 0 (et--parse-arglist-params (car body))))
+              (decls (et-at (list declare-pos et-pos)
+                       (et-at-offset 1 ; after the `et'
+                         (et--parse-function-declarations param-groups (cdr et-block)))))
+              ;; This could be nil; stop here if it is
+              (return-repr (et--func-declarations-return-repr decls)))
 
-    (let* ((arglist (car body))
-           (param-reprs ; (name . repr)[][]
-            (et-at 0
-              (cl-loop for group in (et--parse-arglist-params arglist)
-                       collect (cl-loop for name in group collect (cons name (et-repr Nil))))))
-           any-params return-repr gen-vec generics constraints props)
-
-      ;; Parse the fields of the declare block
-      (dotimes (form-idx (length et-block))
-        (et-error-boundary (list declare-pos et-pos form-idx)
-          (pcase (nth form-idx et-block)
-            ((guard (eq 0 form-idx))) ; Skip the `et' symbol
-
-            (`(@return ,spec)
-             (when return-repr (et-fatal 0 "Multiple @return clauses"))
-             (et-at 1
-               (setq return-repr (et-parse-repr spec generics 'TYPE))))
-            (`(@return . ,_) (et-fatal 0 "Expected (@return TYPE)"))
-
-            (`(@generics ,(and gv (pred vectorp)))
-             (when gen-vec (et-fatal 0 "Multiple @generic clauses"))
-             (when return-repr (et-fatal 0 "@generic must come before @return"))
-             (when any-params (et-fatal 0 "@generic must come before parameter declarations"))
-             (et-at 1
-               (setq gen-vec gv
-                     generics (et--gen-vec-generics gv)
-                     constraints (et--gen-vec-constraints gv))))
-            (`(@generics . ,_) (et-fatal 0 "Expected (@generics [VARS...])"))
-
-            (`(@skip)
-             (when (plist-get props :skip) (et-fatal 0 "Multiple @skip clauses"))
-             (setq props (cl-list* :skip t props)))
-
-            ;; Can contain `narrows', `vars', `all'
-            (`(@show . ,show)
-             (when (plist-get props :show) (et-fatal 0 "Multiple @show clauses"))
-             (setq props (cl-list* :skip show props)))
-
-            (`(,(and name (pred symbolp)) ,spec)
-             (let* ((entry (cl-loop for group in param-reprs
-                                    for entry = (assq name group)
-                                    when entry return entry
-                                    finally do (et-fatal 0 "Not a parameter: %s" name))))
-               (et-at 1
-                 (setq any-params t)
-                 (setcdr entry (et-parse-repr spec generics 'BOTH)))))
-
-            (_ (error "Invalid format")))))
-
-      ;; Construct the function signature
-      (when return-repr
-        (let* ((input (apply #'et--generate-func-input t generics constraints param-reprs))
-               (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
-          (et--with-scoped-datatypes scoped
-            (make-et-func-sig
-             :func-type (et-dt 'DynFunction input return-repr)
-             :props props
-             ;; Things necessary for typechecking the body
-             :source (nthcdr declare-pos body)
-             :source-pos (1+ declare-pos)
-             ;; Both vars and expected-return may contain the scoped types
-             :scoped scoped
-             :vars
-             (cl-loop for param-group in param-reprs nconc
-                      (cl-loop for (name . repr) in param-group
-                               ;; Replace each generic in the parameter reprs with the corresponding scoped datatype
-                               for type = (cl-loop for gen in generics
-                                                   for scoped-args in scoped
-                                                   collect (cons gen (apply #'et-dt 'Scoped scoped-args)) into gen-repls
-                                                   finally return (et-repr-to-type repr gen-repls))
-                               collect (make-et-var :name name :type type)))
-             :expected-return
-             (cl-loop for (name unique constraints) in scoped
-                      collect (cons name (et-dt 'Scoped name unique constraints))
-                      into gen-repls
-                      finally return (et-repr-to-type return-repr gen-repls)))))))))
+    ;; Construct the function signature
+    (let* ((input (et--func-decls-to-input decls))
+           (param-reprs (et--func-declarations-param-reprs decls))
+           (generics (et--func-declarations-generics decls))
+           (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
+      (et--with-scoped-datatypes scoped
+        (make-et-func-sig
+         :func-type (et-dt 'DynFunction input return-repr)
+         :props (et--func-declarations-props decls)
+         ;; Things necessary for typechecking the body
+         :source (nthcdr declare-pos body)
+         :source-pos (1+ declare-pos)
+         ;; Both vars and expected-return may contain the scoped types
+         :scoped scoped
+         :vars
+         (cl-loop for param-group in param-reprs nconc
+                  (cl-loop for (name . repr) in param-group
+                           ;; Replace each generic in the parameter reprs with the corresponding scoped datatype
+                           for type = (cl-loop for gen in generics
+                                               for scoped-args in scoped
+                                               collect (cons gen (apply #'et-dt 'Scoped scoped-args)) into gen-repls
+                                               finally return (et-repr-to-type repr gen-repls))
+                           collect (make-et-var :name name :type type)))
+         :expected-return
+         (cl-loop for (name unique constraints) in scoped
+                  collect (cons name (et-dt 'Scoped name unique constraints))
+                  into gen-repls
+                  finally return (et-repr-to-type return-repr gen-repls)))))))
 
 
 ;;;;; Parse arglist params
@@ -580,6 +599,10 @@ element."
 
 
 ;;;;; Input type
+
+(defun et--func-decls-to-input (decls)
+  (pcase-let* (((cl-struct et--func-declarations param-reprs generics constraints) decls))
+    (apply #'et--generate-func-input t generics constraints param-reprs)))
 
 (defun et--generate-func-input (always-matcher generics constraints required optional key-params rest-params)
   "Build an input matcher or type from parameter specs.
@@ -688,6 +711,18 @@ OUTPUT-REPR each converted to concrete types."
                  (sig (et-at-offset 2 (et--parse-function-signature (cddr body)))))
        (put name 'et-function-signature sig)
        (put name 'et-function-type (et-func-sig-func-type sig))))))
+
+(defun et--identify-function-directive (form)
+  (list
+   :declare
+   (lambda ()
+     (pcase-let*
+         ((`(@function ,name ,arglist . ,declares) form)
+          (param-groups (et-at 2 (et--parse-arglist-params arglist)))
+          (decls (et-at-offset 3 (et--parse-function-declarations param-groups declares)))
+          (input (et--func-decls-to-input decls)))
+       (when-let* ((return-repr (et--func-declarations-return-repr decls)))
+         (put name 'et-function-type (et-dt 'DynFunction input return-repr)))))))
 
 
 ;;;;; Checker
@@ -818,9 +853,9 @@ OUTPUT-REPR each converted to concrete types."
                                         arglist-repr struct-repr))))))))
 
 
-;;;; Identify alias
+;;;; Identify alias directive
 
-(defun et--identify-alias-def (form)
+(defun et--identify-alias-directive (form)
   "Identify an alias definition, returning a processing plist.
 
 During identification, declares the alias name and generics.
@@ -832,41 +867,41 @@ Returns a plist with :constrain and :populate functions."
                 (et-fatal 1 "Alias name must be a symbol")))
          (gen-vec (if (vectorp (car args)) (pop args) []))
          (pb (condition-case nil (et--props-and-body args)
-               (error (et-fatal nil "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)")))))
+               (error (et-fatal nil "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)"))))
 
-    ;; Identification phase: declare the alias name, generics, and spec
-    ;; (but don't parse repr or constraints yet)
-    (apply #'et--declare-alias name gen-vec (cdr pb) (car pb))
+         ;; Identification phase: declare the alias name, generics, and spec
+         ;; (but don't parse repr or constraints yet)
+         (_ (apply #'et--declare-alias name gen-vec (cdr pb) (car pb)))
 
-    (let* ((spec-idx (length orig-args))
-           (gen-vec-idx (when (vectorp (nth 1 orig-args)) 2)))
+         (spec-idx (length orig-args))
+         (gen-vec-idx (when (vectorp (nth 1 orig-args)) 2)))
 
-      (list
-       :constrain
-       (lambda ()
-         ;; Parse the generic constraints (which reference other types)
-         (when gen-vec-idx
-           (et-at gen-vec-idx
-             (let* ((props (get name 'et-alias)))
-               (plist-put props :constraints
-                          (et--gen-vec-constraints (plist-get props :gen-vec)))))))
+    (list
+     :constrain
+     (lambda ()
+       ;; Parse the generic constraints (which reference other types)
+       (when gen-vec-idx
+         (et-at gen-vec-idx
+           (let* ((props (get name 'et-alias)))
+             (plist-put props :constraints
+                        (et--gen-vec-constraints (plist-get props :gen-vec)))))))
 
-       :populate
-       (lambda ()
-         ;; Parse the spec into a repr
-         (et-at spec-idx
-           (let* ((props (or (get name 'et-alias)
-                             (et-fatal nil "Alias `%s' not declared" name)))
-                  (spec (plist-get props :spec))
-                  (generics (plist-get props :generics))
-                  (target (plist-get props :target)))
-             (plist-put props :repr
-                        (et-parse-repr spec generics (or target 'BOTH))))))))))
+     :populate
+     (lambda ()
+       ;; Parse the spec into a repr
+       (et-at spec-idx
+         (let* ((props (or (get name 'et-alias)
+                           (et-fatal nil "Alias `%s' not declared" name)))
+                (spec (plist-get props :spec))
+                (generics (plist-get props :generics))
+                (target (plist-get props :target)))
+           (plist-put props :repr
+                      (et-parse-repr spec generics (or target 'BOTH)))))))))
 
 
-;;;; Identify variable def
+;;;; Identify variable directive
 
-(defun et--identify-variable-def (form)
+(defun et--identify-variable-directive (form)
   "Identify a variable definition, returning a processing plist.
 
 During identification, just validates the format.
@@ -920,8 +955,9 @@ Returns a plist with :declare to set the variable type."
          for plist =
          (et-error-boundary pos
            (pcase form
-             (`(@alias . ,_) (et--identify-alias-def form))
-             (`(@variable . ,_) (et--identify-variable-def form))))
+             (`(@alias . ,_) (et--identify-alias-directive form))
+             (`(@variable . ,_) (et--identify-variable-directive form))
+             (`(@function . ,_) (et--identify-function-directive form))))
          collect
          (cons pos plist)))
 
