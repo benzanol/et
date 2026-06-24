@@ -962,29 +962,81 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
 
 ;;; ============================================================
 ;;; Extra
-;;;; API
+;;;; Process directory
 
-(defun et--cached-process-exprs (cache-source exprs &rest process-args)
-  (et-with-cache-source-if-enabled cache-source
-    (et-result-boundary
-     (apply #'et--process-exprs exprs process-args))))
+(defun et-process-directory (dir &rest args)
+  ;; Ignores all diagnostics
+  (et-result-boundary
+   (dolist (file (directory-files dir t))
+     (when (file-regular-p file)
+       (et-error-boundary nil
+         (apply #'et--process-exprs (et--file-exprs file) args))))))
+
+
+;;;; Process in the current buffer
 
 (defun et-buffer-cache-source ()
   (when buffer-file-name
     (expand-file-name buffer-file-name)))
 
-(defun et-process-buffer (&rest process-args)
+(defun et-process-buffer (&rest args)
   (interactive (list (not (not current-prefix-arg))))
-  (apply #'et--cached-process-exprs (et-buffer-cache-source) (et--buffer-exprs) process-args))
+  (et-result-boundary
+   (et-with-cache-source-if-enabled (et-buffer-cache-source)
+     (apply #'et--process-exprs (et-buffer-cache-source) (et--buffer-exprs) args))))
 
-(defun et-process (expr &optional cache-source &rest process-args)
+(defun et-process-defun (expr &optional cache-source &rest args)
   (interactive (list (save-excursion (beginning-of-defun) (read (current-buffer)))
                      (et-buffer-cache-source)))
-  (apply #'et--cached-process-exprs cache-source (list expr) process-args))
+  (et-result-boundary
+   (et-with-cache-source-if-enabled (et-buffer-cache-source)
+     (apply #'et--process-exprs cache-source (list expr) args))))
 
-(defun et-flycheck-check-file-cached (true-file &optional content-file)
+
+;;;; Flycheck entry point
+
+(defun et-flycheck-check-file (true-file &optional content-file &rest args)
+  "Entry point for batch-mode type checking."
   (et-with-cache-source-if-enabled true-file
-    (et-flycheck-check-file true-file content-file)))
+    (with-temp-buffer
+      (insert-file-contents (or content-file true-file (error "No file provided")))
+      (emacs-lisp-mode)
+      (cl-loop for (path severity msg)
+               in (et-result-diagnostics
+                   (et-result-boundary
+                    (apply #'et--process-exprs (et--buffer-exprs) args)))
+               do (ignore-errors
+                    (ignore-errors (et--traverse-buffer-expr path))
+                    (let* ((start-line (line-number-at-pos))
+                           (start-col (1+ (current-column))))
+                      (ignore-errors (forward-sexp))
+                      (princ (format "%s:%d:%d:%s:%s: %s: %s path=%s\n"
+                                     true-file
+                                     start-line start-col
+                                     (line-number-at-pos) (1+ (current-column))
+                                     severity msg path))))))))
+
+(defun et--traverse-buffer-expr (path)
+  (goto-char (point-min))
+  (dotimes (_ (or (car path) 0)) (forward-sexp))
+  (forward-comment (buffer-size))
+
+  (dolist (idx (cdr path))
+    ;; Skip whitespace and comments before looking at the next form
+    (cond
+     ((looking-at-p ",\\|`\\|#?']")
+      (if (eq idx 1)
+          (goto-char (match-end 0))
+        (error "Only valid subexpr of quote is 1")))
+
+     ((looking-at-p "[([]")
+      (forward-char 1)
+      (dotimes (_ idx) (forward-sexp))
+      (forward-comment (buffer-size)))
+
+     (t (error "Invalid expression container: %s" (thing-at-point 'char))))
+
+    (forward-comment (buffer-size))))
 
 
 ;;;; Advice installation

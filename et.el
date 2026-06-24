@@ -1668,6 +1668,7 @@ which are invalid for types."
   (let* ((sub (lambda (r) (et--repr-substitute-generics r gen-repls))))
     (pcase factor
       (`(S:GENERIC ,var)
+       (:typeof var)
        ;; Don't use alist-get, because the value of the replacement can be nil
        (if-let* ((entry (assq var gen-repls)))
            (et-repr-dnf (cdr entry))

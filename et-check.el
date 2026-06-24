@@ -944,7 +944,7 @@ Returns a plist with :declare to set the variable type."
                (library (or (locate-library (symbol-name (eval name)))
                             (error "Library `%s' not found" name))))
           ;; Process the buffer without propagating diagnostics
-          (et-process-file library 'NOCHECK)))
+          (et--process-exprs (et--file-exprs library))))
 
        ;; Process a root declaration block
        ((or `(et-declare . ,forms)
@@ -972,18 +972,10 @@ Returns a plist with :declare to set the variable type."
 
 ;;;; Process exprs
 
-(defvar et--checking-file nil
-  "The file that is currently being typechecked.")
-
-(defvar et-run-tests t
-  "Whether to run tests inside of `et--process-exprs'.")
-(defvar et--loaded-files nil
-  "The list of files which have been evaluated (for testing).")
-
 (defvar et--processing-phase nil "Used for debugging `et--process-exprs'.")
 (defvar et--processing-expr nil "Used for debugging `et--process-exprs'.")
 
-(defun et--process-exprs (exprs &optional no-check)
+(cl-defun et--process-exprs (exprs &key check test eval)
   (let* ((identified (et-result-map #'et--identify-expr exprs)))
 
     ;; For each expression, et--identify-expr returns a list of
@@ -1002,8 +994,8 @@ Returns a plist with :declare to set the variable type."
                             for func = (plist-get plist phase)
                             when func do (et-error-boundary path (funcall func)))))))
 
-    (unless no-check
-      ;; Check all root-level expressions
+    ;; Type-check all root-level expressions
+    (when check
       (cl-loop for expr in exprs
                for pos upfrom 0
                when (and (consp expr)
@@ -1012,39 +1004,37 @@ Returns a plist with :declare to set the variable type."
                do
                (let* ((et--processing-phase :check)
                       (et--processing-expr expr))
-                 (et-error-boundary pos (et--check expr))))
+                 (et-error-boundary pos (et--check expr)))))
 
-      ;; Run tests
-      (when et-run-tests
-        ;; Evaluate the buffer
-        (unless (member et--checking-file et--loaded-files)
-          (push et--checking-file et--loaded-files)
-          (cl-loop for expr in (et--buffer-exprs)
-                   for pos upfrom 0
-                   do (et-error-boundary pos
-                        (et-wrap-errors "Runtime error: %s" (eval expr)))))
+    ;; Evaluate the buffer
+    (when (or test eval)
+      (cl-loop for expr in (et--buffer-exprs)
+               for pos upfrom 0
+               do (et-error-boundary pos
+                    (et-wrap-errors "Runtime error: %s" (eval expr)))))
 
-        ;; Run the tests
-        (cl-loop
-         for expr in exprs
-         for pos upfrom 0
-         when (eq #'et-test (car expr))
-         do
-         (cl-loop for test in (cdr expr)
-                  for test-idx upfrom 1
-                  do
-                  (let* ((et--processing-phase :test)
-                         (et--processing-expr test))
-                    (et-at (list pos test-idx)
-                      (pcase (eval test)
-                        ('nil (et-warn nil "Evaluated to nil"))
-                        ((and result (pred et-result-p))
-                         (when (et-result-failed result)
-                           (et-propagate-result result))))))))))))
+    ;; Run tests
+    (when test
+      ;; Run the tests
+      (cl-loop
+       for expr in exprs
+       for pos upfrom 0
+       when (eq #'et-test (car expr))
+       do
+       (cl-loop for test in (cdr expr)
+                for test-idx upfrom 1
+                do
+                (let* ((et--processing-phase :test)
+                       (et--processing-expr test))
+                  (et-at (list pos test-idx)
+                    (pcase (eval test)
+                      ('nil (et-warn nil "Evaluated to nil"))
+                      ((and result (pred et-result-p))
+                       (when (et-result-failed result)
+                         (et-propagate-result result)))))))))))
 
 
-;;;; Process a directory
-;;;; Flycheck check
+;;;; Processing helpers
 
 (defun et--buffer-exprs ()
   (save-excursion
@@ -1054,63 +1044,8 @@ Returns a plist with :declare to set the variable type."
                           (error (cl-return exprs)))
              collect expr into exprs)))
 
-(defun et-process-file (file &optional no-check)
-  (let* ((et--checking-file file))
-    (et-result-boundary
-     (et--process-exprs
-      (with-temp-buffer
-        (insert-file-contents file)
-        (et--buffer-exprs))
-      no-check))))
-
-(defun et-process-directory (dir &optional no-check)
-  ;; Ignores all diagnostics
-  (dolist (file (directory-files dir t))
-    (when (file-regular-p file)
-      (et-process-file file no-check))))
-
-(defun et--traverse-buffer-expr (path)
-  (goto-char (point-min))
-  (dotimes (_ (or (car path) 0)) (forward-sexp))
-  (forward-comment (buffer-size))
-
-  (dolist (idx (cdr path))
-    ;; Skip whitespace and comments before looking at the next form
-    (cond
-     ((looking-at-p ",\\|`\\|#?']")
-      (if (eq idx 1)
-          (goto-char (match-end 0))
-        (error "Only valid subexpr of quote is 1")))
-
-     ((looking-at-p "[([]")
-      (forward-char 1)
-      (dotimes (_ idx) (forward-sexp))
-      (forward-comment (buffer-size)))
-
-     (t (error "Invalid expression container: %s" (thing-at-point 'char))))
-
-    (forward-comment (buffer-size))))
-
-(defun et-flycheck-check-file (true-file &optional content-file)
-  "Entry point for batch-mode type checking."
-  (let* ((et--checking-file true-file))
-    (with-temp-buffer
-      (insert-file-contents (or content-file true-file))
-      (emacs-lisp-mode)
-      (cl-loop for (path severity msg)
-               in (et-result-diagnostics
-                   (et-result-boundary
-                    (et--process-exprs (et--buffer-exprs))))
-               do (ignore-errors
-                    (ignore-errors (et--traverse-buffer-expr path))
-                    (let* ((start-line (line-number-at-pos))
-                           (start-col (1+ (current-column))))
-                      (ignore-errors (forward-sexp))
-                      (princ (format "%s:%d:%d:%s:%s: %s: %s path=%s\n"
-                                     true-file
-                                     start-line start-col
-                                     (line-number-at-pos) (1+ (current-column))
-                                     severity msg path))))))))
+(defun et--file-exprs (file)
+  (with-temp-buffer (insert-file-contents file) (et--buffer-exprs)))
 
 
 ;;; ============================================================

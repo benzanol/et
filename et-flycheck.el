@@ -25,7 +25,8 @@
 (require 'flycheck)
 
 
-(defvar-local et-mode nil)
+(define-minor-mode et-mode
+  "Typecheck the current buffer.")
 
 (defcustom et-source-directory
   (file-name-directory (or load-file-name buffer-file-name))
@@ -37,6 +38,11 @@
   (expand-file-name "et-flycheck" temporary-file-directory)
   "Directory for temporary files used by the et flycheck checker."
   :type 'directory
+  :group 'et)
+
+(defcustom et-flycheck-do-test nil
+  "Whether the flycheck process should run tests."
+  :type 'boolean
   :group 'et)
 
 (defvar-local et--flycheck-temp-file nil
@@ -64,11 +70,11 @@
             "--eval" "(setq load-prefer-newer t)"
             "-l" "et-cache"
             "-l" "et-types"
-            "--eval" (eval (format "(et-process-directory %S 'NOCHECK)"
+            "--eval" (eval (format "(et-process-directory %S :eval t)"
                                    (expand-file-name "definitions" et-source-directory)))
-            "--eval" (eval (format "(et-flycheck-check-file-cached %S %S)"
-                                   (buffer-file-name)
-                                   (et--flycheck-temp-file))))
+            "--eval" (eval (format "(et-flycheck-check-file %S %S :check t :test %S)"
+                                   (buffer-file-name) (et--flycheck-temp-file)
+                                   et-flycheck-do-test)))
   :error-patterns
   ((error line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": error: " (message) line-end)
    (warning line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": warning: " (message) line-end)
@@ -77,7 +83,9 @@
   :error-filter et-flycheck--error-filter
   :modes (emacs-lisp-mode)
   :predicate (lambda () (bound-and-true-p et-mode))
-  :next-checkers ((t . emacs-lisp) (t . emacs-lisp-checkdoc)))
+  :next-checkers nil
+  ;; ((t . emacs-lisp) (t . emacs-lisp-checkdoc))
+  )
 
 (add-to-list 'flycheck-checkers 'et-flycheck-checker)
 
