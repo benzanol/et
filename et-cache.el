@@ -980,17 +980,17 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
     (expand-file-name buffer-file-name)))
 
 (defun et-process-buffer (&rest args)
-  (interactive (list (not (not current-prefix-arg))))
+  (interactive (if current-prefix-arg '(:check t :test t) nil))
   (et-result-boundary
    (et-with-cache-source-if-enabled (et-buffer-cache-source)
-     (apply #'et--process-exprs (et-buffer-cache-source) (et--buffer-exprs) args))))
+     (apply #'et--process-exprs (et--buffer-exprs) args))))
 
-(defun et-process-defun (expr &optional cache-source &rest args)
+(defun et-process-form (expr &optional cache-source &rest args)
   (interactive (list (save-excursion (beginning-of-defun) (read (current-buffer)))
                      (et-buffer-cache-source)))
   (et-result-boundary
-   (et-with-cache-source-if-enabled (et-buffer-cache-source)
-     (apply #'et--process-exprs cache-source (list expr) args))))
+   (et-with-cache-source-if-enabled cache-source
+     (apply #'et--process-exprs (list expr) args))))
 
 
 ;;;; Flycheck entry point

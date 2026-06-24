@@ -441,10 +441,41 @@ PATH is the path to the subexpression."
   "The result of parsing the function declarations."
   param-reprs input-type return-repr generics constraints props)
 
+(defun et--find-function-declarations (body)
+  (when-let*
+      ((declare-pos (cl-position 'declare body :key #'car-safe :start 1))
+       (declare-block (nth declare-pos body))
+       (et-pos (cl-position 'et declare-block :key #'car-safe))
+       (et-block (nth et-pos declare-block))
+       ;; Start the actual parsing
+       (param-groups (et-at 0 (et--parse-arglist-params (car body)))))
+    (et-at (list declare-pos et-pos)
+      (et-at-offset 1 ; after the `et'
+        (cons (et--parse-function-declarations param-groups (cdr et-block))
+              (1+ declare-pos))))))
+
+(defun et--assign-function-declarations (func decls)
+  "Assign relevant symbol properties to FUNC."
+  (declare (et (func Var) (decls *et--func-declarations) (@return Nil)))
+  (put func 'et-function-declarations decls)
+
+  ;; Assign `et-function-type' if applicable
+  (when-let* ((return-repr (et--func-declarations-return-repr decls))
+              (input (et--func-decls-to-input decls)))
+    (put func 'et-function-type (et-dt 'DynFunction input return-repr)))
+
+  ;; Assign the checker if applicable
+  (when-let* ((checker (plist-get (et--func-declarations-props decls) :checker)))
+    (put func 'et-checker checker)))
+
+(defun et--func-decls-to-input (decls)
+  (pcase-let* (((cl-struct et--func-declarations param-reprs generics constraints) decls))
+    (apply #'et--generate-func-input t generics constraints param-reprs)))
+
 (defun et--parse-function-declarations (param-groups declares)
   (let* ((param-reprs
           (cl-loop for group in param-groups
-                   collect (cl-loop for name in group collect (cons name (et-repr Nil)))))
+                   collect (cl-loop for name in group collect (cons name (et-repr Any)))))
          any-params return-repr gen-vec generics constraints props)
 
     ;; Parse the fields of the declare block
@@ -475,6 +506,14 @@ PATH is the path to the subexpression."
           (`(@show . ,show)
            (when (plist-get props :show) (et-fatal 0 "Multiple @show clauses"))
            (setq props (cl-list* :skip show props)))
+
+          (`(@checker ,checker)
+           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
+           (setq props (cl-list* :checker checker props)))
+
+          (`(@expand)
+           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
+           (setq props (cl-list* :checker #'et-macroexpand-checker props)))
 
           ;; Parameters
           (`(,(and name (pred symbolp)) ,spec)
@@ -507,6 +546,7 @@ PATH is the path to the subexpression."
 ;; variabels are defined.
 
 (cl-defstruct et-func-sig
+  (declarations nil :et *et--func-declarations)
   (func-type nil :et *et-type)
   (props nil :et List<Any>)
   ;; Things necessary for typechecking the body
@@ -523,17 +563,9 @@ PATH is the path to the subexpression."
                (@return Nil|*et-result<*et-func-sig>)
                (@skip)))
 
-  (when-let* (;; 'declare could also be the first element of the arglist, so replace it with nil when searching
-              (declare-pos (cl-position 'declare (cons nil (cdr body)) :key #'car-safe))
-              (declare-block (nth declare-pos body))
-              (et-pos (cl-position 'et declare-block :key #'car-safe))
-              (et-block (nth et-pos declare-block))
-              ;; Start the actual parsing
-              (param-groups (et-at 0 (et--parse-arglist-params (car body))))
-              (decls (et-at (list declare-pos et-pos)
-                       (et-at-offset 1 ; after the `et'
-                         (et--parse-function-declarations param-groups (cdr et-block)))))
-              ;; This could be nil; stop here if it is
+  (when-let* ((found (et--find-function-declarations body))
+              (decls (car found))
+              (source-pos (cdr found))
               (return-repr (et--func-declarations-return-repr decls)))
 
     ;; Construct the function signature
@@ -543,11 +575,12 @@ PATH is the path to the subexpression."
            (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
       (et--with-scoped-datatypes scoped
         (make-et-func-sig
+         :declarations decls
          :func-type (et-dt 'DynFunction input return-repr)
          :props (et--func-declarations-props decls)
          ;; Things necessary for typechecking the body
-         :source (nthcdr declare-pos body)
-         :source-pos (1+ declare-pos)
+         :source (nthcdr source-pos body)
+         :source-pos source-pos
          ;; Both vars and expected-return may contain the scoped types
          :scoped scoped
          :vars
@@ -601,10 +634,6 @@ element."
 
 
 ;;;;; Input type
-
-(defun et--func-decls-to-input (decls)
-  (pcase-let* (((cl-struct et--func-declarations param-reprs generics constraints) decls))
-    (apply #'et--generate-func-input t generics constraints param-reprs)))
 
 (defun et--generate-func-input (always-matcher generics constraints required optional key-params rest-params)
   "Build an input matcher or type from parameter specs.
@@ -712,7 +741,15 @@ OUTPUT-REPR each converted to concrete types."
      (when-let* ((name (cadr body))
                  (sig (et-at-offset 2 (et--parse-function-signature (cddr body)))))
        (put name 'et-function-signature sig)
-       (put name 'et-function-type (et-func-sig-func-type sig))))))
+       (et--assign-function-declarations name (et-func-sig-declarations sig))))))
+
+(defun et--identify-defmacro (body)
+  (list
+   :declare
+   (lambda ()
+     (when-let* ((found (et-at-offset 2 (et--find-function-declarations (cddr body))))
+                 (decls (car found)))
+       (et--assign-function-declarations (cadr body) decls)))))
 
 (defun et--identify-function-directive (form)
   (list
@@ -721,10 +758,8 @@ OUTPUT-REPR each converted to concrete types."
      (pcase-let*
          ((`(@function ,name ,arglist . ,declares) form)
           (param-groups (et-at 2 (et--parse-arglist-params arglist)))
-          (decls (et-at-offset 3 (et--parse-function-declarations param-groups declares)))
-          (input (et--func-decls-to-input decls)))
-       (when-let* ((return-repr (et--func-declarations-return-repr decls)))
-         (put name 'et-function-type (et-dt 'DynFunction input return-repr)))))))
+          (decls (et-at-offset 3 (et--parse-function-declarations param-groups declares))))
+       (et--assign-function-declarations name decls)))))
 
 
 ;;;;; Checker
@@ -967,9 +1002,11 @@ Returns a plist with :declare to set the variable type."
          collect
          (cons pos plist)))
 
-       ;; Process a defun
+       ;; Process a defun/defmacro
        (`(defun ,(pred symbolp) ,(pred listp) . ,_)
         (list (cons nil (et--identify-defun expr))))
+       (`(defmacro ,(pred symbolp) ,(pred listp) . ,_)
+        (list (cons nil (et--identify-defmacro expr))))
 
        ;; Process a struct
        (`(cl-defstruct . ,_)
@@ -1175,6 +1212,15 @@ Example:
            (,'\` (,@(mapcar (lambda (s)
                               (list '\, (plist-get s :plural)))
                             specs)))))))
+
+
+;;;; Macroexpand Checker
+
+(defun et-macroexpand-checker ()
+  "Type checker which expands a macro and type-checks the expansion."
+  (let* ((expanded (macroexpand-1 et--checker-expr)))
+    (et-with-sticky-path
+     (et--check expanded))))
 
 
 ;;; ============================================================

@@ -228,4 +228,11 @@ structure."
 
 
 (provide 'et-backquote)
+;;; Extra checkers
+
+(et-declare
+ (@function backquote-list* (first &rest list)
+            (@expand)))
+
+
 ;;; backquote.el ends here

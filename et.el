@@ -276,6 +276,7 @@ applying `copy-tree' to all list ltierals before they are returned. This
 could be improved in the future by replacing all list literals with
 instances of `list' and `cons', but this is not currently a high
 priority."
+  (declare (et (@expand)))
   (et--copy-quotes (cdr (backquote-process expr))))
 
 (defmacro et-ql (&rest exprs)
