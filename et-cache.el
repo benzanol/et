@@ -1016,27 +1016,35 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
                                      (line-number-at-pos) (1+ (current-column))
                                      severity msg path))))))))
 
-(defun et--traverse-buffer-expr (path)
-  (goto-char (point-min))
-  (dotimes (_ (or (car path) 0)) (forward-sexp))
+(defun et--traverse-expr (path)
   (forward-comment (buffer-size))
 
-  (dolist (idx (cdr path))
-    ;; Skip whitespace and comments before looking at the next form
+  (when-let* ((num (car path)))
     (cond
      ((looking-at ",@?\\|`\\|#?']")
-      (if (eq idx 1)
+      (if (eq num 1)
           (goto-char (match-end 0))
-        (error "Only valid subexpr of quote is 1")))
+        (error "Only valid subexpr of quote is 1"))
+      (et--traverse-expr (cdr path)))
 
      ((looking-at-p "[([]")
       (forward-char 1)
-      (dotimes (_ idx) (forward-sexp))
-      (forward-comment (buffer-size)))
+      (cl-loop for i from 1 to num
+               do (forward-sexp)
+               do (forward-comment (buffer-size))
+               ;; If this expr has a dot, then `num' is half in this expr,
+               ;; and half in the expr after the dot
+               when (looking-at-p "\\.")
+               return (progn (forward-char)
+                             (et--traverse-expr (cons (- num i) (cdr path))))
+               ;; If no dots were encountered, traverse the remaining expressions normally
+               finally do (et--traverse-expr (cdr path))))
+     (t (error "Invalid expression container: %s" (thing-at-point 'char))))))
 
-     (t (error "Invalid expression container: %s" (thing-at-point 'char))))
-
-    (forward-comment (buffer-size))))
+(defun et--traverse-buffer-expr (path)
+  (goto-char (point-min))
+  (dotimes (_ (or (car path) 0)) (forward-sexp))
+  (et--traverse-expr (cdr path)))
 
 
 ;;;; Advice installation
