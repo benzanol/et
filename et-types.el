@@ -138,15 +138,15 @@
 ;;;; dolist
 
 (et-define-pcase-checker dolist
-    `(,(or (and form `(,name ,(app et-parse-type elem-type) ,_lst)
+    `(,(or (and form `(,name ,elem-spec ,_lst)
+                (let elem-type (et-parse-type elem-spec))
                 (let _1 (setcdr form (cddr form)))
                 (let _2 (et-checker-resolve (et-alias 'ListR elem-type) 1 1)))
            (and `(,name ,_lst)
                 (let elem-type (et-checker-infer (et-checker-sub 1 1) [T] ListR<T> T))))
       . ,_body)
-
   (et-with-vars (list (et-new-var name elem-type))
-    (et-checker-sub 1)))
+    (et-checker-sub 2)))
 
 
 ;;;; pcase
@@ -261,7 +261,7 @@ than a new binding."
 ;;;;; Quote
 
 (et-define-pcase-pattern quote (args type _bound-vars _path)
-                         (et--pcase-literal type (car args)))
+  (et--pcase-literal type (car args)))
 
 
 ;;;;; pred
@@ -292,14 +292,14 @@ FUN is nil. When FUN's domain is unknown, no narrowing occurs."
     (cons type type)))
 
 (et-define-pcase-pattern pred (args type _bound-vars _path)
-                         (pcase (car args)
-                           ;; (pred (not FUN)) matches when FUN is nil: swap matched/residual
-                           (`(not ,inner)
-                            (let ((mr (et--pcase-pred-narrow type inner)))
-                              (make-et-pcase-result :matched-type (cdr mr) :vars nil :residual-type (car mr))))
-                           (fun
-                            (let ((mr (et--pcase-pred-narrow type fun)))
-                              (make-et-pcase-result :matched-type (car mr) :vars nil :residual-type (cdr mr))))))
+  (pcase (car args)
+    ;; (pred (not FUN)) matches when FUN is nil: swap matched/residual
+    (`(not ,inner)
+     (let ((mr (et--pcase-pred-narrow type inner)))
+       (make-et-pcase-result :matched-type (cdr mr) :vars nil :residual-type (car mr))))
+    (fun
+     (let ((mr (et--pcase-pred-narrow type fun)))
+       (make-et-pcase-result :matched-type (car mr) :vars nil :residual-type (cdr mr))))))
 
 
 ;;;;; app
@@ -317,17 +317,17 @@ partial applications) are not analysed and yield Any."
       (et-any)))
 
 (et-define-pcase-pattern app (args type bound-vars path)
-                         ;; (app FUN PAT): PAT is matched against FUN applied to the value. The
-                         ;; scrutinee itself cannot be narrowed (FUN is not invertible), but PAT
-                         ;; still contributes its bindings. The pattern is exhaustive exactly when
-                         ;; PAT is exhaustive over FUN's output.
-                         (let* ((out (et--pcase-fun-output (car args) type))
-                                (res (et--pcase-check (cadr args) out bound-vars (append path '(2)))))
-                           (make-et-pcase-result
-                            :matched-type type
-                            :vars (et-pcase-result-vars res)
-                            :residual-type (if (et-never-p (et-pcase-result-residual-type res))
-                                               (et-never) type))))
+  ;; (app FUN PAT): PAT is matched against FUN applied to the value. The
+  ;; scrutinee itself cannot be narrowed (FUN is not invertible), but PAT
+  ;; still contributes its bindings. The pattern is exhaustive exactly when
+  ;; PAT is exhaustive over FUN's output.
+  (let* ((out (et--pcase-fun-output (car args) type))
+         (res (et--pcase-check (cadr args) out bound-vars (append path '(2)))))
+    (make-et-pcase-result
+     :matched-type type
+     :vars (et-pcase-result-vars res)
+     :residual-type (if (et-never-p (et-pcase-result-residual-type res))
+                        (et-never) type))))
 
 
 ;;;;; guard
@@ -344,17 +344,17 @@ partial applications) are not analysed and yield Any."
                               :typeofs (et-type-case-typeofs c))))))
 
 (et-define-pcase-pattern guard (args type bound-vars path)
-                         ;; (guard BOOLEXP): matches when BOOLEXP is non-nil. The scrutinee value
-                         ;; is not narrowed, but BOOLEXP may narrow other variables (e.g.
-                         ;; (guard (integerp x))); those narrowings are folded into matched-type.
-                         (let* ((bool-type (et-with-vars bound-vars
-                                             (et-with-narrow-binds (et--type-binds type)
-                                               (et-at (append path '(1)) (et--check (car args))))))
-                                (non-nil-binds (et--type-binds (et--non-nil bool-type))))
-                           (make-et-pcase-result
-                            :matched-type (et--pcase-attach-binds type non-nil-binds)
-                            :vars nil
-                            :residual-type type)))
+  ;; (guard BOOLEXP): matches when BOOLEXP is non-nil. The scrutinee value
+  ;; is not narrowed, but BOOLEXP may narrow other variables (e.g.
+  ;; (guard (integerp x))); those narrowings are folded into matched-type.
+  (let* ((bool-type (et-with-vars bound-vars
+                      (et-with-narrow-binds (et--type-binds type)
+                        (et-at (append path '(1)) (et--check (car args))))))
+         (non-nil-binds (et--type-binds (et--non-nil bool-type))))
+    (make-et-pcase-result
+     :matched-type (et--pcase-attach-binds type non-nil-binds)
+     :vars nil
+     :residual-type type)))
 
 
 ;;;;; and / or
@@ -371,43 +371,43 @@ partial applications) are not analysed and yield Any."
                                        (t (et-var-type bv))))))
 
 (et-define-pcase-pattern and (args type bound-vars path)
-                         ;; (and PAT...) matches when every sub-pattern matches. Sub-patterns are
-                         ;; threaded: each sees the scrutinee narrowed by the previous ones.
-                         (let ((cur type) (new-vars nil) (residuals nil))
-                           (cl-loop for sub in args
-                                    for idx upfrom 1
-                                    do (let ((res (et--pcase-check sub cur (append bound-vars new-vars)
-                                                                   (append path (list idx)))))
-                                         (setq cur (et-pcase-result-matched-type res))
-                                         (setq new-vars (append new-vars (et-pcase-result-vars res)))
-                                         (push (et-pcase-result-residual-type res) residuals)))
-                           (make-et-pcase-result
-                            :matched-type cur
-                            :vars new-vars
-                            ;; Fails if any sub-pattern fails: union of the staged residuals.
-                            :residual-type (apply #'et--or (or residuals (list (et-never)))))))
+  ;; (and PAT...) matches when every sub-pattern matches. Sub-patterns are
+  ;; threaded: each sees the scrutinee narrowed by the previous ones.
+  (let ((cur type) (new-vars nil) (residuals nil))
+    (cl-loop for sub in args
+             for idx upfrom 1
+             do (let ((res (et--pcase-check sub cur (append bound-vars new-vars)
+                                            (append path (list idx)))))
+                  (setq cur (et-pcase-result-matched-type res))
+                  (setq new-vars (append new-vars (et-pcase-result-vars res)))
+                  (push (et-pcase-result-residual-type res) residuals)))
+    (make-et-pcase-result
+     :matched-type cur
+     :vars new-vars
+     ;; Fails if any sub-pattern fails: union of the staged residuals.
+     :residual-type (apply #'et--or (or residuals (list (et-never)))))))
 
 (et-define-pcase-pattern or (args type bound-vars path)
-                         ;; (or PAT...) matches when any sub-pattern matches. Each is checked
-                         ;; against the same scrutinee type.
-                         (let ((matcheds nil) (residual type) (all-vars nil))
-                           (cl-loop for sub in args
-                                    for idx upfrom 1
-                                    do (let ((res (et--pcase-check sub type bound-vars (append path (list idx)))))
-                                         (push (et-pcase-result-matched-type res) matcheds)
-                                         ;; Fails only if every branch fails: intersect residuals.
-                                         (setq residual (et--supersect residual (et-pcase-result-residual-type res)))
-                                         (setq all-vars (et--pcase-merge-vars all-vars (et-pcase-result-vars res)))))
-                           (make-et-pcase-result
-                            :matched-type (apply #'et--or (or (nreverse matcheds) (list (et-never))))
-                            :vars all-vars
-                            :residual-type residual)))
+  ;; (or PAT...) matches when any sub-pattern matches. Each is checked
+  ;; against the same scrutinee type.
+  (let ((matcheds nil) (residual type) (all-vars nil))
+    (cl-loop for sub in args
+             for idx upfrom 1
+             do (let ((res (et--pcase-check sub type bound-vars (append path (list idx)))))
+                  (push (et-pcase-result-matched-type res) matcheds)
+                  ;; Fails only if every branch fails: intersect residuals.
+                  (setq residual (et--supersect residual (et-pcase-result-residual-type res)))
+                  (setq all-vars (et--pcase-merge-vars all-vars (et-pcase-result-vars res)))))
+    (make-et-pcase-result
+     :matched-type (apply #'et--or (or (nreverse matcheds) (list (et-never))))
+     :vars all-vars
+     :residual-type residual)))
 
 
 ;;;;; Backquote
 
 (et-define-pcase-pattern \` (args type bound-vars path)
-                         (et--pcase-check-qpat (car args) type bound-vars (append path '(1))))
+  (et--pcase-check-qpat (car args) type bound-vars (append path '(1))))
 
 (defun et--pcase-check-qpat (qpat type bound-vars path)
   "Check a backquote-style sub-pattern QPAT against scrutinee TYPE."
@@ -726,10 +726,10 @@ assertions, each emitting an error diagnostic on failure. SPEC is anything
     ((and sym (pred symbolp))
      (if-let* ((func-type (get sym 'et-function-type)))
          func-type
-       (et-err "No function type for `%s'" sym)))
+       (et-err nil "No function type for `%s'" sym)))
 
     ;; Anything else is invalid
-    (_ (et-err "Invalid argument to function: %s" inner))))
+    (_ (et-err nil "Invalid argument to function: %s" inner))))
 
 (et-test
  (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
@@ -1027,6 +1027,11 @@ assertions, each emitting an error diagnostic on failure. SPEC is anything
 (et-define-type-checker nreverse [T] (Args List<T>) List<T>)
 
 
+;;;;; delete-dups
+
+(et-define-type-checker delete-dups [T] (Args ListR<T>) List<T>)
+
+
 ;;;; Predicates
 
 (defmacro et-define-predicate (name type)
@@ -1036,6 +1041,7 @@ assertions, each emitting an error diagnostic on failure. SPEC is anything
          (and Nil (bindsof (subtract T ,type))))))
 
 (et-define-predicate stringp String)
+(et-define-predicate symbolp Symbol)
 (et-define-predicate numberp Number)
 (et-define-predicate integerp Integer)
 (et-define-predicate consp Cons)
