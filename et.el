@@ -284,6 +284,12 @@ priority."
 
 ;;;; Dnf And
 
+(et-declare
+ (@function et--dnf-and (&rest dnfs)
+            (@generics [T])
+            (dnfs ListR<ListR<ListR<T>>>)
+            (@return List<List<T>>)))
+
 (defun et--dnf-and (&rest dnfs)
   "Return the DNF of intersecting DNFS."
 
@@ -2874,7 +2880,7 @@ structural key -- a stale result is never served, only a cache miss."
 
 (et-define-custom-alias Vector (&optional a)
   (if a (et-ql VectorFull ,a ,a)
-    (et-ql VecotrFull Any Never)))
+    (et-ql VectorFull Any Never)))
 
 (et-defalias VectorR [E] VectorFull<E~Never>)
 (et-defalias VectorW [E] VectorFull<Any~E>)

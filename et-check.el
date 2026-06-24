@@ -475,6 +475,7 @@ PATH is the path to the subexpression."
            (when (plist-get props :show) (et-fatal 0 "Multiple @show clauses"))
            (setq props (cl-list* :skip show props)))
 
+          ;; Parameters
           (`(,(and name (pred symbolp)) ,spec)
            (let* ((entry (cl-loop for group in param-reprs
                                   for entry = (assq name group)
@@ -938,13 +939,12 @@ Returns a plist with :declare to set the variable type."
 
        ;; Load required files
        (`(require ,name)
-        (with-temp-buffer
-          (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
-                 (load-path (cons dir load-path))
-                 (library (locate-library (symbol-name (eval name)))))
-            (insert-file-contents (or library (error "Library `%s' not found" name))))
+        (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
+               (load-path (cons dir load-path))
+               (library (or (locate-library (symbol-name (eval name)))
+                            (error "Library `%s' not found" name))))
           ;; Process the buffer without propagating diagnostics
-          (et-result-boundary (et--process-exprs (et--buffer-exprs) 'NOCHECK))))
+          (et-result-boundary (et--process-file library 'NOCHECK))))
 
        ;; Process a root declaration block
        ((or `(et-declare . ,forms)
@@ -972,13 +972,16 @@ Returns a plist with :declare to set the variable type."
 
 ;;;; Process exprs
 
-(defvar et--processing-phase nil)
-(defvar et--processing-expr nil)
+(defvar et--checking-file nil
+  "The file that is currently being typechecked.")
 
-(defvar et-run-tests t)
+(defvar et-run-tests t
+  "Whether to run tests inside of `et--process-exprs'.")
+(defvar et--loaded-files nil
+  "The list of files which have been evaluated (for testing).")
 
-(defvar et--checking-file nil)
-(defvar et--loaded-files nil)
+(defvar et--processing-phase nil "Used for debugging `et--process-exprs'.")
+(defvar et--processing-expr nil "Used for debugging `et--process-exprs'.")
 
 (defun et--process-exprs (exprs &optional no-check)
   (let* ((identified (et-result-map #'et--identify-expr exprs)))
@@ -1040,6 +1043,7 @@ Returns a plist with :declare to set the variable type."
                            (et-propagate-result result))))))))))))
 
 
+;;;; Process a directory
 ;;;; Flycheck check
 
 (defun et--buffer-exprs ()
@@ -1050,6 +1054,13 @@ Returns a plist with :declare to set the variable type."
                           (error (cl-return exprs)))
              collect expr into exprs)))
 
+(defun et--process-file (file &optional no-check)
+  (let* ((et--checking-file file))
+    (et--process-exprs
+     (with-temp-buffer
+       (insert-file-contents file)
+       (et--buffer-exprs))
+     no-check)))
 
 (defun et--traverse-buffer-expr (path)
   (goto-char (point-min))
@@ -1073,10 +1084,9 @@ Returns a plist with :declare to set the variable type."
 
     (forward-comment (buffer-size))))
 
-(defun et--flycheck-check-file ()
+(defun et-flycheck-check-file (filename)
   "Entry point for batch-mode type checking."
-  (let* ((filename (pop command-line-args-left))
-         (et--checking-file filename))
+  (let* ((et--checking-file filename))
     (with-temp-buffer
       (insert-file-contents filename)
       (emacs-lisp-mode)

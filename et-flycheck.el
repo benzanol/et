@@ -39,29 +39,31 @@
   :type 'directory
   :group 'et)
 
-(defvar-local et-flycheck--current-temp-file nil
+(defvar-local et--flycheck-temp-file nil
   "Path to the temp file for the current flycheck run.")
 
-(defun et-flycheck--temp-file ()
+(defun et--flycheck-buffer-file ()
   "Write current buffer contents to a temp file and return its path."
-  (let* ((original (or (buffer-file-name) "untitled.el"))
-         (temp-dir et-flycheck-temp-directory)
-         (temp-file (expand-file-name (file-name-nondirectory original) temp-dir)))
-    (unless (file-directory-p temp-dir)
-      (make-directory temp-dir t))
-    (write-region (point-min) (point-max) temp-file nil 'silent)
-    (setq et-flycheck--current-temp-file temp-file)
-    temp-file))
+  (or buffer-file-name
+      (let* ((temp-dir et-flycheck-temp-directory)
+             (temp-file (expand-file-name (format "%s.el" (abs (random))) temp-dir)))
+        (unless (file-directory-p temp-dir) (make-directory temp-dir t))
+        (write-region (point-min) (point-max) temp-file nil 'silent)
+        (setq-local et--flycheck-temp-file temp-file)
+        temp-file)))
 
 (defun et-flycheck--error-filter (errors)
   "Rewrite temp file paths in ERRORS back to the original buffer file."
-  (let ((original (buffer-file-name)))
+  (let* ((original (buffer-file-name)))
     (when original
       (dolist (err errors)
-        (when (and et-flycheck--current-temp-file
+        (when (and et--flycheck-temp-file
                    (equal (flycheck-error-filename err)
-                          et-flycheck--current-temp-file))
+                          et--flycheck-temp-file))
           (setf (flycheck-error-filename err) original)))))
+  ;; Delete the temp file
+  (when (and et--flycheck-temp-file (file-exists-p et--flycheck-temp-file))
+    (delete-file et--flycheck-temp-file))
   errors)
 
 (flycheck-define-checker et-flycheck-checker
@@ -69,10 +71,9 @@
   :command ("emacs" "--batch"
             "--eval" (eval (format "(add-to-list 'load-path %S)" et-source-directory))
             "--eval" "(setq load-prefer-newer t)"
-            "-l" "et-types"
             "-l" "et-cache"
-            "--eval" (eval (format "(et--flycheck-check-file-cached %S %S)"
-                                   (et-flycheck--temp-file)
+            "--eval" (eval (format "(et-flycheck-check-file-cached %S %S)"
+                                   (et--flycheck-buffer-file)
                                    (buffer-file-name))))
   :error-patterns
   ((error line-start (file-name) ":" line ":" column ":" end-line ":" end-column ": error: " (message) line-end)
