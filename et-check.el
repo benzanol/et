@@ -164,7 +164,8 @@ determine the output type."
              ;; Display the error message
              finally do
              (if (and arg-type param-repr)
-                 (et-err arg-pos "Parameter %s has type %s, found %s" param-name param-repr arg-type)
+                 (et-err arg-pos "Parameter %s has type %s, found %s" param-name
+                         (et-repr-to-string param-repr) arg-type)
                (et-err 0 "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))
 
        (_ (et-err 0 "No type for `%s'" func))))
