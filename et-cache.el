@@ -139,9 +139,10 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 ;;;; State
 
 (cl-defstruct (et--hashing-state (:constructor et--make-hashing-state))
-  (acc nil)     ; Accumulated values, in reverse order
-  (vars nil)    ; `et-var's encountered so far, in order (index = position)
-  (scoped nil)) ; Scoped arg-tuples encountered so far (compared by `equal')
+  (acc nil)            ; Accumulated values, in reverse order
+  (vars nil)           ; `et-var's encountered so far, in order (index = position)
+  (scoped nil)         ; Scoped arg-tuples encountered so far (compared by `equal')
+  (name-dependent nil)) ; Whether to fold alias names into the hash (see `et--hash-alias-def')
 
 (defun et--hash-push (state value)
   "Accumulate VALUE onto STATE's hash."
@@ -259,10 +260,15 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
           ;; Custom aliases are assumed immutable, so the name suffices.
           (et--hash-push state name)
         ;; Repr aliases: descend into the definition, guarding recursion.
-        (et--hash-repr state
-                       (or (plist-get plist :repr)
-                           (error "Alias %s missing repr" name))
-                       (cons name alias-stack))))))
+        ;; When name-dependent, also fold in the name, so a structurally
+        ;; identical alias under a different name hashes differently.
+        (progn
+          (when (et--hashing-state-name-dependent state)
+            (et--hash-push state name))
+          (et--hash-repr state
+                         (or (plist-get plist :repr)
+                             (error "Alias %s missing repr" name))
+                         (cons name alias-stack)))))))
 
 
 ;;;; Constraints
@@ -366,14 +372,21 @@ cached result."
   (vars nil :et List<*et-var>)
   (scoped nil :et List<Any>))
 
-(defun et-hash-items (items)
+(cl-defun et-hash-items (items &key name-dependent)
   "Hash ITEMS into a structural `et-hash'.
 
 Each item must be an `et-type', `et-matcher', `et-repr', or a lisp
 object; anything else signals an error. Items are hashed in order into a
 single digest, each tagged by its kind so that, e.g., a type never
-collides with an atom of the same shape."
-  (let ((state (et--make-hashing-state)))
+collides with an atom of the same shape.
+
+By default hashing is purely structural: aliases are identified by their
+definition, never their name. With NAME-DEPENDENT non-nil, alias names
+are also folded into the hash, so two structurally identical types that
+reference differently named aliases hash differently. This is required
+whenever the cached value can contain alias names reachable from the
+input (see the call cache)."
+  (let ((state (et--make-hashing-state :name-dependent name-dependent)))
     (dolist (item items)
       (cond
        ((et-type-p item)
@@ -478,20 +491,27 @@ collides with an atom of the same shape."
 ;;; Caching
 ;;;; Documentation
 
-;; The cache is partitioned per source file so that a single run only
-;; ever loads the cached results for the exact file being checked,
-;; rather than one monolithic store. `et--cache-table' is the
-;; in-memory index: it maps a source identity (a file path, or nil for
-;; a non-file buffer) to the `et-cache' that was loaded for it. Each
-;; `et-cache' is written verbatim to its own file under
-;; `et-cache-directory' (named after the escaped source path), or to
-;; `et-cache-nonfile-file' for the nil source.
+;; The cache is partitioned per source file: a single run only ever
+;; touches the cached results for the exact file being checked. Each
+;; source's `et-cache' lives in its own file under `et-cache-directory'
+;; (named after the escaped source path), or in `et-cache-nonfile-file'
+;; for a buffer with no source. There is no persistent in-memory cache;
+;; disk is the only store.
 ;;
-;; `et--cache-source' names the *original* file whose cache should be
-;; used. Note this is deliberately distinct from `et--checking-file':
+;; `et-with-cache-source' loads a source's `et-cache' from disk (or a
+;; fresh one) into the dynamically scoped `et--current-cache', runs the
+;; body, and writes `et--current-cache' back to disk afterwards. A run
+;; enters through `et-with-cache-source-if-enabled', which does this
+;; only when `et-cache-enabled' -- the single place that switch is read.
+;; When caching is disabled `et--current-cache' stays nil, so the defun
+;; and call caches below simply see no cache and fall back to the
+;; uncached path; they key off `et--current-cache', never the switch.
+;;
+;; The cached source is deliberately distinct from `et--checking-file':
 ;; under flycheck we actually check a temp copy, so `et--checking-file'
-;; (the temp path) is the thing being checked, while `et--cache-source'
-;; (the real path) is the thing the cache is keyed on.
+;; (the temp path) is the thing being checked, while the source passed
+;; to `et-with-cache-source' (the real path) is what the cache is keyed
+;; on.
 
 
 ;;;; Variables
@@ -515,12 +535,12 @@ Has no effect unless `et-cache-enabled' is non-nil.")
   (expand-file-name "et-cache-nonfile.eld" temporary-file-directory)
   "Cache file used when type checking a buffer with no source file.")
 
-(defvar et--cache-source nil
-  "Identity of the source file whose cache is in use, or nil for none.
-This is the real file, even when a temp copy is what's being checked.")
-
-(defvar et--cache-table (make-hash-table :test 'equal)
-  "In-memory map from a source identity to its loaded `et-cache'.")
+(defvar et--current-cache nil
+  "The `et-cache' for the source currently being checked, or nil.
+Bound to a loaded `et-cache' by `et-with-cache-source' for the duration
+of a run, and left nil when caching is disabled.  The defun and call
+caches read and fill it in place when it is non-nil, and fall back to
+the uncached path otherwise; they never consult `et-cache-enabled'.")
 
 
 ;;;; Structs
@@ -567,58 +587,75 @@ with ephemeral variables and scoped datatypes replaced by placeholders."
     (let ((print-level nil) (print-length nil) (print-circle t))
       (prin1 cache (current-buffer)))))
 
-(defun et--load-cache (source)
-  "Read SOURCE's `et-cache' from disk, or return a fresh empty one."
-  (or (et--read-cache-file (et--cache-file-for source))
-      (make-et-cache)))
+(defun et--load-cache-file (file)
+  "Read an `et-cache' from FILE, or return a fresh empty one."
+  (or (et--read-cache-file file) (make-et-cache)))
 
-(defun et--current-cache ()
-  "Return the `et-cache' for `et--cache-source', loading it if needed."
-  (or (gethash et--cache-source et--cache-table)
-      (puthash et--cache-source (et--load-cache et--cache-source) et--cache-table)))
+(defmacro et--with-cache-file (file &rest body)
+  "Run BODY with FILE's `et-cache' loaded into `et--current-cache'.
+Load FILE's cache from disk (or a fresh one) into `et--current-cache',
+run BODY, then write `et--current-cache' back to FILE."
+  (declare (indent 1))
+  (let ((f (gensym "file")))
+    `(let* ((,f ,file)
+            (et--current-cache (et--load-cache-file ,f)))
+       (unwind-protect (progn ,@body)
+         (et--write-cache-file et--current-cache ,f)))))
 
-(defun et-flush-cache (&optional source)
-  "Write SOURCE's in-memory `et-cache' back to disk.
-SOURCE defaults to `et--cache-source'. Does nothing if no cache was
-loaded for SOURCE during this session."
-  (setq source (or source et--cache-source))
-  (when-let* ((cache (gethash source et--cache-table)))
-    (et--write-cache-file cache (et--cache-file-for source))))
+(defmacro et-with-cache-source (source &rest body)
+  "Run BODY with SOURCE's `et-cache' loaded into `et--current-cache'.
+SOURCE is the real source file path, or nil for the non-file cache.
+See `et--with-cache-file'."
+  (declare (indent 1))
+  `(et--with-cache-file (et--cache-file-for ,source) ,@body))
+
+(defmacro et-with-cache-source-if-enabled (source &rest body)
+  "Like `et-with-cache-source', but a no-op wrapper when caching is off.
+When `et-cache-enabled' is non-nil, load SOURCE's cache as
+`et-with-cache-source' does; otherwise just run BODY with
+`et--current-cache' left nil.  This is the only place `et-cache-enabled'
+is consulted: every consumer keys off whether `et--current-cache' is
+non-nil instead."
+  (declare (indent 1))
+  `(if et-cache-enabled
+       (et-with-cache-source ,source ,@body)
+     ,@body))
+
+(defun et--all-cache-files ()
+  "Return the list of all existing on-disk cache files."
+  (append (when (file-directory-p et-cache-directory)
+            (directory-files et-cache-directory t "\\.eld\\'"))
+          (when (file-exists-p et-cache-nonfile-file)
+            (list et-cache-nonfile-file))))
 
 (defun et-clear-source-cache (source)
-  "Delete SOURCE's cached results, both in memory and on disk.
+  "Empty SOURCE's cached results, rewriting its cache file in place.
 SOURCE is the original source file path, or nil for the non-file cache.
 Interactively, clears the cache for the current buffer's file."
   (interactive (list (buffer-file-name)))
-  (remhash source et--cache-table)
-  (let ((file (et--cache-file-for source)))
-    (when (file-exists-p file)
-      (delete-file file))))
+  (et-with-cache-source source
+    (setq et--current-cache (make-et-cache))))
 
 (defun et-clear-cache ()
-  "Delete every source's cached results, both in memory and on disk."
+  "Empty every source's cached results, rewriting the cache files in place."
   (interactive)
-  (clrhash et--cache-table)
-  (when (file-directory-p et-cache-directory)
-    (dolist (file (directory-files et-cache-directory t "\\.eld\\'"))
-      (delete-file file)))
-  (when (file-exists-p et-cache-nonfile-file)
-    (delete-file et-cache-nonfile-file)))
+  (dolist (file (et--all-cache-files))
+    (et--with-cache-file file
+      (setq et--current-cache (make-et-cache)))))
 
 
 ;;;; Clearing the defun cache
 
 (defun et-clear-defun-cache (source &optional all-loaded)
   "Clear cached defun check results, leaving the call cache intact.
-Clear SOURCE's defun cache, or every loaded source's when ALL-LOADED is
-non-nil, then write the affected caches back to disk.  Only loaded
-caches (those in `et--cache-table') are touched.  Called interactively,
-clears every loaded source's defun cache."
+Clear SOURCE's defun cache, or every on-disk source's when ALL-LOADED
+is non-nil, rewriting the affected cache files in place.  Called
+interactively, clears every source's defun cache."
   (interactive (list nil t))
-  (dolist (s (if all-loaded (hash-table-keys et--cache-table) (list source)))
-    (when-let* ((cache (gethash s et--cache-table)))
-      (clrhash (et-cache-defun-cache cache))
-      (et--write-cache-file cache (et--cache-file-for s)))))
+  (dolist (file (if all-loaded (et--all-cache-files)
+                  (list (et--cache-file-for source))))
+    (et--with-cache-file file
+      (clrhash (et-cache-defun-cache et--current-cache)))))
 
 
 ;;;; Error guard
@@ -692,15 +729,15 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 (defun et--cache-capture-type (spec &rest _)
   "Advice on `et-parse-type': record SPEC as a body type dependency."
   (et--cache-try
-   (when et--fp-active
-     (cl-pushnew spec et--fp-specs :test #'equal))))
+    (when et--fp-active
+      (cl-pushnew spec et--fp-specs :test #'equal))))
 
 (defun et--cache-capture-function (expr)
   "Advice on `et--check': record a called typed function as a dependency."
   (et--cache-try
-   (when (and et--fp-active (consp expr)
-              (symbolp (car expr)) (car expr))
-     (cl-pushnew (car expr) et--fp-funcs :test #'eq))))
+    (when (and et--fp-active (consp expr)
+               (symbolp (car expr)) (car expr))
+      (cl-pushnew (car expr) et--fp-funcs :test #'eq))))
 
 
 ;;;; Fingerprint computation
@@ -747,7 +784,7 @@ For a root defun with a parsed signature, return its cached result when
 the fingerprint still holds; otherwise run ORIG once, fingerprint the
 dependencies it touched, and store the result. All other expressions
 pass straight through to ORIG."
-  (if (not (and et-cache-enabled et-cache-defuns
+  (if (not (and et--current-cache et-cache-defuns
                 (eq (car-safe expr) 'defun)
                 (symbolp (cadr expr))
                 (get (cadr expr) 'et-function-signature)))
@@ -759,12 +796,12 @@ pass straight through to ORIG."
     ;; bail safely falls through to recompute.
     (let* ((name (cadr expr))
            (hit (et--cache-try
-                 (let* ((table (et-cache-defun-cache (et--current-cache)))
-                        (cached (gethash name table)))
-                   (when (and cached
-                              (et--defun-fingerprint-current-p
-                               name (et--cached-defun-fingerprint cached)))
-                     (list (et--cached-defun-value cached)))))))
+                  (let* ((table (et-cache-defun-cache et--current-cache))
+                         (cached (gethash name table)))
+                    (when (and cached
+                               (et--defun-fingerprint-current-p
+                                name (et--cached-defun-fingerprint cached)))
+                      (list (et--cached-defun-value cached)))))))
       (pcase hit
         ;; Hit: replay the cached diagnostics into the current context
         ;; (re-anchoring their relative paths) and return the value.
@@ -781,12 +818,12 @@ pass straight through to ORIG."
                 (et--fp-funcs nil)
                 (result (et-result-boundary (funcall orig expr))))
            (et--cache-try
-            (puthash name
-                     (make-et--cached-defun
-                      :fingerprint (et--compute-defun-fingerprint
-                                    name et--fp-specs et--fp-funcs)
-                      :value result)
-                     (et-cache-defun-cache (et--current-cache))))
+             (puthash name
+                      (make-et--cached-defun
+                       :fingerprint (et--compute-defun-fingerprint
+                                     name et--fp-specs et--fp-funcs)
+                       :value result)
+                      (et-cache-defun-cache et--current-cache)))
            (et-propagate-result result)
            (et-result-value result)))))))
 
@@ -861,29 +898,33 @@ STACK's car is this call's own frame; self-recursion there is harmless."
   (cl-every (lambda (frame) (eq (cdr frame) et--stop-recursion-unset-marker))
             (cdr stack)))
 
-(defun et--call-cached (name orig args stack success-p)
+(cl-defun et--call-cached (name orig args stack success-p &key name-dependent)
   "Around-advice body memoizing a recursive type function.
 
 NAME identifies the function in the cache key; ORIG and ARGS are the
 advised call. STACK is the function's `et--stop-recursion' stack, whose
 car is this call's frame. SUCCESS-P tests whether a result may be served
-at any depth; a non-success result is confined to the root level."
+at any depth; a non-success result is confined to the root level.
+
+NAME-DEPENDENT is forwarded to `et-hash-items' for the cache key: pass
+non-nil when the cached value can contain alias names (constraint
+solving), and nil when it cannot (subtyping returns a bare boolean)."
   ;; Guarded lookup: resolve to a ready-to-return hit, or the data the
   ;; store phase needs on a miss. No side effects, so a bail safely falls
-  ;; through to running ORIG uncached. When caching is disabled the
-  ;; subject is nil, which matches no clause and falls through likewise.
-  (pcase (and et-cache-enabled et-cache-calls
+  ;; through to running ORIG uncached. With no cache loaded the subject
+  ;; is nil, which matches no clause and falls through likewise.
+  (pcase (and et--current-cache et-cache-calls
               (et--cache-try
-               (let* ((cache (et-cache-call-cache (et--current-cache)))
-                      (hash (et-hash-items (cons name args)))
-                      (key (et-hash-value hash))
-                      (root (null (cdr stack)))
-                      (cached (gethash key cache 'et--call-miss)))
-                 (if (and (not (eq cached 'et--call-miss))
-                          (or (funcall success-p cached) root))
-                     (cons 'hit (et--subst-with-placeholders
-                                 cached (et--call-ephemeral-alist hash nil)))
-                   (list 'miss cache key hash root)))))
+                (let* ((cache (et-cache-call-cache et--current-cache))
+                       (hash (et-hash-items (cons name args) :name-dependent name-dependent))
+                       (key (et-hash-value hash))
+                       (root (null (cdr stack)))
+                       (cached (gethash key cache 'et--call-miss)))
+                  (if (and (not (eq cached 'et--call-miss))
+                           (or (funcall success-p cached) root))
+                      (cons 'hit (et--subst-with-placeholders
+                                  cached (et--call-ephemeral-alist hash nil)))
+                    (list 'miss cache key hash root)))))
 
     (`(hit . ,value) value)
 
@@ -893,9 +934,9 @@ at any depth; a non-success result is confined to the root level."
        (when (and (or (funcall success-p result) root)
                   (et--call-uncompromised-p stack))
          (et--cache-try
-          (puthash key (et--subst-with-placeholders
-                        result (et--call-ephemeral-alist hash t))
-                   cache)))
+           (puthash key (et--subst-with-placeholders
+                         result (et--call-ephemeral-alist hash t))
+                    cache)))
        result))
 
     ;; Disabled or bailed: behave as the unadvised function.
@@ -906,11 +947,13 @@ at any depth; a non-success result is confined to the root level."
 
 (defun et--sub-constraints-cached (orig &rest args)
   (et--call-cached 'et--sub-constraints-1 orig args
-                   et--constraints-stack #'et-match-result-success))
+                   et--constraints-stack #'et-match-result-success
+                   :name-dependent t))
 
 (defun et--super-constraints-cached (orig &rest args)
   (et--call-cached 'et--super-constraints-1 orig args
-                   et--constraints-stack #'et-match-result-success))
+                   et--constraints-stack #'et-match-result-success
+                   :name-dependent t))
 
 (defun et--subtype?-cached (orig &rest args)
   (et--call-cached 'et--subtype?-1 orig args
@@ -919,33 +962,34 @@ at any depth; a non-success result is confined to the root level."
 
 ;;; ============================================================
 ;;; Extra
-;;;; Flycheck entry point
+;;;; API
+
+(defun et--cached-process-exprs (cache-source exprs &rest process-args)
+  (et-with-cache-source-if-enabled cache-source
+    (et-result-boundary
+     (apply #'et--process-exprs exprs process-args))))
+
+(defun et-buffer-cache-source ()
+  (when buffer-file-name
+    (expand-file-name buffer-file-name)))
+
+(defun et-process-buffer (&rest process-args)
+  (interactive (list (not (not current-prefix-arg))))
+  (apply #'et--cached-process-exprs (et-buffer-cache-source) (et--buffer-exprs) process-args))
+
+(defun et-process (expr &optional cache-source &rest process-args)
+  (interactive (list (save-excursion (beginning-of-defun) (read (current-buffer)))
+                     (et-buffer-cache-source)))
+  (apply #'et--cached-process-exprs cache-source (list expr) process-args))
 
 (defun et--flycheck-check-file-cached (temp-file source-file)
   "Run `et--flycheck-check-file' on TEMP-FILE with caching for SOURCE-FILE.
 
 TEMP-FILE is the file actually checked; SOURCE-FILE is the real file
 whose on-disk cache is loaded and saved (nil for a non-file buffer)."
-  (let ((et--cache-source source-file)
-        (command-line-args-left (list temp-file)))
-    (unwind-protect
-        (et--flycheck-check-file)
-      (et-flush-cache))))
-
-
-;;;; Process buffer entry point
-
-(defun et--process-buffer-cached ()
-  "Like `et--process-buffer' but with on-disk caching for the buffer.
-
-The cache is keyed on the current buffer's file name (nil for a buffer
-with no file). Unlike `et--process-buffer', this brings its own result
-boundary and returns the resulting `et-result', so it can be called on
-its own (e.g. for testing)."
-  (let ((et--cache-source (buffer-file-name)))
-    (unwind-protect
-        (et-result-boundary (et--process-buffer))
-      (et-flush-cache))))
+  (et-with-cache-source-if-enabled source-file
+    (let ((command-line-args-left (list temp-file)))
+      (et--flycheck-check-file))))
 
 
 ;;;; Advice installation
