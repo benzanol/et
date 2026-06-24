@@ -2920,10 +2920,10 @@ structural key -- a stale result is never served, only a cache miss."
 
 (et-define-custom-alias TupleR (&rest args) (et--expand-tuple-spec 'ConsR args))
 (et-define-custom-alias Tuple (&rest args) (et--expand-tuple-spec 'Cons args))
-(et-define-custom-alias TupleStar (&rest args) (et--expand-tuple-spec 'Cons args))
 (et-define-custom-alias Args (&rest args) (et--expand-tuple-spec 'ConsR args))
 (et-define-custom-alias ArgsWithTail (&rest args) (et--expand-tailed-tuple-spec 'ConsR args))
 (et-define-custom-alias TupleWithTail (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
+(et-define-custom-alias TupleStar (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
 
 
 ;;; ============================================================
