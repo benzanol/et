@@ -163,11 +163,6 @@ TUPLE is the (NAME UNIQUE CONSTRAINTS) arg list of a `Scoped' datatype."
         (prog1 (length scoped)
           (setf (et--hashing-state-scoped state) (append scoped (list tuple)))))))
 
-(defconst et--hash-repr-factor-types
-  '(S:DT S:ALIAS S:GENERIC S:TYPE S:BIND S:TYPEOF
-         S:BINDS-OF S:SUBTRACT S:INFER S:EXTENDS S:EVAL S:SET S:NOINFER)
-  "Fixed ordering of repr factor types, used to hash a factor's type.")
-
 
 ;;;; Types
 
@@ -312,45 +307,44 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
         (et--hash-repr-factor state factor alias-stack)))))
 
 (defun et--hash-repr-factor (state factor alias-stack)
-  (et--hash-push state (or (cl-position (car factor) et--hash-repr-factor-types)
-                           (error "Invalid repr factor: %s" factor)))
+  ;; The factor's head symbol is hashed directly, so the hash is keyed on
+  ;; the factor kind without a separate enumeration to maintain.
+  (et--hash-push state (car factor))
   (pcase factor
     ;; Datatype/alias args are reprs here, hence the AS-REPR flag.
     (`(S:DT ,name . ,args) (et--hash-datatype state name args alias-stack t))
     (`(S:ALIAS ,name . ,args) (et--hash-alias state name args alias-stack t))
     (`(S:GENERIC ,var) (et--hash-push state var))
-    (`(S:TYPE ,type) (et--hash-type state type alias-stack))
-    (`(S:BIND ,var ,repr)
-     (et--hash-push state var)
-     (et--hash-repr state repr alias-stack))
-    (`(S:TYPEOF ,var) (et--hash-push state var))
-    (`(S:BINDS-OF ,repr) (et--hash-repr state repr alias-stack))
-    (`(S:SUBTRACT ,a ,b)
-     (et--hash-repr state a alias-stack)
-     (et--hash-repr state b alias-stack))
-    (`(S:INFER ,type ,generics ,matcher ,yes ,no)
-     (et--hash-push state (length generics))
-     (dolist (g generics) (et--hash-push state g))
-     (et--hash-repr state type alias-stack)
-     (et--hash-matcher state matcher alias-stack)
-     (et--hash-repr state yes alias-stack)
-     (et--hash-repr state no alias-stack))
-    (`(S:EXTENDS ,sub ,super ,yes ,no)
-     (et--hash-repr state sub alias-stack)
-     (et--hash-repr state super alias-stack)
-     (et--hash-repr state yes alias-stack)
-     (et--hash-repr state no alias-stack))
-    (`(S:EVAL ,func . ,reprs)
-     (et--hash-push state func)
-     (et--hash-push state (length reprs))
-     (dolist (r reprs) (et--hash-repr state r alias-stack)))
     ;; The second element of S:SET is a fully parsed type, not a repr.
     (`(S:SET ,matcher-repr ,type)
      (et--hash-repr state matcher-repr alias-stack)
      (et--hash-type state type alias-stack))
     ;; S:NOINFER wraps a single type-target repr.
     (`(S:NOINFER ,tr) (et--hash-repr state tr alias-stack))
+    (`(S:OP ,op-name . ,args) (et--hash-op state op-name args alias-stack))
     (_ (error "Invalid repr factor: %s" factor))))
+
+(defun et--hash-op (state op-name args alias-stack)
+  "Hash an `S:OP' factor.
+Hash OP-NAME, then each of ARGS according to the argument kind declared
+by the `et-op' registered under OP-NAME (see `et-op-args'/`et-op-rest-arg')."
+  (et--hash-push state op-name)
+  (let* ((op (et-get-op op-name))
+         (kinds (et-op-args op))
+         (rest-kind (et-op-rest-arg op)))
+    (et--hash-push state (length args))
+    (dolist (arg args)
+      (et--hash-op-arg state (if kinds (pop kinds) rest-kind) arg alias-stack))))
+
+(defun et--hash-op-arg (state kind arg alias-stack)
+  "Hash a single `S:OP' argument ARG according to its KIND."
+  (pcase kind
+    ;; Reprs (whether evaluated to a type or kept lazy) hash structurally.
+    ((or :type :repr) (et--hash-repr state arg alias-stack))
+    (:matcher (et--hash-matcher state arg alias-stack))
+    ;; Constants and generic vectors are opaque, stable lisp values.
+    ((or :const :generics) (et--hash-push state arg))
+    (_ (error "Unknown op arg kind: %s" kind))))
 
 
 ;;;; Entry point
