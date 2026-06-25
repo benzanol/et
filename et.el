@@ -1727,7 +1727,7 @@ which are invalid for types."
               finally return (et-copy-with repr :dnf new-dnf)))))
 
 
-;;;; Printing
+;;;; To string
 
 (cl-defmethod cl-print-object ((repr et-repr) stream)
   (princ
@@ -1742,7 +1742,15 @@ which are invalid for types."
 
 (defvar et-print-labels nil)
 
+(defvar et--to-string-loops 'N/A)
+
 (defun et-repr-to-string (repr)
+  (if (eq et--to-string-loops 'N/A)
+      (let* ((et--to-string-loops nil))
+        (et--repr-to-string-1 repr))
+    (et--repr-to-string-1 repr)))
+
+(defun et--repr-to-string-1 (repr)
   (cl-loop for factors in (et-repr-dnf repr)
            collect
            (cl-loop for (name . args) in factors
@@ -1791,6 +1799,14 @@ which are invalid for types."
 
     (`(DynFunction ,matcher ,output-type)
      (format "(%s) -> %s" (et-pp-matcher matcher) (et-repr-to-string output-type)))
+
+    ;; Display recursive loop aliases inline
+    ((and (let loop-def (get name 'et-loop-alias)) (guard loop-def))
+     (if-let* ((idx (cl-position name et--to-string-loops)))
+         (format "#%s#" (1+ idx))
+       (push name et--to-string-loops)
+       (format "#%s={%s}" (length et--to-string-loops)
+               (et-pp-type loop-def))))
 
     (_
      (let* ((name-str (symbol-name name))
@@ -3033,10 +3049,10 @@ structural key -- a stale result is never served, only a cache miss."
                                                              :cases (list (make-et-type-case
                                                                            :value (make-et-alias :name new-name)))))))))
               ;; Redefine each kept loop alias under its stable name.
-              (cl-loop for (sym . def) in kept
-                       do (et--define-alias (cdr (assq sym renames)) []
-                                            (et--rec-subst def subs)
-                                            :type-only t))
+              (cl-loop for (old . new) in renames
+                       for new-def = (et--rec-subst (alist-get old kept) subs)
+                       do (et--define-alias new [] new-def :type-only t)
+                       do (put new 'et-loop-alias new-def))
               (et--rec-subst result subs))))))))
 
 
