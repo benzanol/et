@@ -1137,6 +1137,11 @@ Returns a plist with :declare to set the variable type."
     (setq et--checker-expr (cadr et--checker-expr))
     type))
 
+(et-define-pcase-checker :expand spec
+  (let* ((type (et-expand-all-aliases (et-parse-type spec))))
+    (et-hint nil type)
+    type))
+
 (et-define-pcase-checker :narrows `()
   (cl-loop for (var . type) in (reverse et--narrow-binds)
            collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs

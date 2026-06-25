@@ -114,11 +114,11 @@
 ;; `@return' resolves `et--append-return-type' lazily (at check time, via
 ;; the `(eval ...)' type form below), so the helper only needs to be
 ;; bound by then -- not when this declaration is parsed.
-(defun et--append-return-type (input-type)
-  (or (et-checker-infer input-type [] Nil Nil)
-      (et-checker-infer input-type [S] (ConsR S Nil) S)
-      (et-checker-infer input-type [E R] (ConsR List<E> R)
-                        (AppendFresh E (eval et--append-return-type R)))))
+(et-define-op append (lists)
+  (or (et-checker-infer lists [] Nil Nil)
+      (et-checker-infer lists [S] (ConsR S Nil) S)
+      (et-checker-infer lists [E R] (ConsR List<E> R)
+                        (AppendFresh E (append R)))))
 
 (et-declare
  (@alias AppendFresh [E R] (or R (ConsFresh E (AppendFresh E R))))
@@ -126,7 +126,7 @@
  (@function append (&rest sequences)
             (@generics [A])
             (sequences A)
-            (@return (eval et--append-return-type A)))
+            (@return (append A)))
 
  (@function nconc (&rest lists)
             (@generics [E])
