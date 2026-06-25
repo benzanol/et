@@ -1109,6 +1109,14 @@ DNF is the struct representing the matcher."
 
 ;;;; Iso match
 
+(defun et-iso-constraints (matcher type)
+  "Entrypoint for calculating constraints."
+  (declare (et (matcher *et-matcher) (type *et-type)
+               (@return EtMatchResult)))
+
+  (let* ((et--constraints-stack nil))
+    (et--iso-constraints matcher type)))
+
 (defun et--iso-constraints (matcher type)
   (declare (et (matcher *et-matcher) (type *et-type)
                (@return EtMatchResult)))
@@ -2563,6 +2571,23 @@ returning A itself is a valid approximation."
         (if (eq type 'INVALID) (et--failed-match-result)
           (make-et-match-result :success t :value type))))))
 
+(defun et-iso-match (matcher type)
+  "Like `et-sub-match', but require MATCHER and TYPE to be equivalent.
+
+Uses `et-iso-constraints' (both sub- and super-constraints) instead of
+`et-sub-constraints', so a successful match means TYPE is isomorphic to
+MATCHER under the inferred generics, not merely a subtype of it."
+  (declare (et (matcher *et-matcher) (type *et-type)
+               (@return *et-match-result<List<*et-type>>)))
+
+  (let* ((result (et-iso-constraints matcher type)))
+    (if (not (et-match-result-success result)) result
+      ;; If matching succeeded, try to determine the optimal generic types
+      (let* ((qs (append (et-match-result-value result) (et-matcher-constraints matcher)))
+             (type (et--match-satisfy-constraints-smallest (et-matcher-generics matcher) qs)))
+        (if (eq type 'INVALID) (et--failed-match-result)
+          (make-et-match-result :success t :value type))))))
+
 (defun et--match-satisfy-constraints-smallest (generics constraints)
   "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
@@ -2755,7 +2780,8 @@ This returns an `et-match-result' in case matching fails."
     (_ (error "No tail provided"))))
 
 
-;;;; Freshen/Unfreshen
+;;;; Freshen/unfreshen
+;;;;; Inner transform
 
 (defvar et--rec-transform-stack nil)
 
@@ -2766,52 +2792,6 @@ recursive (\"loop\") alias the inner pass generated, named with a
 deterministic but throwaway uninterned TEMP-SYMBOL. The wrapper
 `et--rec-transform-datatypes' rewrites these into stable, interned,
 structure-derived names before returning.")
-
-
-(defun et--rec-rename-loop-aliases (type renames)
-  "Return TYPE with loop alias names remapped through RENAMES.
-RENAMES is an alist of (OLD-NAME . NEW-NAME). Subtrees containing no
-remapped alias are returned unchanged, so unaffected structure is shared
-rather than copied."
-  (let ((new-cases
-         (cl-loop for case in (et-type-cases type)
-                  for val = (et-type-case-value case)
-                  for new-val = (et--rec-rename-loop-alias-value val renames)
-                  collect (if (eq new-val val) case
-                            (make-et-type-case
-                             :value new-val
-                             :binds (et-type-case-binds case)
-                             :typeofs (et-type-case-typeofs case))))))
-    (if (cl-every #'eq new-cases (et-type-cases type)) type
-      (make-et-type :label (et-type-label type) :cases new-cases))))
-
-(defun et--rec-rename-loop-alias-value (val renames)
-  "Remap loop alias names in type-case VALUE; return VAL itself if unchanged."
-  (pcase val
-    ((cl-struct et-alias name args)
-     (let ((new-name (or (cdr (assq name renames)) name))
-           (new-args (et--rec-rename-loop-alias-list args renames)))
-       (if (and (eq new-name name) (eq new-args args)) val
-         (make-et-alias :name new-name :args new-args))))
-    ((cl-struct et-datatype name args)
-     (let ((new-args (et--rec-rename-loop-alias-dt-args name args renames)))
-       (if (eq new-args args) val
-         (make-et-datatype :name name :args new-args))))
-    (_ (error "Invalid case val: %s" val))))
-
-(defun et--rec-rename-loop-alias-list (types renames)
-  "Remap loop alias names across TYPES; return TYPES itself if unchanged."
-  (let ((new (mapcar (lambda (ty) (et--rec-rename-loop-aliases ty renames)) types)))
-    (if (cl-every #'eq new types) types new)))
-
-(defun et--rec-rename-loop-alias-dt-args (name args renames)
-  "Remap loop alias names in datatype ARGS, skipping CONST args.
-Return ARGS itself when nothing changed."
-  (let ((new (cl-loop for arg in args
-                      for role in (et--datatype-arg-roles name args)
-                      collect (if (eq role 'CONST) arg
-                                (et--rec-rename-loop-aliases arg renames)))))
-    (if (cl-every #'eq new args) args new)))
 
 (defun et--rec-transform-datatypes-inner (type transform)
   "Recursively transform datatypes in a type.
@@ -2857,37 +2837,169 @@ These temporary uninterned names are rewritten by the wrapper."
              (let* ((type (make-et-type :label (et-type-label type) :cases new-cases))
                     (no-binds (et--remove-type-binds type))
                     (alias-type (cdar et--rec-transform-stack)))
-               (when (not (eq alias-type et--stop-recursion-unset-marker))
-                 (let* ((alias (et-type-case-value (car (et-type-cases alias-type))))
-                        (sym (et-alias-name alias)))
-                   (setcdr (assq sym et--rec-transform-datatypes-loops) no-binds)
-                   (et--define-alias sym [] no-binds :type-only t)))
-               type))))
+               (if (not (eq alias-type et--stop-recursion-unset-marker))
+                   (let* ((alias (et-type-case-value (car (et-type-cases alias-type))))
+                          (sym (et-alias-name alias)))
+                     (setcdr (assq sym et--rec-transform-datatypes-loops) no-binds)
+                     (et--define-alias sym [] no-binds :type-only t)
+                     alias-type)
+                 type)))))
 
+
+;;;;; Generalized substitution
+
+;; A single pass that rewrites loop-alias references throughout a type.
+;; SUBS is an alist mapping each loop alias's (no-arg) NAME to a
+;; replacement `et-type'.  This generalizes the older rename-only pass:
+;; a rename is just the special case where the replacement is the loop
+;; alias under a new name, while collapsing a loop to a canonical alias
+;; (e.g. List<Number>) supplies an arbitrary type.  Subtrees containing
+;; no substituted alias are returned unchanged, so unaffected structure
+;; is shared rather than copied.
+;;
+;; Replacements are spliced in verbatim, not re-traversed: the caller is
+;; responsible for ensuring they contain no further substitutable loop
+;; references (see `et--rec-transform-datatypes').
+
+(defun et--rec-subst (type subs)
+  "Return TYPE with loop aliases replaced through SUBS.
+SUBS is an alist of (NAME . REPLACEMENT-TYPE)."
+  (let* ((changed nil)
+         (new-cases
+          (cl-loop for case in (et-type-cases type)
+                   for val = (et-type-case-value case)
+                   nconc
+                   (pcase val
+                     ;; A loop reference: splice in its replacement cases.
+                     ((and (cl-struct et-alias (name name) (args args))
+                           (guard (null args))
+                           (let repl (assq name subs))
+                           (guard repl))
+                      (setq changed t)
+                      (copy-sequence (et-type-cases (cdr repl))))
+                     (_
+                      (let ((new-val (et--rec-subst-value val subs)))
+                        (if (eq new-val val) (list case)
+                          (setq changed t)
+                          (list (make-et-type-case
+                                 :value new-val
+                                 :binds (et-type-case-binds case)
+                                 :typeofs (et-type-case-typeofs case))))))))))
+    (if (not changed) type
+      (make-et-type :label (et-type-label type) :cases new-cases))))
+
+(defun et--rec-subst-value (val subs)
+  "Substitute loop references nested in type-case VALUE's arguments."
+  (pcase val
+    ((cl-struct et-alias name args)
+     (let ((new-args (et--rec-subst-list args subs)))
+       (if (eq new-args args) val (make-et-alias :name name :args new-args))))
+    ((cl-struct et-datatype name args)
+     (let ((new-args (et--rec-subst-dt-args name args subs)))
+       (if (eq new-args args) val (make-et-datatype :name name :args new-args))))
+    (_ (error "Invalid case val: %s" val))))
+
+(defun et--rec-subst-list (types subs)
+  "Substitute loop references across TYPES; return TYPES itself if unchanged."
+  (let ((new (mapcar (lambda (ty) (et--rec-subst ty subs)) types)))
+    (if (cl-every #'eq new types) types new)))
+
+(defun et--rec-subst-dt-args (name args subs)
+  "Substitute loop references in datatype ARGS, skipping CONST args.
+Return ARGS itself when nothing changed."
+  (let ((new (cl-loop for arg in args
+                      for role in (et--datatype-arg-roles name args)
+                      collect (if (eq role 'CONST) arg
+                                (et--rec-subst arg subs)))))
+    (if (cl-every #'eq new args) args new)))
+
+(defun et--type-mentions-alias? (type names)
+  "Non-nil if TYPE references any alias whose name is in NAMES."
+  (cl-loop for case in (et-type-cases type)
+           thereis
+           (pcase (et-type-case-value case)
+             ((cl-struct et-alias name args)
+              (or (memq name names)
+                  (cl-some (lambda (a) (et--type-mentions-alias? a names)) args)))
+             ((cl-struct et-datatype name args)
+              (cl-some (lambda (a) (and (et-type-p a) (et--type-mentions-alias? a names)))
+                       args)))))
+
+
+;;;;; Transform datatypes
 
 (defvar et--rec-transform-active nil
   "Non-nil while inside the outermost `et--rec-transform-datatypes' call.
 Used to share a single loop scope across nested calls (see below).")
 
-(defun et--rec-transform-datatypes (type transform)
+(defun et--rec-canonical-collapses (loops canonical-loops)
+  "Return an alist of (SYM . REPLACEMENT-TYPE) for collapsible LOOPS.
+
+CANONICAL-LOOPS is a list of (MATCHER . REPR) pairs.  A loop collapses
+when its definition `et-iso-match'es some MATCHER and, after substituting
+the loops already chosen for collapse, the matched arguments mention no
+remaining loop alias.  The replacement is then REPR with those arguments
+substituted for its generics -- so the loop generated for, e.g.,
+`ListFresh<Number>' collapses to the readable `List<Number>'.
+
+Requiring loop-free arguments keeps replacements closed: a loop whose
+canonical form would still reference a loop (including itself, as with a
+genuinely non-list recursive type) is left for the digest-based renaming
+instead."
+  (when canonical-loops
+    (let* ((loop-syms (mapcar #'car loops))
+           ;; Pre-match each loop once: (SYM GENERICS REPR ARG-TYPES).
+           (matched
+            (cl-loop for (sym . def) in loops
+                     for hit =
+                     (cl-loop for (matcher . repr) in canonical-loops
+                              for res = (et-iso-match matcher def)
+                              when (et-match-result-success res)
+                              return (list (et-matcher-generics matcher)
+                                           repr (et-match-result-value res)))
+                     when hit collect (cons sym hit)))
+           (collapsed nil)
+           (progress t))
+      ;; Fixpoint: a loop becomes collapsible once every loop its
+      ;; arguments reference has itself collapsed to a loop-free type.
+      (while progress
+        (setq progress nil)
+        (cl-loop for (sym generics repr arg-types) in matched
+                 unless (assq sym collapsed)
+                 do (let ((resolved (mapcar (lambda (ty) (et--rec-subst ty collapsed)) arg-types)))
+                      (unless (cl-some (lambda (ty) (et--type-mentions-alias? ty loop-syms)) resolved)
+                        (push (cons sym (et-repr-to-type repr (cl-mapcar #'cons generics resolved)))
+                              collapsed)
+                        (setq progress t)))))
+      collapsed)))
+
+(defun et--rec-transform-datatypes (type transform &optional canonical-loops)
   "Transform datatypes in TYPE, giving loop aliases stable interned names.
 
 Wraps `et--rec-transform-datatypes-inner'. The inner pass names each
 recursive (\"loop\") alias deterministically but with throwaway
-uninterned symbols; this pass derives one structural digest from all the
-generated loop definitions and rewrites every loop alias to an interned,
-digest-based name (`@Loop<DIGEST>-<INDEX>'). Interning lets these names
-survive a serialized-cache round-trip with `eq' identity; the structural
-digest makes structurally identical loops reuse the same name across
-sessions.
+uninterned symbols.
+
+CANONICAL-LOOPS, when given, is a list of (MATCHER . REPR) pairs: any
+generated loop equivalent to MATCHER is collapsed to REPR with the
+matched generics substituted in (see `et--rec-canonical-collapses'),
+which keeps unfreshened types readable (e.g. `List<Number>' rather than
+an anonymous loop).  Collapsed loops are dropped entirely; their
+references are replaced by the closed canonical type.
+
+Every loop that is not collapsed has one structural digest derived from
+all such definitions, and is rewritten to an interned, digest-based name
+(`@Loop<DIGEST>-<INDEX>'). Interning lets these names survive a
+serialized-cache round-trip with `eq' identity; the structural digest
+makes structurally identical loops reuse the same name across sessions.
 
 Only the outermost call establishes the loop scope and performs the
-renaming.  A TRANSFORM may recurse back in (e.g. `et--unfreshen-type'
-unfreshening a sub-argument), and `et--rec-transform-stack' spans those
-nested calls -- so a loop detected in a nested call belongs to an outer
-frame.  Nested calls therefore delegate straight to the inner pass,
-sharing the outermost call's loop scope, so each placeholder and its
-definition always land together.
+collapsing/renaming.  A TRANSFORM may recurse back in (e.g.
+`et--unfreshen-type' unfreshening a sub-argument), and
+`et--rec-transform-stack' spans those nested calls -- so a loop detected
+in a nested call belongs to an outer frame.  Nested calls therefore
+delegate straight to the inner pass, sharing the outermost call's loop
+scope, so each placeholder and its definition always land together.
 
 The digest is intentionally shallow: it hashes the stringified loop
 definitions without expanding the aliases they reference. That is safe
@@ -2901,19 +3013,48 @@ structural key -- a stale result is never served, only a cache miss."
            (result (et--rec-transform-datatypes-inner type transform))
            (loops (nreverse et--rec-transform-datatypes-loops)))
       (if (null loops) result
-        (let* ((digest (secure-hash 'md5 (let ((print-level nil) (print-length nil))
-                                           (prin1-to-string (mapcar #'cdr loops)))))
-               (renames (cl-loop for (sym . _def) in loops
-                                 for idx upfrom 0
-                                 collect (cons sym (intern (format "@Loop%s-%d" digest idx))))))
-          ;; Redefine each loop alias under its stable name, swapping
-          ;; inter-loop references over to the stable names as well.
-          (cl-loop for (sym . def) in loops
-                   do (et--define-alias (cdr (assq sym renames)) []
-                                        (et--rec-rename-loop-aliases def renames)
-                                        :type-only t))
-          (et--rec-rename-loop-aliases result renames))))))
+        (let* ((collapsed (et--rec-canonical-collapses loops canonical-loops))
+               (kept (cl-remove-if (lambda (l) (assq (car l) collapsed)) loops)))
+          (if (null kept)
+              ;; Every loop collapsed to a canonical alias.
+              (et--rec-subst result collapsed)
+            (let* ((digest (secure-hash 'md5 (let ((print-level nil) (print-length nil))
+                                               (prin1-to-string (mapcar #'cdr kept)))))
+                   (renames (cl-loop for (sym . _def) in kept
+                                     for idx upfrom 0
+                                     collect (cons sym (intern (format "@Loop%s-%d" digest idx)))))
+                   ;; The full rewrite: collapsed loops -> canonical type,
+                   ;; kept loops -> their stable interned name.  The
+                   ;; renamed alias is built directly, since `@Loop...'
+                   ;; names do not satisfy the `et-alias' constructor.
+                   (subs (append collapsed
+                                 (cl-loop for (sym . new-name) in renames
+                                          collect (cons sym (make-et-type
+                                                             :cases (list (make-et-type-case
+                                                                           :value (make-et-alias :name new-name)))))))))
+              ;; Redefine each kept loop alias under its stable name.
+              (cl-loop for (sym . def) in kept
+                       do (et--define-alias (cdr (assq sym renames)) []
+                                            (et--rec-subst def subs)
+                                            :type-only t))
+              (et--rec-subst result subs))))))))
 
+
+;;;;; Freshen/unfreshen
+
+(defvar et--unfreshen-canonical-loops nil
+  "Cached canonical (MATCHER . REPR) collapses for `et--unfreshen-type'.
+Loops produced while unfreshening that match MATCHER are rewritten to
+REPR with the matched generics substituted in, so the loop generated for
+`ListFresh<Number>' collapses to the readable `List<Number>'.  Built
+lazily because `List' is not yet defined when this file loads.")
+
+(defun et--unfreshen-canonical-loops ()
+  "Return the canonical loop collapses used when unfreshening."
+  (or et--unfreshen-canonical-loops
+      (setq et--unfreshen-canonical-loops
+            (list (cons (et-matcher [E] List<E>)
+                        (et-parse-repr 'List<E> '(E) 'TYPE))))))
 
 (defun et--unfreshen-type (type)
   (et--remove-type-binds
@@ -2923,7 +3064,8 @@ structural key -- a stale result is never served, only a cache miss."
       (pcase name
         ('ConsFresh (make-et-alias :name 'Cons :args (mapcar #'et--unfreshen-type args)))
         ('VectorFresh (make-et-alias :name 'Vector :args (mapcar #'et--unfreshen-type args)))
-        (_ (make-et-datatype :name name :args args)))))))
+        (_ (make-et-datatype :name name :args args))))
+    (et--unfreshen-canonical-loops))))
 
 (defun et--freshen-type (type)
   (et--remove-type-binds
