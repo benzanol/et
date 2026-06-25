@@ -693,7 +693,11 @@ language. See `et--cons-is-plist'."
        (cl-loop for sub-arg in sub-args
                 for super-arg in super-args
                 for role in (et--datatype-arg-roles super-name super-args)
-                collect
+                ;; Skipping duplicates is especially helpful for ConsFull/VectorFull,
+                ;; where arguments are often duplicated
+                unless (member (cons sub-arg super-arg) already-checked)
+                collect (cons sub-arg super-arg) into already-checked
+                and collect
                 (pcase role
                   ;; Const args must be equal to match
                   ('CONST (valid-if (equal sub-arg super-arg)))
