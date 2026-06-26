@@ -62,28 +62,6 @@
 ;;; List utilities
 ;;;; Leaf type
 
-;; `flatten-tree'/`flatten-list' return every non-cons value reachable
-;; by repeatedly destructuring cons cells out of their argument. There
-;; is no way to express "the union of every leaf of an arbitrary
-;; recursively-structured type" with the matcher/generics machinery
-;; alone, so `et-leaf-type' computes it directly by walking the type,
-;; and is plugged into the declarations below via `eval'.
-
-(defun et-leaf-type (type)
-  "Return the union of every non-cons leaf type reachable from TYPE.
-
-Recursively destructures every `ConsFull'/`ConsFresh' case of TYPE
-\(including ones reached through aliases, e.g. `List'/`Tree') into its
-car and cdr, and unions together everything left over that isn't
-itself a cons. Self-referential types (like `List<E>') terminate via
-`et--stop-recursion': once a structure is already being explored,
-encountering it again contributes nothing further to the union.
-
-`Literal nil' is excluded from the result: every list ends in `Nil', so
-without this exclusion every list's leaf type would spuriously include
-`Nil', even though `flatten-tree' never actually emits a nil element."
-  (et--leaf-type-1 (et--remove-type-binds type) nil))
-
 (defun et--leaf-type-1 (type stack)
   (et--stop-recursion stack type (et-never)
     (apply #'et--or
@@ -101,6 +79,9 @@ without this exclusion every list's leaf type would spuriously include
              ((equal val (make-et-datatype :name 'Literal :args (list nil))) nil)
              (t (list (et-type case))))))))
 
+(et-define-op leaves (type)
+  (et--leaf-type-1 (et--remove-type-binds type) nil))
+
 
 ;;;; Functions
 
@@ -114,9 +95,9 @@ without this exclusion every list's leaf type would spuriously include
  (@function nbutlast (list &optional n)
             (@generics [T]) (list ListR<T>) (n Integer) (@return ListR<T>))
  (@function flatten-tree (tree)
-            (@generics [T]) (tree T) (@return (ListFresh (eval et-leaf-type T))))
+            (@generics [T]) (tree T) (@return (ListFresh (leaves T))))
  (@function flatten-list (tree)
-            (@generics [T]) (tree T) (@return (ListFresh (eval et-leaf-type T))))
+            (@generics [T]) (tree T) (@return (ListFresh (leaves T))))
  (@function number-sequence (from &optional to inc)
             (from Number) (to Number) (inc Number) (@return ListFresh<Number>))
 

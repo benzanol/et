@@ -1033,6 +1033,17 @@ Returns a plist with :declare to set the variable type."
 (cl-defun et--process-exprs (exprs &key check test eval)
   (let* ((identified (et-result-map #'et--identify-expr exprs)))
 
+    ;; Evaluate the buffer
+    ;; This must occur first, in case the buffer defines custom type keywords
+    (when (or test eval)
+      (cl-loop for expr in exprs
+               for pos upfrom 0
+               do
+               (let* ((et--processing-phase :eval)
+                      (et--processing-expr expr))
+                 (et-error-boundary pos
+                   (et-wrap-errors "Runtime error: %s" (eval expr))))))
+
     ;; For each expression, et--identify-expr returns a list of
     ;; process-plists. A process-plist describes how to process that
     ;; expression in each phase. For each phase, we want to perform
@@ -1060,13 +1071,6 @@ Returns a plist with :declare to set the variable type."
                (let* ((et--processing-phase :check)
                       (et--processing-expr expr))
                  (et-error-boundary pos (et--check expr)))))
-
-    ;; Evaluate the buffer
-    (when (or test eval)
-      (cl-loop for expr in exprs
-               for pos upfrom 0
-               do (et-error-boundary pos
-                    (et-wrap-errors "Runtime error: %s" (eval expr)))))
 
     ;; Run tests
     (when test
