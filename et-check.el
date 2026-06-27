@@ -976,6 +976,24 @@ Returns a plist with :declare to set the variable type."
   (et-literal name))
 
 
+;;;; Get/put types
+
+(defun et--identify-symbol-property-directive (form)
+  "Identify a symbol property declaration, returning a processing plist.
+
+During identification, just validates the format.
+Returns a plist with :declare to set the symbol type."
+  (pcase (cdr form)
+    (`(,(and symbol (pred symbolp)) ,spec)
+     (list
+      :declare
+      (lambda ()
+        (et-at 2
+          (put symbol 'et-symbol-property-type (et-parse-type spec))))))
+
+    (_ (et-fatal nil "Expected format (@symbol-property SYMBOL TYPE)"))))
+
+
 ;;;; Identify expr
 
 (defvar et--processed-requires nil
@@ -1010,7 +1028,8 @@ Returns a plist with :declare to set the variable type."
              (`(@alias . ,_) (et--identify-alias-directive form))
              (`(@variable . ,_) (et--identify-variable-directive form))
              (`(@function . ,_) (et--identify-function-directive form))
-             (`(@macro . ,_) (et--identify-macro-directive form))))
+             (`(@macro . ,_) (et--identify-macro-directive form))
+             (`(@symbol-property . ,_) (et--identify-symbol-property-directive form))))
          collect
          (cons pos plist)))
 

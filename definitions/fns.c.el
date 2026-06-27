@@ -1,3 +1,33 @@
+;;; set/put
+
+(defun et--symbol-type-property-type (sym-type)
+  (let* ((literals nil)
+         (only-literals t))
+    (cl-loop for case in (et-type-cases sym-type)
+             for val = (et-type-case-value case)
+             if (and (et-datatype-p val) (eq (et-datatype-name val) 'Literal))
+             collect (let* ((sym (car (et-datatype-args val))))
+                       (or (and (symbolp sym)
+                                (get sym 'et-symbol-property-type))
+                           (et Any)))
+             into sym-types
+             else return (et Any)
+             finally return (et-simplify-type (apply #'et--or sym-types)))))
+
+(et-define-op symbol-property (sym-type)
+  (et--symbol-type-property-type sym-type))
+
+(et-declare
+ (@function get (symbol propname)
+            (@generics [(<= S Symbol)])
+            (symbol Symbol) (propname S)
+            (@return (symbol-property S)))
+ (@function put (symbol propname value)
+            (@generics [(<= S Symbol)])
+            (symbol Symbol) (propname S)
+            (@return (symbol-property S))))
+
+
 ;;; List access
 
 (et-declare
