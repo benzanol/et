@@ -1,22 +1,3 @@
-;;; fns.c.el --- Type definitions for src/fns.c -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type definitions for builtins defined in Emacs' src/fns.c.
-
-
-;;; Code:
-
-(require 'et-check)
-
-
-;;; ============================================================
 ;;; List access
 
 (et-declare
@@ -28,10 +9,23 @@
             (@generics [T]) (n Integer) (list ListR<T>) (@return ListFresh<T>))
  (@function ntake (n list)
             (@generics [T]) (n Integer) (list ListR<T>) (@return ListR<T>))
+ (@function elt (sequence n)
+            (@generics [T]) (sequence ListR<T>|VectorR<T>) (n Integer)
+            (@return T|Nil))
  (@function length (sequence)
             (sequence String|ListR<Any>|VectorR<Any>) (@return Integer))
  (@function safe-length (list) (list Any) (@return Integer))
- (@function proper-list-p (object) (object Any) (@return Integer|Nil)))
+ (@function proper-list-p (object) (object Any) (@return Integer|Nil))
+
+ (@function length< (sequence length)
+            (sequence String|ListR<Any>|VectorR<Any>) (length Integer)
+            (@return Boolean))
+ (@function length> (sequence length)
+            (sequence String|ListR<Any>|VectorR<Any>) (length Integer)
+            (@return Boolean))
+ (@function length= (sequence length)
+            (sequence String|ListR<Any>|VectorR<Any>) (length Integer)
+            (@return Boolean)))
 
 (et-test
  (et-assert-call Number|String|Nil nth Integer ConsR<Number~ListR<String>>)
@@ -46,12 +40,19 @@
  (et-assert-call Integer safe-length ListR<Any>)
  (et-assert-call Integer|Nil proper-list-p ListR<Any>))
 
+(et-test
+ (et-assert-call Integer|Nil elt ListR<Integer> Integer)
+ (et-assert-call Symbol|Nil elt VectorR<Symbol> Integer)
+ (et-assert-call Boolean length< ListR<Any> Integer)
+ (et-assert-call Boolean length= String Integer))
 
-;;; ============================================================
+
 ;;; Membership and association lists
 
 (et-declare
  (@function memq (elt list)
+            (@generics [T]) (elt Any) (list ListR<T>) (@return ListR<T>|Nil))
+ (@function memql (elt list)
             (@generics [T]) (elt Any) (list ListR<T>) (@return ListR<T>|Nil))
  (@function member (elt list)
             (@generics [T]) (elt Any) (list ListR<T>) (@return ListR<T>|Nil))
@@ -62,12 +63,16 @@
 
  (@function assq (key alist)
             (@generics [C]) (key Any) (alist ListR<C&Cons>) (@return C|Nil))
- (@function assoc (key alist)
-            (@generics [C]) (key Any) (alist ListR<C&Cons>) (@return C|Nil))
+ (@function assoc (key alist &optional testfn)
+            (@generics [C]) (key Any) (alist ListR<C&Cons>) (testfn Any)
+            (@return C|Nil))
  (@function rassq (value alist)
             (@generics [C]) (value Any) (alist ListR<C&Cons>) (@return C|Nil))
  (@function rassoc (value alist)
-            (@generics [C]) (value Any) (alist ListR<C&Cons>) (@return C|Nil)))
+            (@generics [C]) (value Any) (alist ListR<C&Cons>) (@return C|Nil))
+
+ (@function copy-alist (alist)
+            (@generics [C]) (alist ListR<C&Cons>) (@return ListFresh<C>)))
 
 (et-test
  (et-assert-call ListR<Integer>|Nil memq Any ListR<Integer>)
@@ -77,7 +82,6 @@
  (et-assert-resolve Cons<1~2>|Nil (rassq 2 (list (cons 1 2)))))
 
 
-;;; ============================================================
 ;;; Mapping
 
 (et-declare
@@ -91,6 +95,11 @@
             (function Function<Args<T>~R>)
             (sequence ListR<T>)
             (@return Nil))
+ (@function mapcan (function sequence)
+            (@generics [T E])
+            (function Function<Args<T>~List<E>>)
+            (sequence ListR<T>)
+            (@return List<E>))
  (@function mapconcat (function sequence &optional separator)
             (@generics [T])
             (function Function<Args<T>~String>)
@@ -103,10 +112,10 @@
  (et-assert-call Nil mapc Function<Args<Integer>~String> ListR<Integer>)
  (et-assert-call String mapconcat Function<Args<Integer>~String> ListR<Integer>)
  (et-assert-call String mapconcat Function<Args<Integer>~String> ListR<Integer> String)
+ (et-assert-call List<String> mapcan Function<Args<Integer>~List<String>> ListR<Integer>)
  (et-assert-call-errors mapcar Function<Args<String>~String> ListR<Integer>))
 
 
-;;; ============================================================
 ;;; append / nconc
 
 ;; `append' builds a fresh spine for every argument except the last,
@@ -159,7 +168,22 @@
           (et-result-value (et-typecheck-call append List<1> List<Integer> List<Number> List<1>))))))
 
 
-;;; ============================================================
+;;; concat / vconcat
+
+(et-declare
+ (@function concat (&rest sequences)
+            (sequences ListR<String|ListR<Any>|VectorR<Any>>)
+            (@return String))
+ (@function vconcat (&rest sequences)
+            (sequences ListR<String|ListR<Any>|VectorR<Any>>)
+            (@return Vector<Any>)))
+
+(et-test
+ (et-assert-call String concat String String)
+ (et-assert-call String concat ListR<Integer> String)
+ (et-assert-call Vector<Any> vconcat String ListR<Integer>))
+
+
 ;;; reverse / nreverse / copy
 
 (et-declare
@@ -176,7 +200,6 @@
  (et-assert-call ListFresh<Integer> copy-sequence ListR<Integer>))
 
 
-;;; ============================================================
 ;;; Equality
 
 ;; (`eq' lives in data.c; `eql'/`equal' are defined in fns.c.)
@@ -186,33 +209,96 @@
             (@return (or Nil (and True (bindsof (and A B))))))
  (@function equal (a b)
             (@generics [A B]) (a A) (b B)
-            (@return (or Nil (and True (bindsof (and A B)))))))
+            (@return (or Nil (and True (bindsof (and A B))))))
+ (@function equal-including-properties (a b)
+            (@generics [A B]) (a A) (b B)
+            (@return (or Nil (and True (bindsof (and A B))))))
+ (@function value< (a b)
+            (a Any) (b Any) (@return Boolean)))
 
 (et-test
  (et-assert-resolve Boolean (equal 1 "2"))
- (et-assert-resolve Boolean (eql 1 2)))
+ (et-assert-resolve Boolean (eql 1 2))
+ (et-assert-resolve Boolean (value< 1 2)))
 
 
-;;; ============================================================
 ;;; Strings
 
 (et-declare
  (@function string-search (needle haystack &optional start-pos)
             (needle String) (haystack String) (start-pos Integer)
             (@return Integer|Nil))
+ (@function string-distance (string1 string2 &optional bytecompare)
+            (string1 String) (string2 String) (bytecompare Any)
+            (@return Integer))
+ (@function string-bytes (string) (string String) (@return Integer))
  (@function string-lessp (string1 string2)
             (string1 String) (string2 String) (@return Boolean))
+ (@function string-version-lessp (string1 string2)
+            (string1 String) (string2 String) (@return Boolean))
  (@function string-equal (string1 string2)
-            (string1 String) (string2 String) (@return Boolean)))
+            (string1 String) (string2 String) (@return Boolean))
+
+ (@function substring (string &optional from to)
+            (@generics [S T])
+            (string S&{String|VectorR<T>}) (from Integer|Nil) (to Integer|Nil)
+            (@return (extends? S String String Vector<T>)))
+ (@function substring-no-properties (string &optional from to)
+            (string String) (from Integer|Nil) (to Integer|Nil)
+            (@return String))
+
+ ;; Multibyte/unibyte conversions: all String -> String.
+ (@function string-to-multibyte (string) (string String) (@return String))
+ (@function string-to-unibyte (string) (string String) (@return String))
+ (@function string-as-multibyte (string) (string String) (@return String))
+ (@function string-as-unibyte (string) (string String) (@return String))
+ (@function string-make-multibyte (string) (string String) (@return String))
+ (@function string-make-unibyte (string) (string String) (@return String)))
 
 (et-test
  (et-assert-resolve Integer|Nil (string-search "a" "abc"))
  (et-assert-resolve Boolean (string-lessp "a" "b"))
  (et-assert-resolve Boolean (string-equal "a" "a"))
+ (et-assert-resolve Integer (string-distance "a" "b"))
  (et-assert-resolve-errors (string-search "a" 5)))
 
+(et-test
+ (et-assert-call String substring String Integer)
+ (et-assert-call String substring String)
+ (et-assert-call Vector<Symbol> substring VectorR<Symbol> Integer Integer)
+ (et-assert-call String substring-no-properties String)
+ (et-assert-call String string-to-multibyte String)
+ (et-assert-call-errors substring-no-properties VectorR<Symbol>))
 
-;;; ============================================================
+
+;;; Symbol properties
+
+(et-declare
+ (@function put (symbol propname value)
+            (@generics [V]) (symbol Symbol) (propname Symbol) (value V)
+            (@return V)))
+
+(et-test
+ (et-assert-call String put NonNilSymbol NonNilSymbol String))
+
+
+;;; Misc
+
+(et-declare
+ (@function identity (argument)
+            (@generics [T]) (argument T) (@return T))
+ (@function random (&optional limit)
+            (limit Any) (@return Integer))
+ (@function featurep (feature &optional subfeature)
+            (feature Symbol) (subfeature Any) (@return Boolean)))
+
+(et-test
+ (et-assert-call Integer identity Integer)
+ (et-assert-call String identity String)
+ (et-assert-call Integer random Integer)
+ (et-assert-call Boolean featurep NonNilSymbol))
+
+
 ;;; Property lists
 
 ;; `plist-get'/`plist-put' need to look a literal key up in a `PList'
@@ -272,7 +358,3 @@ function returns nil."
       (if (et-subtype? val-type existing-val-type)
           plist-type
         (et-err 3 "Expected %s, found %s" (et-pp existing-val-type) (et-pp val-type))))))
-
-
-(provide 'fns.c)
-;;; fns.c.el ends here

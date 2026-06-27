@@ -1,32 +1,17 @@
-;;; lread.c.el --- Type definitions for src/lread.c -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type definitions for builtins defined in Emacs' src/lread.c.
-
-
-;;; Code:
-
-(require 'et-check)
-
-
 (et-declare
  (@function intern (name &optional obarray)
             (name String) (obarray Any) (@return Symbol))
  (@function intern-soft (name &optional obarray)
-            (name String|Symbol) (obarray Any) (@return Symbol|Nil)))
+            (name String|Symbol) (obarray Any) (@return Symbol|Nil))
+ (@function unintern (name obarray)
+            (name String|Symbol) (obarray Any) (@return Boolean))
+ (@function read-from-string (string &optional start end)
+            (string String) (start Integer) (end Integer)
+            (@return Cons<Any~Integer>)))
 
 (et-test
  (et-assert-resolve Symbol (intern "foo"))
  (et-assert-resolve Symbol|Nil (intern-soft "foo"))
- (et-assert-resolve-errors (intern 5)))
-
-
-(provide 'lread.c)
-;;; lread.c.el ends here
+ (et-assert-resolve-errors (intern 5))
+ (et-assert-resolve Boolean (unintern "foo" nil))
+ (et-assert-resolve Cons<Any~Integer> (read-from-string "foo")))

@@ -1,24 +1,3 @@
-;;; eval.c.el --- Type checkers for src/eval.c -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type checkers for the special forms implemented in Emacs' src/eval.c
-;; (`let*', `setq', `and', `or', `if', `quote', `function', `apply',
-;; `funcall').  These carry runtime logic (they narrow bindings, walk
-;; their own sub-forms, etc.), so -- like pcase.el and backquote.el --
-;; they live here as `et-define-checker'/`et-define-pcase-checker'
-;; checkers rather than static `@function' declarations.
-
-(require 'et-check)
-
-
-;;; ============================================================
 ;;; Functions
 ;;;; lambda
 
@@ -156,7 +135,6 @@
  (et-never-p (et-result-type (et--check '#'function))))
 
 
-;;; ============================================================
 ;;; Control flow
 ;;;; let*
 
@@ -269,7 +247,121 @@
               (et String)))
 
 
-;;; ============================================================
+;;;; let
+
+;; Like `let*', but the value forms are all evaluated in the *outer*
+;; scope (parallel binding), so earlier bindings are not visible while
+;; deriving later values.  Only the body sees all the bindings.
+(et-define-pcase-checker let
+    `(,(et-* [(var vars)]
+             (and
+              (or
+               ;; Derive type (evaluated outside the binding scope)
+               (and `(,name ,_val)
+                    (let type (et-checker-sub 1 (length vars) 1)))
+               ;; No value (nil variable)
+               (and name (pred symbolp)
+                    (let type (et Nil))))
+              ;; Add the var to the list
+              (let var (et-new-var name (et--unfreshen-type (or type (et-never)))))))
+      . ,_body)
+
+  (et-with-vars vars
+    (et-checker-tail 2)))
+
+(et-test
+ ;; Body sees the bindings
+ (et-assert-resolve Integer (let ((a 1) (b 2)) (+ a b)))
+ ;; Value forms do NOT see earlier bindings in the same `let'
+ (et-subtype? (et-typecheck
+               (let* ((a Integer 1))
+                 (let ((a "s") (b a)) b)))
+              (et Integer)))
+
+
+;;;; progn / prog1
+
+;; `progn' returns the value of the last body form (or nil if empty).
+(et-define-checker progn
+  (et-checker-tail 1))
+
+(et-test
+ (et-assert-resolve Integer (progn 1))
+ (et-assert-resolve String (progn 1 2 "x"))
+ (et-assert-resolve Nil (progn)))
+
+;; `prog1' returns the value of FIRST, evaluating (and checking) the rest.
+(et-define-pcase-checker prog1 `(,_first . ,_body)
+  (prog1 (et-checker-sub 1)
+    (et-checker-remaining 2)))
+
+(et-test
+ (et-assert-resolve Integer (prog1 1 "x" 'y)))
+
+
+;;;; cond
+
+;; Each clause is (CONDITION BODY...).  The result is the union of every
+;; clause's result (the last BODY form, or CONDITION itself when there is
+;; no body), plus nil for the case where no clause succeeds.  Inside a
+;; clause's body, CONDITION is narrowed to its non-nil part, like `if'.
+(et-define-pcase-checker cond clauses
+  (cl-loop for clause in clauses
+           for idx upfrom 1
+           for cond-type = (et-checker-sub idx 0)
+           for branch-type =
+           (if (cdr clause)
+               ;; Has body: narrow by non-nil condition, return last form
+               (et-with-narrow-binds (et--type-binds (et--non-nil cond-type))
+                 (et-checker-tail idx 1))
+             ;; No body: returns the non-nil part of the condition
+             (et--non-nil cond-type))
+           collect branch-type into branch-types
+           finally return (et-simplify-type
+                           (apply #'et--or (et Nil) branch-types))))
+
+(et-test
+ (et-assert-resolve Integer|String|Nil (cond (1 1) (2 "x")))
+ (et-assert-resolve String|Nil (cond (1 "x")))
+ (et-assert-resolve Nil (cond))
+ ;; Narrowing inside a clause body, like `if': `a' is narrowed to String,
+ ;; so Number cannot appear in the result.
+ (et-subtype? (et-typecheck
+               (let* ((a String|Number 4))
+                 (cond ((stringp a) a) (t "hello!"))))
+              (et String|Nil)))
+
+
+;;;; while
+
+;; A `while' form always evaluates to nil; test and body are still checked.
+(et-define-pcase-checker while `(,_test . ,_body)
+  (et-checker-sub 1)
+  (et-checker-remaining 2)
+  (et Nil))
+
+
+;;; Nonlocal exit
+;;;; catch / throw / unwind-protect
+
+;; `catch' returns either the last body form's value or whatever a matching
+;; `throw' delivers -- and a throw can carry any value -- so its result is
+;; `Any'.  The tag and body are still checked.
+(et-define-pcase-checker catch `(,_tag . ,_body)
+  (et-checker-sub 1)
+  (et-checker-remaining 2)
+  (et Any))
+
+;; `throw' performs a nonlocal exit and never returns normally.
+(et-define-type-checker throw (Args Any Any) Never)
+
+;; `unwind-protect' returns the value of BODYFORM; UNWINDFORMS are checked
+;; but their values discarded.
+(et-define-pcase-checker unwind-protect `(,_body . ,_unwinds)
+  (prog1 (et-checker-sub 1)
+    (et-checker-remaining 2)))
+
+
 ;;; Funcall
 
 (et-define-checker apply
@@ -310,7 +402,3 @@
  (et-assert-resolve 0 (apply #'+ nil))
  (et-assert-resolve-errors (apply #'+ 1 2 (list "3")))
  (et-assert-resolve-errors (apply #'+ 1 2 3)))
-
-
-(provide 'eval.c)
-;;; eval.c.el ends here

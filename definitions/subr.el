@@ -1,22 +1,3 @@
-;;; subr.el --- Type definitions for lisp/subr.el -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type definitions for functions defined in Emacs' lisp/subr.el.
-
-
-;;; Code:
-
-(require 'et-check)
-
-
-;;; ============================================================
 ;;; c[ad]+r accessors
 
 ;; Each composes `MatchCar'/`MatchCdr' to peel the right car/cdr path.
@@ -43,7 +24,6 @@
  (et-assert-resolve List<3> (cdddr '((-1 0) 1 2 3))))
 
 
-;;; ============================================================
 ;;; Association lists
 
 (et-declare
@@ -58,7 +38,6 @@
  (et-assert-resolve 2|4|Nil (alist-get 4 (list (cons 1 2) (cons 3 4)))))
 
 
-;;; ============================================================
 ;;; List utilities
 ;;;; Leaf type
 
@@ -94,6 +73,11 @@
             (@generics [T]) (list ListR<T>) (n Integer) (@return ListFresh<T>))
  (@function nbutlast (list &optional n)
             (@generics [T]) (list ListR<T>) (n Integer) (@return ListR<T>))
+ ;; `remove' copies its argument; `remq' may share the input tail.
+ (@function remove (elt seq)
+            (@generics [T]) (elt Any) (seq ListR<T>) (@return ListFresh<T>))
+ (@function remq (elt list)
+            (@generics [T]) (elt Any) (list ListR<T>) (@return ListR<T>))
  (@function flatten-tree (tree)
             (@generics [T]) (tree T) (@return (ListFresh (leaves T))))
  (@function flatten-list (tree)
@@ -113,7 +97,9 @@
  (et-assert-call ListFresh<Integer> flatten-tree TreeR<Integer>)
  (et-assert-call ListFresh<Integer> flatten-list TreeR<Integer>)
  (et-assert-call ListFresh<Integer|String> flatten-tree ConsFresh<Integer~ConsFresh<ConsFresh<String~Nil>~Nil>>)
- (et-assert-call ListFresh<Number> number-sequence Integer Integer))
+ (et-assert-call ListFresh<Number> number-sequence Integer Integer)
+ (et-assert-call ListFresh<Integer> remove Any ListR<Integer>)
+ (et-assert-call ListR<Integer> remq Any ListR<Integer>))
 
 (et-test
  ;; copy-tree freshens deeply (compared by equivalence, not raw `equal').
@@ -122,7 +108,6 @@
    (and (et-subtype? got want) (et-subtype? want got))))
 
 
-;;; ============================================================
 ;;; Symbols and errors
 
 (et-declare
@@ -138,7 +123,6 @@
  (et-assert-resolve-errors (gensym 5)))
 
 
-;;; ============================================================
 ;;; Strings
 
 (et-declare
@@ -148,6 +132,12 @@
             (suffix String) (string String) (ignore-case Any) (@return Boolean))
  (@function string-trim (string &optional trim-left trim-right)
             (string String) (trim-left String) (trim-right String) (@return String))
+ (@function string-trim-left (string &optional regexp)
+            (string String) (regexp String) (@return String))
+ (@function string-trim-right (string &optional regexp)
+            (string String) (regexp String) (@return String))
+ (@function string-greaterp (string1 string2)
+            (string1 String) (string2 String) (@return Boolean))
  (@function string-replace (from-string to-string in-string)
             (from-string String) (to-string String) (in-string String) (@return String))
  (@function split-string (string &optional separators omit-nulls trim)
@@ -160,10 +150,30 @@
  (et-assert-resolve String (string-trim "  hi  "))
  (et-assert-resolve String (string-replace "a" "b" "abc"))
  (et-assert-resolve ListFresh<String> (split-string "a b c"))
+ (et-assert-resolve String (string-trim-left "  hi"))
+ (et-assert-resolve String (string-trim-right "hi  "))
+ (et-assert-resolve Boolean (string-greaterp "b" "a"))
  (et-assert-resolve-errors (string-trim 5)))
 
 
-;;; ============================================================
+;;; Misc utilities
+
+;; `xor' returns the lone non-nil argument (or nil when both/neither are).
+;; `always' always returns t; `ignore' always returns nil.
+(et-declare
+ (@function xor (cond1 cond2)
+            (@generics [A B]) (cond1 A) (cond2 B) (@return (or A B Nil)))
+ (@function always (&rest arguments)
+            (arguments ListR<Any>) (@return True))
+ (@function ignore (&rest arguments)
+            (arguments ListR<Any>) (@return Nil)))
+
+(et-test
+ (et-assert-resolve True (always 1 2 3))
+ (et-assert-resolve Nil (ignore 1 2 3))
+ (et-assert-resolve String|Integer|Nil (xor "a" 5)))
+
+
 ;;; Macros
 
 (et-declare
@@ -173,7 +183,6 @@
  (@macro when-let* :expand t))
 
 
-;;; ============================================================
 ;;; Control-flow macros
 
 ;; `dolist'/`when'/`unless' are macros defined in lisp/subr.el. They
@@ -213,7 +222,3 @@
          (et-typecheck
           (let* ((a String|Number 4))
             (when (stringp a) a))))))
-
-
-(provide 'subr)
-;;; subr.el ends here

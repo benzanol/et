@@ -1,21 +1,3 @@
-;;; cl-macs.el --- Type checker for cl-loop -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type checker for `cl-loop' (defined in lisp/emacs-lisp/cl-macs.el).
-;; Like pcase.el and backquote.el, this carries the runtime logic of the
-;; checker itself (a hand-written walker over the flat clause list) rather
-;; than a static `@function' declaration.
-
-(require 'et-check)
-
-
 ;;;; Keywords
 
 (defvar et--loop-keywords
@@ -620,7 +602,3 @@ implicit accumulator combined with any body `return' values."
  ;; ---- for VAR downfrom EXPR to EXPR by EXPR ----
  (et-assert-resolve ListFresh<Integer>
    (cl-loop for i downfrom 10 to 0 by 2 collect i)))
-
-
-(provide 'et-cl-macs)
-;;; cl-macs.el ends here

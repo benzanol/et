@@ -1,22 +1,3 @@
-;;; data.c.el --- Type definitions for src/data.c -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type definitions for builtins defined in Emacs' src/data.c.
-
-
-;;; Code:
-
-(require 'et-check)
-
-
-;;; ============================================================
 ;;; Cons matching aliases
 
 ;; `MatchCar'/`MatchCdr' are matcher-only aliases used by `car'/`cdr'
@@ -32,7 +13,6 @@
              (ConsR Any T))))
 
 
-;;; ============================================================
 ;;; Arithmetic
 
 ;; The argument list is captured whole as the generic `Nums' (constrained
@@ -79,7 +59,10 @@
  (@function mod (x y)
             (@generics [X Y])
             (x X&Number) (y Y&Number)
-            (@return (extends? X Integer (extends? Y Integer Integer Number) Number))))
+            (@return (extends? X Integer (extends? Y Integer Integer Number) Number)))
+
+ ;; `%' is integer-only and always yields an Integer.
+ (@function % (x y) (x Integer) (y Integer) (@return Integer)))
 
 (et-test
  ;; All-integer arguments -> Integer
@@ -113,7 +96,21 @@
  (et-assert-resolve Number (mod 7.5 3)))
 
 
-;;; ============================================================
+;;; Bitwise operations
+
+;; All of these operate on (and produce) integers.  Their arguments may
+;; also be markers, but markers are not modelled, so the integer-only
+;; signature is the precise one we can express.
+
+(et-declare
+ (@function logand (&rest ints) (ints ListR<Integer>) (@return Integer))
+ (@function logior (&rest ints) (ints ListR<Integer>) (@return Integer))
+ (@function logxor (&rest ints) (ints ListR<Integer>) (@return Integer))
+ (@function lognot (number) (number Integer) (@return Integer))
+ (@function ash (value count) (value Integer) (count Integer) (@return Integer))
+ (@function logcount (value) (value Integer) (@return Integer)))
+
+
 ;;; Comparison / equality
 
 (et-declare
@@ -130,7 +127,8 @@
  (@function < (a b) (a Number) (b Number) (@return Boolean))
  (@function <= (a b) (a Number) (b Number) (@return Boolean))
  (@function > (a b) (a Number) (b Number) (@return Boolean))
- (@function >= (a b) (a Number) (b Number) (@return Boolean)))
+ (@function >= (a b) (a Number) (b Number) (@return Boolean))
+ (@function /= (num1 num2) (num1 Number) (num2 Number) (@return Boolean)))
 
 (et-test
  (et-assert-resolve Boolean (< 1 2))
@@ -138,7 +136,6 @@
  (et-assert-resolve-errors (< 1 "2")))
 
 
-;;; ============================================================
 ;;; Predicates
 
 (et-declare
@@ -166,6 +163,10 @@
             (@generics [T]) (object T)
             (@return (or (and True (bindsof (and T Nil|Cons)))
                          (and Nil (bindsof (subtract T Nil|Cons))))))
+ (@function nlistp (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (subtract T Nil|Cons)))
+                         (and Nil (bindsof (and T Nil|Cons))))))
  (@function vectorp (object)
             (@generics [T]) (object T)
             (@return (or (and True (bindsof (and T Vector)))
@@ -182,6 +183,17 @@
             (@generics [T]) (object T)
             (@return (or (and True (bindsof (subtract T Cons)))
                          (and Nil (bindsof (and T Cons)))))))
+
+;; These predicates have no exact datatype to narrow to (no Float,
+;; natural-number, keyword, sequence, or array datatype exists), so they
+;; only carry their Boolean return type.
+(et-declare
+ (@function floatp (object) (object Any) (@return Boolean))
+ (@function natnump (object) (object Any) (@return Boolean))
+ (@function keywordp (object) (object Any) (@return Boolean))
+ (@function sequencep (object) (object Any) (@return Boolean))
+ (@function arrayp (object) (object Any) (@return Boolean))
+ (@function char-or-string-p (object) (object Any) (@return Boolean)))
 
 (et-test
  (et-assert-call True&{$a::Cons}
@@ -203,7 +215,6 @@
                  atom {::$a}&{Integer|Cons}))
 
 
-;;; ============================================================
 ;;; Cons cells
 
 (et-declare
@@ -218,7 +229,11 @@
  ;; NOTE: the parameter order here is preserved verbatim from the
  ;; original `setcar' checker.
  (@function setcar (a b)
-            (@generics [A]) (a A) (b Nil|ConsW<A~Never>) (@return A)))
+            (@generics [A]) (a A) (b Nil|ConsW<A~Never>) (@return A))
+ ;; `setcdr' mirrors `setcar' (same verbatim parameter order), writing
+ ;; the cdr instead of the car.
+ (@function setcdr (a b)
+            (@generics [A]) (a A) (b Nil|ConsW<Never~A>) (@return A)))
 
 (et-test
  (et-assert-resolve Integer (car (list 1 2.2 3)))
@@ -250,10 +265,10 @@
  (et-assert-resolve Boolean (cdr (cdr (cdr (list 1 2 3))))))
 
 (et-test
- (et-typecheck-call setcar Number ConsW<Number~Number>))
+ (et-typecheck-call setcar Number ConsW<Number~Number>)
+ (et-typecheck-call setcdr Number ConsW<Number~Number>))
 
 
-;;; ============================================================
 ;;; Array access
 
 ;; `aref' indexes a vector (yielding its element type) or a string
@@ -263,26 +278,35 @@
 ;; express.
 (et-define-type-checker aref [T] (Args VectorR<T>|{String&T=Integer} Integer) T)
 
+;; `aset' is the writing counterpart: it stores a value of the array's
+;; element type and returns it.  A vector must be writable with T
+;; (`VectorW<T>'); a string element is an Integer character code.
+(et-define-type-checker aset [T] (Args VectorW<T>|{String&T=Integer} Integer T) T)
+
 (et-test
  (et-assert-call Integer aref String Integer)
  (et-assert-call Symbol|Integer aref (or VectorR<Symbol> String) Integer)
  (et-assert-call-errors aref (or VectorR<Symbol> String ListR<Any>) Integer))
 
+(et-test
+ (et-assert-call Integer aset String Integer Integer)
+ (et-assert-call Integer aset VectorW<Integer> Integer Integer)
+ (et-assert-call-errors aset ListR<Any> Integer Integer))
 
-;;; ============================================================
+
 ;;; Symbols and conversions
 
 (et-declare
  (@function symbol-name (symbol) (symbol Symbol) (@return String))
  (@function number-to-string (number) (number Number) (@return String))
  (@function string-to-number (string &optional base)
-            (string String) (base Integer) (@return Number)))
+            (string String) (base Integer) (@return Number))
+ ;; `type-of'/`cl-type-of' always return a (non-nil) type-naming symbol.
+ (@function type-of (object) (object Any) (@return NonNilSymbol))
+ (@function cl-type-of (object) (object Any) (@return NonNilSymbol)))
 
 (et-test
  (et-assert-resolve String (symbol-name 'foo))
  (et-assert-resolve String (number-to-string 5))
- (et-assert-resolve Number (string-to-number "5")))
-
-
-(provide 'data.c)
-;;; data.c.el ends here
+ (et-assert-resolve Number (string-to-number "5"))
+ (et-assert-resolve NonNilSymbol (type-of 5)))

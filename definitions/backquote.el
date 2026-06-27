@@ -1,42 +1,3 @@
-;;; backquote.el --- Type checker for `backquote' -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type checking for backquote (quasiquote) expressions, e.g. `(a ,b c).
-;; Lives under definitions/ for the same reason as pcase.el: it carries
-;; runtime logic (the checker itself), not just static declarations.
-;;
-;; The checker walks the cons/vector tree of the template one cell at a
-;; time. A subtree with no `,'/`,@' anywhere inside it is pure data, so
-;; it type-checks to a single `Literal' of itself rather than a nest of
-;; `ConsFresh' wrapping literal leaves. An active subtree instead becomes
-;; a `ConsFresh' (or `VectorFresh', for vectors) built from the
-;; recursively-checked car/cdr (or elements); a `,EXPR' checks EXPR
-;; normally; a `,@EXPR' splices EXPR's elements onto the rest, reusing
-;; the same append-style typing `append' itself uses (see `SpliceFresh').
-;;
-;; LIMITATION: a nested backquote form (`(a `(b ,c))) resets the unquote
-;; depth, so it is always treated as inert/constant data at this level --
-;; correct for ordinary nesting (one extra backquote makes a single comma
-;; inert), but it does not implement the rarer multi-comma escape trick
-;; (e.g. `,,x' to reach back out through two backquotes).
-;;
-;; Paths passed to `et-at'/`et-err' throughout are relative to the
-;; backquote form itself, following the same self-similar nth-indexing
-;; convention `et-checker-sub' paths already use elsewhere: PATH doubles
-;; as a node's own indexing prefix, so PATH++[K] addresses its Kth
-;; element, and entering a `,'/`,@'/backquote sigil is just index 1 of
-;; the 2-element list the reader produced for it.
-
-(require 'et-check)
-
-
 ;;;; Constant detection
 
 (defun et--backquote-constant-p (form)
@@ -227,11 +188,7 @@ structure."
    `[a ,@(:type ListR<Integer>) c]))
 
 
-(provide 'et-backquote)
 ;;; Extra checkers
 
 (et-declare
  (@macro backquote-list* :expand t))
-
-
-;;; backquote.el ends here

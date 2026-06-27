@@ -1,22 +1,3 @@
-;;; alloc.c.el --- Type definitions for src/alloc.c -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type definitions for builtins defined in Emacs' src/alloc.c.
-
-
-;;; Code:
-
-(require 'et-check)
-
-
-;;; ============================================================
 ;;; Conses and lists
 
 (et-declare
@@ -66,7 +47,24 @@
  (et-assert-call-errors make-list String Integer))
 
 
-;;; ============================================================
+;;; Strings
+
+(et-declare
+ ;; LENGTH copies of the character INIT.  MULTIBYTE only affects encoding.
+ (@function make-string (length init &optional multibyte)
+            (length Integer) (init Integer) (multibyte Any)
+            (@return String)))
+
+
+;;; Symbols
+
+(et-declare
+ ;; A freshly allocated uninterned symbol; never nil.
+ (@function make-symbol (name)
+            (name String)
+            (@return NonNilSymbol)))
+
+
 ;;; Vectors
 
 (et-declare
@@ -85,7 +83,3 @@
  (et-assert-call Vector<Never> vector)
  (et-assert-call Vector<Number> vector Integer Number Positive)
  (et-assert-call Vector<Integer> make-vector Integer Integer))
-
-
-(provide 'alloc.c)
-;;; alloc.c.el ends here

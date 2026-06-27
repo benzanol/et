@@ -1,26 +1,3 @@
-;;; pcase.el --- Type checker for `pcase' -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-
-;;; Commentary:
-
-;; Type checking for `pcase', including the pcase pattern protocol and a
-;; handler for every supported pattern.  Lives under definitions/ because,
-;; unlike the static `@function'/`@alias' declarations in its siblings, it
-;; carries runtime logic: the definitions directory is both processed for
-;; declarations AND evaluated, so the checker and pattern handlers defined
-;; here are installed when the directory is loaded.
-
-
-;;; Code:
-
-(require 'et-check)
-
-
 ;;;; Options
 
 (defcustom et-pcase-warn-never-match t
@@ -369,7 +346,13 @@ against the shared element type; the scrutinee is narrowed only to
 
 ;;;;; pcase checker
 
-(et-define-checker pcase
+(defun et--pcase-check-form (exhaustive)
+  "Check the current `pcase'-form expression, returning its result type.
+
+The form is assumed to have the shape (HEAD SCRUTINEE CASE...), as both
+`pcase' and `pcase-exhaustive' do.  When EXHAUSTIVE is non-nil a value
+falling through every pattern is an error rather than a `nil' result, so
+the fallthrough `Nil' arm is omitted from the result type."
   (let* ((scrut (et-checker-sub 1))
          (cases (cddr et--checker-expr))
          ;; The scrutinee type, narrowed by each failed pattern in turn.
@@ -393,10 +376,20 @@ against the shared element type; the scrutinee is narrowed only to
                    ((and et-pcase-warn-never-match (not (et-never-p cur)))
                     (et-warn (list ci 0) "Pattern can never match a value of %s" cur)))
                   (setq cur (et-pcase-result-residual-type res))))
-    ;; If some value can fall through every pattern, pcase returns nil.
-    (unless (et-never-p cur)
+    ;; If some value can fall through every pattern, `pcase' returns nil --
+    ;; but `pcase-exhaustive' signals an error, so it contributes nothing.
+    (when (and (not exhaustive) (not (et-never-p cur)))
       (push (et Nil) body-types))
     (et-simplify-type (apply #'et--or (or (nreverse body-types) (list (et Nil)))))))
+
+(et-define-checker pcase
+  (et--pcase-check-form nil))
+
+;; `pcase-exhaustive' matches like `pcase' but signals an error instead of
+;; returning nil when no pattern matches; it therefore never contributes the
+;; fallthrough `Nil' arm.
+(et-define-checker pcase-exhaustive
+  (et--pcase-check-form t))
 
 
 ;;;;; Tests
@@ -483,5 +476,76 @@ assertions, each emitting an error diagnostic on failure. SPEC is anything
  (et--test-pcase '(pcase (cons 1 "2") ((app car n) n)) :resolves 'Integer))
 
 
-(provide 'et-pcase)
-;;; pcase.el ends here
+;;;; pcase-let / pcase-let*
+
+;; These bind the variables of a pcase pattern from a value, assuming the
+;; pattern matches.  They reuse the pattern protocol above to derive the
+;; bound vars and the scrutinee narrowing, then check the body with those
+;; in scope -- like the `let'/`let*' checkers but with destructuring.
+
+(defun et--pcase-let-check (sequential)
+  "Check the current `pcase-let'/`pcase-let*' form, returning the body type.
+
+The form has the shape (HEAD BINDINGS BODY...), where each binding is
+(PATTERN &optional VALUE).  When SEQUENTIAL is non-nil each VALUE is
+checked with the variables bound by earlier bindings in scope (as in
+`pcase-let*'); otherwise every VALUE is checked in the outer scope (as in
+`pcase-let')."
+  (let ((bindings (nth 1 et--checker-expr))
+        (vars nil)
+        (binds nil))
+    (cl-loop for binding in bindings
+             for bi upfrom 0
+             do (let* ((pat (car binding))
+                       ;; A binding may omit its value form, binding to nil.
+                       (val-type (cond ((null (cdr binding)) (et Nil))
+                                       (sequential
+                                        (et-with-vars vars (et-checker-sub 1 bi 1)))
+                                       (t (et-checker-sub 1 bi 1))))
+                       (res (et--pcase-check pat val-type (and sequential vars)
+                                             (list 1 bi 0))))
+                  (setq vars (append vars (et-pcase-result-vars res)))
+                  (setq binds (append binds (et--type-binds
+                                             (et-pcase-result-matched-type res))))))
+    (et-with-vars vars
+      (et-with-narrow-binds binds
+        (et-checker-tail 2)))))
+
+(et-define-checker pcase-let*
+  (et--pcase-let-check t))
+
+(et-define-checker pcase-let
+  (et--pcase-let-check nil))
+
+
+;;;; pcase-dolist
+
+;; Like `dolist', but destructures each element with a pcase pattern.
+;; Always returns nil; the body is checked for side-effect diagnostics.
+(et-define-checker pcase-dolist
+  (let* ((spec (nth 1 et--checker-expr))
+         (pat (car spec))
+         (elem-type (or (et-checker-infer (et-checker-sub 1 1) [T] ListR<T> T)
+                        (et-any)))
+         (res (et--pcase-check pat elem-type nil (list 1 0))))
+    (et-with-vars (et-pcase-result-vars res)
+      (et-with-narrow-binds (et--type-binds (et-pcase-result-matched-type res))
+        (et-checker-tail 2)))
+    (et Nil)))
+
+
+;;;; Macro tests
+
+(et-test
+ ;; --- pcase-let* destructures and binds car/cdr ---
+ (et--test-pcase '(pcase-let* ((`(,x . ,y) (cons 1 "s"))) x) :resolves 'Integer)
+ (et--test-pcase '(pcase-let* ((`(,x . ,y) (cons 1 "s"))) y) :resolves 'String)
+ ;; --- later bindings see earlier ones (let*-style) ---
+ (et--test-pcase '(pcase-let* ((`(,x . ,_) (cons 1 "s")) (z x)) z) :resolves 'Integer)
+ ;; --- pcase-let binds the same way ---
+ (et--test-pcase '(pcase-let ((`(,a . ,b) (cons 1 "s"))) b) :resolves 'String)
+ ;; --- pcase-exhaustive narrows like pcase but drops the nil fallthrough ---
+ (et--test-pcase '(pcase-exhaustive (cons 1 2) (`(,x . ,y) x))
+                 :resolves 'Integer :not-resolves 'Nil)
+ ;; --- pcase-dolist binds the element pattern and returns nil ---
+ (et--test-pcase '(pcase-dolist (`(,k . ,v) (list (cons 1 "s"))) k) :resolves 'Nil))
