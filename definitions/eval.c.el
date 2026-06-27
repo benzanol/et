@@ -303,33 +303,65 @@
 
 ;; Each clause is (CONDITION BODY...).  The result is the union of every
 ;; clause's result (the last BODY form, or CONDITION itself when there is
-;; no body), plus nil for the case where no clause succeeds.  Inside a
-;; clause's body, CONDITION is narrowed to its non-nil part, like `if'.
+;; no body), plus nil for the case where no clause succeeds.
+;;
+;; Narrowing is done in two directions:
+;;
+;;  - Positive narrowing: inside a clause's body, CONDITION is narrowed to
+;;    its non-nil part (same as `if').
+;;
+;;  - Negative narrowing: each clause's condition and body are checked under
+;;    the accumulated knowledge that all *previous* conditions evaluated to
+;;    nil.  For example, if clause 1 is (numberp n), then clause 2's
+;;    condition and body both know n is not a number.
+;;
+;; acc-neg-binds accumulates the nil-binds from every preceding condition.
+;; Because we check each condition *under* acc-neg-binds, the resulting
+;; cond-type already reflects that narrowing via the typeof mechanism, so
+;; non-nil-binds extracted from it is already precise.  We still prepend
+;; acc-neg-binds for the body so that variables not mentioned by the
+;; condition also see the accumulated narrowing.
 (et-define-pcase-checker cond clauses
-  (cl-loop for clause in clauses
-           for idx upfrom 1
-           for cond-type = (et-checker-sub idx 0)
-           for branch-type =
-           (if (cdr clause)
-               ;; Has body: narrow by non-nil condition, return last form
-               (et-with-narrow-binds (et--type-binds (et--non-nil cond-type))
-                 (et-checker-tail idx 1))
-             ;; No body: returns the non-nil part of the condition
-             (et--non-nil cond-type))
-           collect branch-type into branch-types
-           finally return (et-simplify-type
-                           (apply #'et--or (et Nil) branch-types))))
+  (cl-loop
+   with acc-neg-binds = nil
+   for clause in clauses
+   for idx upfrom 1
+   ;; Check condition knowing all previous conditions were nil
+   for cond-type = (et-with-narrow-binds acc-neg-binds
+                     (et-checker-sub idx 0))
+   for non-nil-binds = (et--type-binds (et--non-nil cond-type))
+   for branch-type =
+   (if (cdr clause)
+       ;; Has body: narrow by non-nil condition + accumulated negation
+       (et-with-narrow-binds (append non-nil-binds acc-neg-binds)
+         (et-checker-tail idx 1))
+     ;; No body: returns the non-nil part of the condition
+     (et--non-nil cond-type))
+   collect branch-type into branch-types
+   ;; Accumulate nil-binds from this condition for subsequent clauses
+   do (setq acc-neg-binds
+            (et--intersect-binds nil
+                                 acc-neg-binds
+                                 (et--type-binds (et--supersect cond-type (et Nil)))))
+   finally return (et-simplify-type
+                   (apply #'et--or (et Nil) branch-types))))
 
 (et-test
  (et-assert-resolve Integer|String|Nil (cond (1 1) (2 "x")))
  (et-assert-resolve String|Nil (cond (1 "x")))
  (et-assert-resolve Nil (cond))
- ;; Narrowing inside a clause body, like `if': `a' is narrowed to String,
- ;; so Number cannot appear in the result.
+ ;; Positive narrowing inside a clause body, like `if': `a' is narrowed to
+ ;; String, so Number cannot appear in the result.
  (et-subtype? (et-typecheck
                (let* ((a String|Number 4))
                  (cond ((stringp a) a) (t "hello!"))))
-              (et String|Nil)))
+              (et String|Nil))
+ ;; Negative narrowing: in the second clause, `a' is narrowed to non-String
+ ;; (Number), so the result cannot include String from the second branch.
+ (et-subtype? (et-typecheck
+               (let* ((a String|Number 4))
+                 (cond ((stringp a) a) (t a))))
+              (et Number|Nil)))
 
 
 ;;;; while
