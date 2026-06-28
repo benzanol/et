@@ -182,7 +182,12 @@
  (@function atom (object)
             (@generics [T]) (object T)
             (@return (or (and True (bindsof (subtract T Cons)))
-                         (and Nil (bindsof (and T Cons)))))))
+                         (and Nil (bindsof (and T Cons))))))
+
+ (@function functionp (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Function<Never~Any>)))
+                         (and Nil (bindsof (subtract T Function<Never~Any>)))))))
 
 ;; These predicates have no exact datatype to narrow to (no Float,
 ;; natural-number, keyword, sequence, or array datatype exists), so they

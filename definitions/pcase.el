@@ -1,3 +1,4 @@
+;;; Pcase
 ;;;; Options
 
 (defcustom et-pcase-warn-never-match t

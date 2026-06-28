@@ -406,7 +406,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 ;;;; Datatypes
 
 (et-declare
- (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO @IGNORE))
+ (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO))
  (@alias EtDatatypeProps
          (PList :args (or List<EtDatatypeRole> (Function (Args ListR<Any>) List<EtDatatypeRole>))
                 :overlap True|List<Symbol>
@@ -548,7 +548,7 @@ an argument which is a literal Lisp value. `CO'/`CONTRA'/`ISO' indicate
 that the argument is a type argument, and whether the type argument is
 covariant, contravariant, or isovariant."
   (declare (et (dt-name Var) (dt-args ListR<Any>)
-               (@return List<@CONST|@CO|@CONTRA|@ISO>)))
+               (@return List<EtDatatypeRole>)))
 
   (pcase (plist-get (or (alist-get dt-name et--datatypes)
                         (error "Invalid datatype: %s %s" dt-name dt-args))
@@ -559,15 +559,20 @@ covariant, contravariant, or isovariant."
 (defun et--datatype-might-overlap-nontrivial? (a-dt b-dt)
   "Return whether datatypes A and B might overlap.
 
-This function is designed for `nontrivial' cases, in that it assumes
-that A and B are not subtypes of each other."
+This function is designed for nontrivial cases in that it assumes that A
+and B are not subtypes of each other."
   (let* ((a (et-datatype-name a-dt))
          (b (et-datatype-name b-dt)))
 
     (when (< (cl-position b et--datatypes :key #'car) (cl-position a et--datatypes :key #'car))
       (cl-rotatef a b))
+
     (pcase (plist-get (alist-get a et--datatypes) :overlap)
       ('t t)
+      ;; A cons can only be a function if its car is `lambda'
+      ((guard (and (memq a '(ConsFull ConsFresh)) (memq b '(Function DynFunction))))
+       (et-subtype? (et @lambda) (car (et-datatype-args a-dt))))
+
       (overlap (not (not (memq b overlap)))))))
 
 (defun et--datatype-intersect-args-nontrivial (name args1 args2 intersect union)

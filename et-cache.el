@@ -959,6 +959,7 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
 ;;;; Process directory
 
 (defun et-process-directory (dir &rest args)
+  (interactive (list (read-directory-name "DProcess Directory: ") :eval t))
   (et-result-boundary
    (dolist (file (directory-files dir t))
      (when (file-regular-p file)
