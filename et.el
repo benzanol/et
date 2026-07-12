@@ -425,6 +425,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
   (et!! AList<EtDatatypeName~EtDatatypeProps>
     '((Any :args nil :overlap t :predicate (lambda (v) t))
       ;; Literal<VALUE> is a type matching only the value VALUE
+      ;; A literal CANNOT be ephemeral (like a buffer), it must be printable and readable
       (Literal :args (CONST) :overlap nil :predicate (lambda (v me) (equal v me)))
       (NonNil :args nil :overlap t :predicate (lambda (v) v))
       (Symbol :args nil :overlap (Function DynFunction) :predicate symbolp)
@@ -489,6 +490,11 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
                             (error "Struct %s takes %s arguments" name arg-count))
                         (error "Not a struct: %s" name)))
               :overlap nil :intersect nil)
+
+      ;; Ephemeral, non-readable emacs datatypes (buffer, window, etc)
+      (Emacs :args (CONST)
+             :overlap nil
+             :predicate nil) ; a literal will never be an emacs datatype
 
       ;; Scoped datatypes occur when you have a function with generics.
       ;; Then, inside of that function you can use the generics provided
@@ -3152,7 +3158,8 @@ lazily because `List' is not yet defined when this file loads.")
 
 
 ;;; ============================================================
-;;; Define common aliases
+;;; Define aliases
+;;;; Data aliases
 
 (et-define-custom-alias Cons (&optional a b)
   (if a (et-ql ConsFull ,a ,a ,(or b a) ,(or b a))
@@ -3212,6 +3219,22 @@ lazily because `List' is not yet defined when this file loads.")
 (et-define-custom-alias ArgsWithTail (&rest args) (et--expand-tailed-tuple-spec 'ConsR args))
 (et-define-custom-alias TupleWithTail (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
 (et-define-custom-alias TupleStar (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
+
+
+;;;; Emacs aliases
+
+(defvar et-aliased-emacs-types
+  '(buffer marker window frame window-configuration overlay
+           terminal process
+           thread mutex condition-variable
+           font-spec font-entity font-object
+           xwidget xwidget-view
+           char-table bool-vector obarray
+           finalizer))
+
+(dolist (sym et-aliased-emacs-types)
+  (let* ((alias (string-replace "-" "" (capitalize (format "%s" sym)))))
+    (et--define-alias (intern alias) nil `(Emacs ,sym))))
 
 
 ;;; ============================================================
