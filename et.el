@@ -567,8 +567,8 @@ covariant, contravariant, or isovariant."
 (defun et--datatype-might-overlap-nontrivial? (a-dt b-dt)
   "Return whether datatypes A and B might overlap.
 
-This function is designed for nontrivial cases in that it assumes that A
-and B are not subtypes of each other."
+This function assumes that neither A nor B is a subtype of the other.
+This is what is meant by 'nontrivial'."
   (let* ((a (et-datatype-name a-dt))
          (b (et-datatype-name b-dt)))
 
@@ -580,6 +580,9 @@ and B are not subtypes of each other."
       ;; A cons can only be a function if its car is `lambda'
       ((guard (and (memq a '(ConsFull ConsFresh)) (memq b '(Function DynFunction))))
        (et-subtype? (et @lambda) (car (et-datatype-args a-dt))))
+      ;; Is an emacs internal datatype a function
+      ((guard (and (memq a '(Function DynFunction)) (eq b 'Emacs)))
+       (memq (car (et-datatype-args b-dt)) '(closure interpreted-function)))
 
       (overlap (not (not (memq b overlap)))))))
 
@@ -3230,7 +3233,8 @@ lazily because `List' is not yet defined when this file loads.")
            font-spec font-entity font-object
            xwidget xwidget-view
            char-table bool-vector obarray
-           finalizer))
+           finalizer
+           closure interpreted-function))
 
 (dolist (sym et-aliased-emacs-types)
   (let* ((alias (string-replace "-" "" (capitalize (format "%s" sym)))))
