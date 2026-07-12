@@ -650,6 +650,10 @@ language. See `et--cons-is-plist'."
                 (et--failed-match-result))))
 
     (pcase (list sub-name super-name)
+      ((guard (and (eq sub-name super-name)
+                   (equal sub-args super-args)))
+       (valid-if t))
+
       (`(,_ Any) (valid-if t))
       (`(Literal ,_)
        (let* ((pred (plist-get (alist-get super-name et--datatypes) :predicate)))
@@ -3250,6 +3254,9 @@ lazily because `List' is not yet defined when this file loads.")
     (et--define-alias (intern alias) nil `(Emacs ,sym))))
 
 (et-defalias Closure (or InterpretedFunction ByteCodeFunction))
+(et-defalias Font (or FontSpec FontEntity FontObject))
+(et-defalias IntOrMarker (or Integer Marker))
+(et-defalias NumOrMarker (or Number Marker))
 
 
 ;;; ============================================================

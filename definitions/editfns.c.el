@@ -1,14 +1,9 @@
 ;; Type definitions for builtins defined in Emacs' src/editfns.c.
-
-;;; Positions
-
-;; Anywhere editfns takes a buffer position, it accepts either an integer
-;; or a marker, and converts the latter to its integer position. Positions
-;; are only ever *returned* as integers (except by the explicitly
-;; marker-valued functions below).
-
-(et-declare
- (@alias Position Integer|Marker))
+;;
+;; Anywhere editfns takes a buffer position, it accepts an `IntOrMarker':
+;; either an integer, or a marker which it converts to its integer
+;; position. Positions are only ever *returned* as integers, except by the
+;; explicitly marker-valued functions (`point-marker' and friends).
 
 ;;; Formatting and messages
 
@@ -55,7 +50,7 @@
  ;; `goto-char' hands back the position it was given, unchanged -- so a
  ;; marker in, a marker out.
  (@function goto-char (position)
-            (@generics [(<= P Position)]) (position P) (@return P))
+            (@generics [(<= P IntOrMarker)]) (position P) (@return P))
  (@function point-min () (@return Integer))
  (@function point-max () (@return Integer))
  (@function region-beginning () (@return Integer))
@@ -66,7 +61,7 @@
  (@function buffer-size (&optional buffer) (buffer Buffer) (@return Integer))
 
  ;; Nil when the position is outside the accessible portion.
- (@function position-bytes (position) (position Position) (@return Integer|Nil))
+ (@function position-bytes (position) (position IntOrMarker) (@return Integer|Nil))
  (@function byte-to-position (bytepos) (bytepos Integer) (@return Integer|Nil))
 
  ;; N is a line count, not a position.
@@ -106,8 +101,8 @@
  (@function following-char () (@return Integer))
  (@function preceding-char () (@return Integer))
  ;; `char-after'/`char-before' return nil outside the accessible portion.
- (@function char-after (&optional pos) (pos Position) (@return Integer|Nil))
- (@function char-before (&optional pos) (pos Position) (@return Integer|Nil))
+ (@function char-after (&optional pos) (pos IntOrMarker) (@return Integer|Nil))
+ (@function char-before (&optional pos) (pos IntOrMarker) (@return Integer|Nil))
 
  (@function bobp () (@return Boolean))
  (@function eobp () (@return Boolean))
@@ -124,30 +119,30 @@
 
 (et-declare
  (@function buffer-substring (start end)
-            (start Position) (end Position) (@return String))
+            (start IntOrMarker) (end IntOrMarker) (@return String))
  (@function buffer-substring-no-properties (start end)
-            (start Position) (end Position) (@return String))
+            (start IntOrMarker) (end IntOrMarker) (@return String))
  (@function buffer-string () (@return String))
  (@function delete-and-extract-region (start end)
-            (start Position) (end Position) (@return String))
+            (start IntOrMarker) (end IntOrMarker) (@return String))
  (@function delete-region (start end)
-            (start Position) (end Position) (@return Nil))
+            (start IntOrMarker) (end IntOrMarker) (@return Nil))
  (@function subst-char-in-region (start end fromchar tochar &optional noundo)
-            (start Position) (end Position) (fromchar Integer) (tochar Integer)
+            (start IntOrMarker) (end IntOrMarker) (fromchar Integer) (tochar Integer)
             (noundo Any) (@return Nil))
  (@function transpose-regions (startr1 endr1 startr2 endr2 &optional leave-markers)
-            (startr1 Position) (endr1 Position) (startr2 Position) (endr2 Position)
+            (startr1 IntOrMarker) (endr1 IntOrMarker) (startr2 IntOrMarker) (endr2 IntOrMarker)
             (leave-markers Any) (@return Nil))
 
  ;; BUFFER may be a buffer or the name of one; START and END default to
  ;; the accessible portion of it.
  (@function insert-buffer-substring (buffer &optional start end)
-            (buffer Buffer|String) (start Position) (end Position) (@return Nil))
+            (buffer Buffer|String) (start IntOrMarker) (end IntOrMarker) (@return Nil))
  ;; Every argument may be nil: a nil buffer means the current buffer, and
  ;; a nil position means that buffer's `point-min'/`point-max'.
  (@function compare-buffer-substrings (buffer1 start1 end1 buffer2 start2 end2)
-            (buffer1 Buffer|Nil) (start1 Position|Nil) (end1 Position|Nil)
-            (buffer2 Buffer|Nil) (start2 Position|Nil) (end2 Position|Nil)
+            (buffer1 Buffer|Nil) (start1 IntOrMarker|Nil) (end1 IntOrMarker|Nil)
+            (buffer2 Buffer|Nil) (start2 IntOrMarker|Nil) (end2 IntOrMarker|Nil)
             (@return Integer)))
 
 (et-test
@@ -188,19 +183,19 @@
 (et-declare
  (@function widen () (@return Nil))
  (@function narrow-to-region (start end)
-            (start Position) (end Position) (@return Nil)))
+            (start IntOrMarker) (end IntOrMarker) (@return Nil)))
 
 
 ;;; Fields
 
 (et-declare
- (@function delete-field (&optional pos) (pos Position) (@return Nil))
- (@function field-string (&optional pos) (pos Position) (@return String))
- (@function field-string-no-properties (&optional pos) (pos Position) (@return String))
+ (@function delete-field (&optional pos) (pos IntOrMarker) (@return Nil))
+ (@function field-string (&optional pos) (pos IntOrMarker) (@return String))
+ (@function field-string-no-properties (&optional pos) (pos IntOrMarker) (@return String))
  (@function field-beginning (&optional pos escape-from-edge limit)
-            (pos Position) (escape-from-edge Any) (limit Position) (@return Integer))
+            (pos IntOrMarker) (escape-from-edge Any) (limit IntOrMarker) (@return Integer))
  (@function field-end (&optional pos escape-from-edge limit)
-            (pos Position) (escape-from-edge Any) (limit Position) (@return Integer)))
+            (pos IntOrMarker) (escape-from-edge Any) (limit IntOrMarker) (@return Integer)))
 
 (et-test
  (et-assert-resolve String (field-string))

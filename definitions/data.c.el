@@ -15,54 +15,68 @@
 
 ;;; Arithmetic
 
-;; The argument list is captured whole as the generic `Nums' (constrained
-;; to a list of numbers), and the return type branches on what `Nums'
-;; turns out to be: an empty call yields the identity element, an
-;; all-integer call yields Integer, and anything else yields Number.
+;; Everywhere a number is accepted, a marker is too: it is converted to
+;; its integer position.  So the arguments are `NumOrMarker's, and a
+;; marker counts as an integer when deciding the return type.
+;;
+;; The argument list is captured whole as the generic `Nums', and the
+;; return type branches on what `Nums' turns out to be: an empty call
+;; yields the identity element, an all-integer (or marker) call yields
+;; Integer, and anything else yields Number.
 
 (et-declare
  (@function + (&rest numbers)
             (@generics [Nums])
-            (numbers Nums&ListR<Number>)
-            (@return (extends? Nums Nil 0 (extends? Nums ListR<Integer> Integer Number))))
+            (numbers Nums&ListR<NumOrMarker>)
+            (@return (extends? Nums Nil 0 (extends? Nums ListR<IntOrMarker> Integer Number))))
  (@function - (&rest numbers)
             (@generics [Nums])
-            (numbers Nums&ListR<Number>)
-            (@return (extends? Nums Nil 0 (extends? Nums ListR<Integer> Integer Number))))
+            (numbers Nums&ListR<NumOrMarker>)
+            (@return (extends? Nums Nil 0 (extends? Nums ListR<IntOrMarker> Integer Number))))
  (@function * (&rest numbers)
             (@generics [Nums])
-            (numbers Nums&ListR<Number>)
-            (@return (extends? Nums Nil 1 (extends? Nums ListR<Integer> Integer Number))))
+            (numbers Nums&ListR<NumOrMarker>)
+            (@return (extends? Nums Nil 1 (extends? Nums ListR<IntOrMarker> Integer Number))))
  (@function / (&rest numbers)
             (@generics [Nums])
-            (numbers Nums&NonNilListR<Number>)
-            (@return (extends? Nums ListR<Integer> Integer Number)))
+            (numbers Nums&NonNilListR<NumOrMarker>)
+            (@return (extends? Nums ListR<IntOrMarker> Integer Number)))
 
  (@function 1+ (number)
             (@generics [Num])
-            (number Num&Number)
-            (@return (extends? Num Integer Integer Number)))
+            (number Num&NumOrMarker)
+            (@return (extends? Num IntOrMarker Integer Number)))
  (@function 1- (number)
             (@generics [Num])
-            (number Num&Number)
-            (@return (extends? Num Integer Integer Number)))
+            (number Num&NumOrMarker)
+            (@return (extends? Num IntOrMarker Integer Number)))
 
  (@function max (&rest numbers)
             (@generics [Nums])
-            (numbers Nums&NonNilListR<Number>)
-            (@return (extends? Nums ListR<Integer> Integer Number)))
+            (numbers Nums&NonNilListR<NumOrMarker>)
+            (@return (extends? Nums ListR<IntOrMarker> Integer Number)))
  (@function min (&rest numbers)
             (@generics [Nums])
-            (numbers Nums&NonNilListR<Number>)
-            (@return (extends? Nums ListR<Integer> Integer Number)))
+            (numbers Nums&NonNilListR<NumOrMarker>)
+            (@return (extends? Nums ListR<IntOrMarker> Integer Number)))
 
  (@function mod (x y)
             (@generics [X Y])
-            (x X&Number) (y Y&Number)
-            (@return (extends? X Integer (extends? Y Integer Integer Number) Number)))
+            (x X&NumOrMarker) (y Y&NumOrMarker)
+            (@return (extends? X IntOrMarker (extends? Y IntOrMarker Integer Number) Number)))
 
  ;; `%' is integer-only and always yields an Integer.
- (@function % (x y) (x Integer) (y Integer) (@return Integer)))
+ (@function % (x y) (x IntOrMarker) (y IntOrMarker) (@return Integer)))
+
+(et-test
+ ;; Markers count as integers
+ (et-assert-call Integer + Integer Marker)
+ (et-assert-call Number + Marker 1.5)
+ (et-assert-call Integer 1+ Marker)
+ (et-assert-call Integer max Marker Integer)
+ (et-assert-call Integer mod Marker Integer)
+ (et-assert-call Integer % Marker Marker)
+ (et-assert-call-errors + Marker String))
 
 (et-test
  ;; All-integer arguments -> Integer
@@ -103,9 +117,9 @@
 ;; others are integer-only.
 
 (et-declare
- (@function logand (&rest ints) (ints ListR<Integer|Marker>) (@return Integer))
- (@function logior (&rest ints) (ints ListR<Integer|Marker>) (@return Integer))
- (@function logxor (&rest ints) (ints ListR<Integer|Marker>) (@return Integer))
+ (@function logand (&rest ints) (ints ListR<IntOrMarker>) (@return Integer))
+ (@function logior (&rest ints) (ints ListR<IntOrMarker>) (@return Integer))
+ (@function logxor (&rest ints) (ints ListR<IntOrMarker>) (@return Integer))
  (@function lognot (number) (number Integer) (@return Integer))
  (@function ash (value count) (value Integer) (count Integer) (@return Integer))
  (@function logcount (value) (value Integer) (@return Integer)))
@@ -156,21 +170,25 @@
             (a A) (b B)
             (@return (or Nil (and True (bindsof (and A B))))))
 
- (@function = (a b)
-            (@generics [(<= A Number) (<= B Number)])
-            (a A) (b B)
-            (@return (or Nil (and True (bindsof (and A B))))))
+ ;; `=' compares by numeric value, not by identity: a marker is `=' to its
+ ;; position without being that integer.  So a true result does not tell
+ ;; us the two arguments have the same type, and `=' does not narrow.
+ (@function = (a b) (a NumOrMarker) (b NumOrMarker) (@return Boolean))
 
- (@function < (a b) (a Number) (b Number) (@return Boolean))
- (@function <= (a b) (a Number) (b Number) (@return Boolean))
- (@function > (a b) (a Number) (b Number) (@return Boolean))
- (@function >= (a b) (a Number) (b Number) (@return Boolean))
- (@function /= (num1 num2) (num1 Number) (num2 Number) (@return Boolean)))
+ (@function < (a b) (a NumOrMarker) (b NumOrMarker) (@return Boolean))
+ (@function <= (a b) (a NumOrMarker) (b NumOrMarker) (@return Boolean))
+ (@function > (a b) (a NumOrMarker) (b NumOrMarker) (@return Boolean))
+ (@function >= (a b) (a NumOrMarker) (b NumOrMarker) (@return Boolean))
+ (@function /= (num1 num2) (num1 NumOrMarker) (num2 NumOrMarker) (@return Boolean)))
 
 (et-test
  (et-assert-resolve Boolean (< 1 2))
  (et-assert-resolve Boolean (= 1 2))
- (et-assert-resolve-errors (< 1 "2")))
+ (et-assert-resolve-errors (< 1 "2"))
+ ;; Markers compare against numbers
+ (et-assert-call Boolean = Marker Integer)
+ (et-assert-call Boolean = Integer Marker)
+ (et-assert-call Boolean < Marker Number))
 
 
 ;;; Predicates
@@ -262,12 +280,12 @@
  ;; narrow to a union.
  (@function integer-or-marker-p (object)
             (@generics [T]) (object T)
-            (@return (or (and True (bindsof (and T Integer|Marker)))
-                         (and Nil (bindsof (subtract T Integer|Marker))))))
+            (@return (or (and True (bindsof (and T IntOrMarker)))
+                         (and Nil (bindsof (subtract T IntOrMarker))))))
  (@function number-or-marker-p (object)
             (@generics [T]) (object T)
-            (@return (or (and True (bindsof (and T Number|Marker)))
-                         (and Nil (bindsof (subtract T Number|Marker)))))))
+            (@return (or (and True (bindsof (and T NumOrMarker)))
+                         (and Nil (bindsof (subtract T NumOrMarker)))))))
 
 (et-test
  (et-assert-call True&{$a::Buffer} bufferp Buffer&{::$a})

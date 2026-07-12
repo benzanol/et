@@ -319,12 +319,12 @@
 
 (et-declare
  (@function md5 (object &optional start end coding-system noerror)
-            (object Buffer|String) (start Position) (end Position)
+            (object Buffer|String) (start IntOrMarker) (end IntOrMarker)
             (coding-system Symbol) (noerror Any)
             (@return String))
  (@function secure-hash (algorithm object &optional start end binary)
             (algorithm Symbol) (object Buffer|String)
-            (start Position) (end Position) (binary Any)
+            (start IntOrMarker) (end IntOrMarker) (binary Any)
             (@return String))
  ;; BUFFER-OR-NAME defaults to the current buffer.
  (@function buffer-hash (&optional buffer-or-name)
