@@ -164,7 +164,7 @@ determine the output type."
              ;; Display the error message
              finally do
              (if (and arg-type param-repr)
-                 (et-err arg-pos "Parameter %s has type %s, found %s" param-name
+                 (et-err arg-pos "[%s] Expected %s, found %s" param-name
                          (et-repr-to-string param-repr) arg-type)
                (et-err (or arg-pos 0) ; its possible to have an arg label without a param label
                        "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))
@@ -461,9 +461,8 @@ PATH is the path to the subexpression."
   (put func 'et-function-declarations decls)
 
   ;; Assign `et-function-type' if applicable
-  (when-let* ((return-repr (et--func-declarations-return-repr decls))
-              (input (et--func-decls-to-input decls)))
-    (put func 'et-function-type (et-dt 'DynFunction input return-repr)))
+  (when-let* ((type (et--func-decls-to-type decls)))
+    (put func 'et-function-type type))
 
   ;; Assign the checker if applicable
   (when-let* ((checker (plist-get (et--func-declarations-props decls) :checker)))
@@ -471,7 +470,14 @@ PATH is the path to the subexpression."
 
 (defun et--func-decls-to-input (decls)
   (pcase-let* (((cl-struct et--func-declarations param-reprs generics constraints) decls))
-    (apply #'et--generate-func-input t generics constraints param-reprs)))
+    (apply #'et--generate-func-input nil generics constraints param-reprs)))
+
+(defun et--func-decls-to-type (decls)
+  (when-let* ((input (et--func-decls-to-input decls))
+              (return-repr (et--func-declarations-return-repr decls)))
+    (if (et-matcher-p input)
+        (et-dt 'DynFunction input return-repr)
+      (et-dt 'Function input (et-repr-to-type return-repr)))))
 
 (defun et--parse-function-declarations (param-groups declares)
   (let* ((param-reprs
@@ -577,7 +583,7 @@ PATH is the path to the subexpression."
       (et--with-scoped-datatypes scoped
         (make-et-func-sig
          :declarations decls
-         :func-type (et-dt 'DynFunction input return-repr)
+         :func-type (et--func-decls-to-type decls) ; will be non-nil if return-repr is non-nil
          :props (et--func-declarations-props decls)
          ;; Things necessary for typechecking the body
          :source (nthcdr source-pos body)

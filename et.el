@@ -329,7 +329,7 @@ ever encountered again, this stored value will be returned.
 When execution returns to the original stack frame, the frame will have
 access to the default value that was created, as the cdar of the stack
 variable."
-  (declare (indent 3))
+  (declare (indent 3) (et (@expand)))
   `(let ((elem ,elem))
      (if-let* ((entry (assoc elem ,var)))
          (if (eq (cdr entry) et--stop-recursion-unset-marker)
@@ -353,7 +353,10 @@ variable."
   (name nil :et Var)
   (args nil :et List<*et-type|Any>))
 
-(cl-defstruct et-alias "A type alias factor of an `et-type'." name args)
+(cl-defstruct et-alias
+  "A type alias factor of an `et-type'."
+  (name nil :et Var)
+  (args nil :et List<*et-type>))
 
 (cl-defstruct et-type-case
   "Struct representing a case of an `et-type'.
