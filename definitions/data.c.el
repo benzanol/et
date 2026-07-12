@@ -315,3 +315,20 @@
  (et-assert-resolve String (number-to-string 5))
  (et-assert-resolve Number (string-to-number "5"))
  (et-assert-resolve NonNilSymbol (type-of 5)))
+
+
+;;; Function cells
+
+;; `fset' returns the definition it was given, unchanged. It does no
+;; function-type handling: the definition is not constrained, and it is
+;; not recorded as the `et-function-type' of SYMBOL.
+
+(et-declare
+ (@function fset (symbol definition)
+            (@generics [T])
+            (symbol Symbol) (definition T)
+            (@return T)))
+
+(et-test
+ (et-assert-resolve Integer (fset 'foo 1))
+ (et-assert-resolve-errors (fset "foo" 1)))

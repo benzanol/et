@@ -29,9 +29,9 @@
 
 ;;; Code:
 
-(defmacro et: (expr _type-spec) expr)
-(defmacro et! (expr _type-spec) expr)
-(defmacro et!! (expr _type-spec) expr)
+(defmacro et: (_type-spec expr) (declare (indent 1)) expr)
+(defmacro et! (_type-spec expr) (declare (indent 1)) expr)
+(defmacro et!! (_type-spec expr) (declare (indent 1)) expr)
 
 (defmacro et-declare (&rest _) nil)
 (defmacro et-test (&rest _) nil)

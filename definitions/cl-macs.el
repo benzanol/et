@@ -602,3 +602,129 @@ implicit accumulator combined with any body `return' values."
  ;; ---- for VAR downfrom EXPR to EXPR by EXPR ----
  (et-assert-resolve ListFresh<Integer>
    (cl-loop for i downfrom 10 to 0 by 2 collect i)))
+
+
+;;; cl-flet
+;;;; Binding types
+
+;; A local function is checked exactly like a `defun': if the binding
+;; declares an `@return', its body is checked against the declared
+;; signature and the declared type is used. Otherwise the parameters
+;; default to Any and the return type is the type of the body.
+;;
+;; The resulting type is installed as the `et-function-type' property of
+;; the function's symbol, which is what makes calls to it resolve. The
+;; property is global, so the checker is responsible for restoring the
+;; original value once the flet's scope ends.
+
+(defun et--flet-binding-type (binding rel)
+  "Return the function type of the `cl-flet' BINDING at path REL.
+
+BINDING is either (NAME EXPR), whose type is the type of EXPR, or
+\(NAME ARGLIST . BODY), whose body is checked here."
+  (pcase binding
+    (`(,_name ,_expr) (et-checker-sub rel 1))
+    (`(,_name ,(pred listp) . ,_body)
+     (if-let* ((sig (et-at rel (et-at-offset 1 (et--parse-function-signature (cdr binding))))))
+         (et--flet-declared-type sig rel)
+       (et--flet-inferred-type (cdr binding) rel)))
+    (_ (et-fatal rel "Expected (NAME ARGLIST BODY...) or (NAME EXPR)"))))
+
+(defun et--flet-declared-type (sig rel)
+  "Check the body of the flet binding at REL against its signature SIG.
+Returns the declared function type."
+  (et--with-scoped-datatypes (et-func-sig-scoped sig)
+    (et-with-vars (et-func-sig-vars sig)
+      (let* ((actual-ret (et-checker-tail rel (1+ (et-func-sig-source-pos sig))))
+             (expected-ret (et-func-sig-expected-return sig)))
+        (or (et-subtype? actual-ret expected-ret)
+            (et-err rel "Expected %s, found %s" expected-ret actual-ret)))))
+  (et-func-sig-func-type sig))
+
+(defun et--flet-inferred-type (args-and-body rel)
+  "Infer the function type of the flet binding at REL from its body.
+
+ARGS-AND-BODY is (ARGLIST . BODY), the cdr of the binding. It declares no
+`@return', so parameters keep their declared reprs (Any when undeclared)
+and the return type is the type of the body."
+  (pcase-let* ((`(,decls . ,source-pos)
+                (or (et-at rel (et-at-offset 1 (et--find-function-declarations args-and-body)))
+                    (cons (et--parse-function-declarations
+                           (et--parse-arglist-params (car args-and-body)) nil)
+                          1)))
+               (input (et--func-decls-to-input decls))
+               (vars (cl-loop for group in (et--func-declarations-param-reprs decls)
+                              nconc (cl-loop for (name . repr) in group
+                                             collect (et-new-var name (et-repr-to-type repr nil)))))
+               (return-type (et-with-vars vars (et-checker-tail rel (1+ source-pos)))))
+    (unless (et-type-p input)
+      (et-fatal rel "A generic function must declare an `@return' type"))
+    (et-dt 'Function input return-type)))
+
+
+;;;; Checker
+
+(defun et--check-flet (sequential)
+  "Type check the `cl-flet' expression being checked.
+
+Each binding's type is installed as the `et-function-type' property of
+its name, and the original properties are restored once the body has been
+checked.
+
+When SEQUENTIAL (`cl-flet*'), a binding is installed before the following
+bindings are checked, so each one sees the ones before it. Otherwise
+\(`cl-flet'), every binding is checked in the outer function scope, so
+none of them are installed until all of them have been checked."
+  (pcase-let* ((`(,bindings . ,_body) (cdr et--checker-expr))
+               (originals (cl-loop for (name) in bindings
+                                   collect (cons name (get name 'et-function-type)))))
+    (unwind-protect
+        (let* ((types (cl-loop for binding in bindings
+                               for idx upfrom 0
+                               for type = (et--flet-binding-type binding (list 1 idx))
+                               when sequential do (put (car binding) 'et-function-type type)
+                               collect (cons (car binding) type))))
+          (unless sequential
+            (cl-loop for (name . type) in types do (put name 'et-function-type type)))
+          (et-checker-tail 2))
+
+      (cl-loop for (name . type) in originals
+               do (put name 'et-function-type type)))))
+
+(et-define-checker cl-flet (et--check-flet nil))
+(et-define-checker cl-flet* (et--check-flet t))
+
+
+;;;; Tests
+
+(et-test
+ ;; Inferred parameter (Any) and return type
+ (et-assert-resolve Integer
+   (cl-flet ((double (x) (* 2 x))) (double 3)))
+
+ ;; Declared signature: the body is checked against it
+ (et-assert-resolve String
+   (cl-flet ((name (x) (declare (et (x Integer) (@return String))) (format "%s" x)))
+     (name 1)))
+ (et-assert-resolve-errors
+  (cl-flet ((name (x) (declare (et (x Integer) (@return String))) (format "%s" x)))
+    (name "1")))
+
+ ;; (NAME EXPR) binding
+ (et-assert-resolve Integer
+   (cl-flet ((inc #'1+)) (inc 1)))
+
+ ;; `cl-flet' bindings do not see each other, `cl-flet*' bindings do
+ (et-assert-resolve-errors
+  (cl-flet ((a (x) (* 2 x))
+            (b (x) (a x)))
+    (b 1)))
+ (et-assert-resolve Integer
+   (cl-flet* ((a (x) (declare (et (x Integer) (@return Integer))) (* 2 x))
+              (b (x) (declare (et (x Integer) (@return Integer))) (a x)))
+     (b 1)))
+
+ ;; The function type does not outlive the flet
+ (et-assert-resolve-errors
+  (progn (cl-flet ((tmp (x) x)) (tmp 1))
+         (tmp 1))))

@@ -422,86 +422,85 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
  (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
 
 (defvar et--datatypes
-  (et!!
-   '((Any :args nil :overlap t :predicate (lambda (v) t))
-     ;; Literal<VALUE> is a type matching only the value VALUE
-     (Literal :args (CONST) :overlap nil :predicate (lambda (v me) (equal v me)))
-     (NonNil :args nil :overlap t :predicate (lambda (v) v))
-     (Symbol :args nil :overlap (Function DynFunction) :predicate symbolp)
-     (NonNilSymbol :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v))))
-     (Var :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v) (not (eq v t)))))
-     (Number :args nil :overlap nil :predicate numberp)
-     (Integer :args nil :overlap (Positive Negative) :predicate integerp)
-     (Positive :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (> v 0))))
-     (Negative :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (< v 0))))
-     (String :args nil :overlap nil :predicate stringp)
+  (et!! AList<EtDatatypeName~EtDatatypeProps>
+    '((Any :args nil :overlap t :predicate (lambda (v) t))
+      ;; Literal<VALUE> is a type matching only the value VALUE
+      (Literal :args (CONST) :overlap nil :predicate (lambda (v me) (equal v me)))
+      (NonNil :args nil :overlap t :predicate (lambda (v) v))
+      (Symbol :args nil :overlap (Function DynFunction) :predicate symbolp)
+      (NonNilSymbol :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v))))
+      (Var :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v) (not (eq v t)))))
+      (Number :args nil :overlap nil :predicate numberp)
+      (Integer :args nil :overlap (Positive Negative) :predicate integerp)
+      (Positive :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (> v 0))))
+      (Negative :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (< v 0))))
+      (String :args nil :overlap nil :predicate stringp)
 
-     ;; ConsFull<CAR-READ CAR-WRITE CDR-READ CDR-WRITE> is a cons cell.
-     ;; CAR-READ/CDR-READ are the output types of calling car/cdr on
-     ;; the cons cell. CAR-WRITE/CDR-WRITE are the types that are valid
-     ;; to write to the cons cell. The most general cons cell is thus
-     ;; ConsFull<Any Never Any Never>.
-     (ConsFull :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction PList) :intersect t
-               :predicate (lambda (v l _1 r _2) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
-     ;; When you create a new cons cell with cons/list/quote/etc, you
-     ;; get a ConsFresh. This can be thought of as an "undetermined"
-     ;; cons cell: in that it knows what it contains, but it has not
-     ;; yet decided what can be written to it. A ConsFresh can be
-     ;; converted to a ConsFull as long as the read types of the
-     ;; ConsFull are supertypes of the arg types of the ConsFresh.
-     (ConsFresh :args (CO CO) :overlap (Function DynFunction PList) :intersect t
-                :predicate (lambda (v l r) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
+      ;; ConsFull<CAR-READ CAR-WRITE CDR-READ CDR-WRITE> is a cons cell.
+      ;; CAR-READ/CDR-READ are the output types of calling car/cdr on
+      ;; the cons cell. CAR-WRITE/CDR-WRITE are the types that are valid
+      ;; to write to the cons cell. The most general cons cell is thus
+      ;; ConsFull<Any Never Any Never>.
+      (ConsFull :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction PList) :intersect t
+                :predicate (lambda (v l _1 r _2) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
+      ;; When you create a new cons cell with cons/list/quote/etc, you
+      ;; get a ConsFresh. This can be thought of as an "undetermined"
+      ;; cons cell: in that it knows what it contains, but it has not
+      ;; yet decided what can be written to it. A ConsFresh can be
+      ;; converted to a ConsFull as long as the read types of the
+      ;; ConsFull are supertypes of the arg types of the ConsFresh.
+      (ConsFresh :args (CO CO) :overlap (Function DynFunction PList) :intersect t
+                 :predicate (lambda (v l r) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
 
-     ;; VectorFull<ELEM-READ ELEM-WRITE>: same idea as ConsFull
-     (VectorFull :args (CO CONTRA) :overlap (VectorFresh) :intersect t
-                 :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
-     ;; Same idea as ConsFresh
-     (VectorFresh :args (CO) :overlap nil :intersect t
-                  :predicate (lambda (v e) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+      ;; VectorFull<ELEM-READ ELEM-WRITE>: same idea as ConsFull
+      (VectorFull :args (CO CONTRA) :overlap (VectorFresh) :intersect t
+                  :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+      ;; Same idea as ConsFresh
+      (VectorFresh :args (CO) :overlap nil :intersect t
+                   :predicate (lambda (v e) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
 
-     ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
-     ;; input and output type.
-     (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
-     ;; DynFunction<ARGLIST-MATCHER OUTPUT-REPR> is a
-     ;; function whose output depends on the input. For a given
-     ;; ARGLIST-TYPE, the output of the function is determined by
-     ;; inferring ARGLIST-TYPE against ARGLIST-MATCHER, with
-     ;; OUTPUT-REPR as the output.
-     (DynFunction :args (CONST CONST) :overlap nil)
+      ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
+      ;; input and output type.
+      (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
+      ;; DynFunction<ARGLIST-MATCHER OUTPUT-REPR> is a
+      ;; function whose output depends on the input. For a given
+      ;; ARGLIST-TYPE, the output of the function is determined by
+      ;; inferring ARGLIST-TYPE against ARGLIST-MATCHER, with
+      ;; OUTPUT-REPR as the output.
+      (DynFunction :args (CONST CONST) :overlap nil)
 
-     ;; PList<PROP1 VAL1 PROP2 VAL2 ...> is a covariant, unordered
-     ;; plist.
-     (PList
-      :args (lambda (args)
-              (cl-loop for (_prop _val) on args by #'cddr
-                       nconc (list 'CONST 'ISO)))
-      :overlap nil
-      :predicate et--literal-is-plist
-      :intersect et--plist-intersect-args)
+      ;; PList<PROP1 VAL1 PROP2 VAL2 ...> is a covariant, unordered
+      ;; plist.
+      (PList
+       :args (lambda (args)
+               (cl-loop for (_prop _val) on args by #'cddr
+                        nconc (list 'CONST 'ISO)))
+       :overlap nil
+       :predicate et--literal-is-plist
+       :intersect et--plist-intersect-args)
 
-     ;; Struct<NAME~GENERCIC-PARAMS...>
-     (Struct :args (lambda (args)
-                     (if-let* ((name (car args))
-                               (plist (get name 'et-struct))
-                               (arg-count (length (plist-get plist :generics))))
-                         (if (eq (length (cdr args)) arg-count)
-                             (cons 'CONST (make-list (length (cdr args)) 'ISO))
-                           (error "Struct %s takes %s arguments" name arg-count))
-                       (error "Not a struct: %s" name)))
-             :overlap nil :intersect nil)
+      ;; Struct<NAME~GENERCIC-PARAMS...>
+      (Struct :args (lambda (args)
+                      (if-let* ((name (car args))
+                                (plist (get name 'et-struct))
+                                (arg-count (length (plist-get plist :generics))))
+                          (if (eq (length (cdr args)) arg-count)
+                              (cons 'CONST (make-list (length (cdr args)) 'ISO))
+                            (error "Struct %s takes %s arguments" name arg-count))
+                        (error "Not a struct: %s" name)))
+              :overlap nil :intersect nil)
 
-     ;; Scoped datatypes occur when you have a function with generics.
-     ;; Then, inside of that function you can use the generics provided
-     ;; in the function as types. How a scoped datatype interacts with
-     ;; other datatypes is determined entirely by what constraints were
-     ;; placed upon it in its definition. Its arguments are (NAME
-     ;; UNIQUE CONSTRAINTS), where UNIQUE is a unique symbol for this
-     ;; scoped datatype, and CONSTRAINTS is a list of type constraints.
-     (Scoped
-      :args (CONST CONST CONST)
-      :overlap t
-      :intersect nil))
-   AList<EtDatatypeName~EtDatatypeProps>)
+      ;; Scoped datatypes occur when you have a function with generics.
+      ;; Then, inside of that function you can use the generics provided
+      ;; in the function as types. How a scoped datatype interacts with
+      ;; other datatypes is determined entirely by what constraints were
+      ;; placed upon it in its definition. Its arguments are (NAME
+      ;; UNIQUE CONSTRAINTS), where UNIQUE is a unique symbol for this
+      ;; scoped datatype, and CONSTRAINTS is a list of type constraints.
+      (Scoped
+       :args (CONST CONST CONST)
+       :overlap t
+       :intersect nil)))
   "Datatypes.")
 
 (defvar et--scoped-datatypes nil
@@ -810,7 +809,7 @@ FUNC is called with one argument, the current argument"
   (cl-loop for arg in dt-args
            for role in (et--datatype-arg-roles dt-name dt-args)
            if (eq role 'CONST) collect arg
-           else collect (funcall func (et! arg T))))
+           else collect (funcall func (et! T arg))))
 
 
 ;;;; Defining aliases
@@ -2719,6 +2718,12 @@ types to be the never type."
            collect (make-et-type-case :value (et-type-case-value case) :binds binds)
            into cases
            finally return (make-et-type :label (et-type-label type) :cases cases)))
+
+(defun et-add-typeof (type var)
+  (et--supersect
+   type
+   (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
+                               :typeofs (list var)))))
 
 
 ;;;; Label utils

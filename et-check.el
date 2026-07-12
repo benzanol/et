@@ -176,10 +176,7 @@ determine the output type."
      (pcase nil
        ;; Check if the variable is locally scoped
        ((and (let var (et-get-symbol-var sym)) (guard var))
-        (et--supersect
-         (et-current-var-type var)
-         (et-type (make-et-type-case :value (make-et-datatype :name 'Any)
-                                     :typeofs (list var)))))
+        (et-add-typeof (et-current-var-type var) var))
 
        ;; Check if it is a global variable with a type
        ((and (let type (get sym 'et-variable-type)) (guard type))
@@ -521,6 +518,12 @@ PATH is the path to the subexpression."
           (`(@expand)
            (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
            (setq props (cl-list* :checker #'et-macroexpand-checker props)))
+          (`(@progn)
+           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
+           (setq props (cl-list* :checker #'et-progn-checker props)))
+          (`(@prog1)
+           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
+           (setq props (cl-list* :checker #'et-prog1-checker props)))
 
           ;; Parameters
           (`(,(and name (pred symbolp)) ,spec)
@@ -775,6 +778,8 @@ OUTPUT-REPR each converted to concrete types."
      (lambda ()
        (put name 'et-checker
             (or (when (plist-get form :expand) #'et-macroexpand-checker)
+                (when (plist-get form :progn) #'et-progn-checker)
+                (when (plist-get form :prog1) #'et-prog1-checker)
                 (plist-get form :checker)
                 (et-fatal 0 "No checker specified")))))))
 
@@ -1155,13 +1160,13 @@ Returns a plist with :declare to set the symbol type."
     (:success (et-err nil "Didn't error"))))
 
 (et-define-pcase-checker :typeof `(,_expr)
-  (let ((type (et-checker-sub 1)))
+  (let* ((type (et-checker-sub 1)))
     (et-hint nil (et--remove-type-binds type))
     (setq et--checker-expr (cadr et--checker-expr))
     type))
 
 (et-define-pcase-checker :typeof+ `(,_expr)
-  (let ((type (et-checker-sub 1)))
+  (let* ((type (et-checker-sub 1)))
     (et-hint nil type)
     (setq et--checker-expr (cadr et--checker-expr))
     type))
@@ -1191,21 +1196,15 @@ Returns a plist with :declare to set the symbol type."
 ;; ignored wherever they appear.
 (et-define-checker declare (et Nil))
 
-;; The `et:'/`et!'/`et!!' annotation macros (defined in et-macros.el)
-;; assert a type on an expression at check time. `et:' requires the
-;; expression to be a subtype; `et!' only warns when there is no overlap;
-;; `et!!' suppresses the check entirely. All three resolve to the
-;; declared type.
-
-(et-define-pcase-checker et: `(,_expr ,type-spec)
-  (let* ((actual (et-checker-sub 1))
+(et-define-pcase-checker et: `(,type-spec ,_expr)
+  (let* ((actual (et-checker-sub 2))
          (declared (et-parse-type type-spec)))
     (unless (et-subtype? actual declared)
       (et-err 0 "Expected %s, found %s" (et-pp declared) (et-pp actual)))
     declared))
 
-(et-define-pcase-checker et! `(,_expr ,type-spec)
-  (let* ((actual (et-checker-sub 1))
+(et-define-pcase-checker et! `(,type-spec ,_expr)
+  (let* ((actual (et-checker-sub 2))
          (declared (et-parse-type type-spec)))
     (when (and (not (et-never-p actual))
                (not (et-never-p declared))
@@ -1214,8 +1213,8 @@ Returns a plist with :declare to set the symbol type."
               (et-pp declared) (et-pp actual)))
     declared))
 
-(et-define-pcase-checker et!! `(,_expr ,type-spec)
-  (let* ((_actual (et-checker-sub 1))
+(et-define-pcase-checker et!! `(,type-spec ,_expr)
+  (let* ((_actual (et-checker-sub 2))
          (declared (et-parse-type type-spec)))
     declared))
 
@@ -1336,6 +1335,16 @@ heuristic is by searching (using `equal') for each nested call to
          (et--macroexpand-expr (or et--macroexpand-expr et--checker-expr)))
     (et-with-sticky-path
      (et--check expanded))))
+
+
+;;;; Progn/prog1 checkers
+
+(defun et-progn-checker ()
+  (et-checker-tail 1))
+
+(defun et-prog1-checker ()
+  (prog1 (et-checker-sub 1)
+    (et-checker-remaining 2)))
 
 
 ;;; ============================================================

@@ -159,12 +159,13 @@
 ;;;; setq
 
 (et-define-pcase-checker setq (and args (guard (eq 0 (mod (length args) 2))))
-  (cl-loop for (var _val) on args by #'cddr
+  (cl-loop for (var-sym _val) on args by #'cddr
            for var-pos upfrom 1 by 2
-           for type = (or (et-get-symbol-type var)
-                          (et-err var-pos "Assignment to free variable"))
+           for var = (or (et-get-symbol-var var-sym)
+                         (et-err var-pos "Assignment to free variable"))
+           for type = (if var (et-current-var-type var) (et Any))
            do (et-checker-resolve type (1+ var-pos))
-           finally return type))
+           finally return (if var (et-add-typeof type var) type)))
 
 
 ;;;; and/or
@@ -281,19 +282,14 @@
 
 ;;;; progn / prog1
 
-;; `progn' returns the value of the last body form (or nil if empty).
-(et-define-checker progn
-  (et-checker-tail 1))
+(et-declare
+ (@macro progn :progn t)
+ (@macro prog1 :prog1 t))
 
 (et-test
  (et-assert-resolve Integer (progn 1))
  (et-assert-resolve String (progn 1 2 "x"))
  (et-assert-resolve Nil (progn)))
-
-;; `prog1' returns the value of FIRST, evaluating (and checking) the rest.
-(et-define-pcase-checker prog1 `(,_first . ,_body)
-  (prog1 (et-checker-sub 1)
-    (et-checker-remaining 2)))
 
 (et-test
  (et-assert-resolve Integer (prog1 1 "x" 'y)))

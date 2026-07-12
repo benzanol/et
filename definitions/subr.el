@@ -176,8 +176,13 @@
 
 ;;; Macros
 
+;; `if-let' and the `when-let' family all macroexpand into `if-let*', so
+;; expanding them is enough. `if-let*' itself is checked directly (see
+;; below): its expansion is a `let*' whose bindings are each guarded by
+;; the previous one, and the type system cannot recover from that
+;; expansion the fact that the last binding being non-nil implies that
+;; all of the earlier ones are too.
 (et-declare
- (@macro if-let* :expand t)
  (@macro if-let :expand t)
  (@macro when-let :expand t)
  (@macro when-let* :expand t))
@@ -222,3 +227,147 @@
          (et-typecheck
           (let* ((a String|Number 4))
             (when (stringp a) a))))))
+
+
+;;;; if-let*
+
+;; Like `let*', except that every binding is a condition: the THEN branch
+;; runs only when all of them are non-nil. So each binding is checked
+;; knowing that all the previous ones were non-nil, and is bound to the
+;; non-nil part of its value's type. The same knowledge narrows the THEN
+;; branch, which is what `let*' checking of the expansion cannot express.
+;;
+;; A binding is (NAME VALUE), (VALUE) — checked but not bound — or a bare
+;; symbol, whose own value must be non-nil.
+;;
+;; The ELSE branch only knows that *some* binding was nil, which narrows
+;; nothing, and none of the bindings are in scope there.
+
+(et-define-pcase-checker if-let*
+    `(,(and bindings (pred listp)) ,_then . ,_else)
+  (cl-loop
+   with vars = nil
+   with narrows = nil
+   for binding in bindings
+   for idx upfrom 0
+   for (name . rel) =
+   (pcase binding
+     (`(,(and name (pred symbolp)) ,_value) (cons name (list 1 idx 1)))
+     (`(,_value) (cons nil (list 1 idx 0)))
+     ((pred symbolp) (cons nil (list 1 idx)))
+     (_ (et-fatal (list 1 idx) "Expected (NAME VALUE), (VALUE), or SYMBOL")))
+
+   for value-type = (et-with-vars vars
+                      (et-with-narrow-binds narrows (et-checker-sub rel)))
+   for non-nil = (et--non-nil value-type)
+   do (setq narrows (append (et--type-binds non-nil) narrows))
+   when name do (push (et-new-var name (et--unfreshen-type non-nil)) vars)
+
+   finally return
+   (let* ((then-type (et-with-vars vars
+                       (et-with-narrow-binds narrows (et-checker-sub 2))))
+          (else-type (et-checker-tail 3)))
+     (et-simplify-type (et--or then-type else-type)))))
+
+(et-test
+ ;; Each binding is narrowed to its non-nil part inside THEN
+ (et-assert-resolve Integer|Nil
+   (if-let* ((a (car (list 1 2)))) a))
+ (et-subtype? (et-typecheck
+               (let* ((a String|Nil "s"))
+                 (if-let* ((b a)) b "fallback")))
+              (et String))
+ ;; A later binding sees the earlier ones, already non-nil
+ (et-subtype? (et-typecheck
+               (let* ((a String|Nil "s"))
+                 (if-let* ((b a)
+                           (c (concat b "!")))
+                   c
+                   "fallback")))
+              (et String))
+ ;; Bindings are not in scope in the ELSE branch
+ (et-assert-resolve-errors
+  (if-let* ((a 1)) a a))
+ ;; The condition narrows outer variables in THEN
+ (et-subtype? (et-typecheck
+               (let* ((a String|Number 4))
+                 (if-let* ((b (stringp a))) a "fallback")))
+              (et String)))
+
+
+;;; Body macros
+;;;; Progn-like
+
+;; These all evaluate their body like a `progn' -- rebinding some piece
+;; of state around it -- so the value of the last body form is the value
+;; of the whole form. Any leading arguments (a buffer, a window, a
+;; syntax table, ...) are ordinary evaluated expressions, so the `:progn'
+;; checker types them correctly too: it checks every subform and returns
+;; the type of the last one.
+
+(et-declare
+ (@macro with-current-buffer :progn t)
+ (@macro with-selected-window :progn t)
+ (@macro with-selected-frame :progn t)
+ (@macro save-window-excursion :progn t)
+ (@macro with-temp-buffer :progn t)
+ (@macro with-temp-file :progn t)
+ (@macro with-temp-message :progn t)
+ (@macro with-output-to-temp-buffer :progn t)
+ (@macro with-silent-modifications :progn t)
+ (@macro with-undo-amalgamate :progn t)
+ (@macro with-restriction :progn t)
+ (@macro without-restriction :progn t)
+ (@macro combine-after-change-calls :progn t)
+ (@macro combine-change-calls :progn t)
+ (@macro with-syntax-table :progn t)
+ (@macro with-case-table :progn t)
+ (@macro with-file-modes :progn t)
+ (@macro with-existing-directory :progn t)
+ (@macro save-match-data :progn t)
+ (@macro with-mutex :progn t))
+
+(et-test
+ (et-assert-resolve String (with-temp-buffer (insert "x") "done"))
+ (et-assert-resolve Integer (with-current-buffer nil 1))
+ (et-assert-resolve String (with-syntax-table nil "done"))
+ (et-assert-resolve Nil (save-match-data))
+ (et-assert-resolve-errors (with-temp-buffer (+ 1 "x"))))
+
+
+;;;; Escaping to nil
+
+;; `with-local-quit' returns nil when a quit terminates the body, and
+;; `with-demoted-errors' returns nil when the body signals an error, so
+;; nil is always a possible value on top of the body's own type.
+
+(et-define-pcase-checker with-local-quit _body
+  (et--or (et-checker-tail 1) (et Nil)))
+
+(et-define-pcase-checker with-demoted-errors `(,_format . ,_body)
+  (et-checker-sub 1)
+  (et--or (et-checker-tail 2) (et Nil)))
+
+(et-test
+ (et-assert-resolve String|Nil (with-local-quit "done"))
+ (et-assert-resolve String|Nil (with-demoted-errors "Error: %S" "done"))
+ (et-assert-resolve-errors (with-demoted-errors "Error: %S" (+ 1 "x"))))
+
+
+;;;; Other
+
+;; `with-output-to-string' discards the body's value: it returns whatever
+;; the body printed to `standard-output'.
+(et-define-pcase-checker with-output-to-string _body
+  (et-checker-remaining 1)
+  (et String))
+
+;; `with-memoization' returns PLACE when it is already non-nil, and
+;; otherwise the value of CODE (which it stores in PLACE).
+(et-define-pcase-checker with-memoization `(,_place . ,_code)
+  (et--or (et--non-nil (et-checker-sub 1)) (et-checker-tail 2)))
+
+(et-test
+ (et-assert-resolve String (with-output-to-string (princ "x")))
+ (et-assert-resolve String|Integer
+   (with-memoization (car (list "cached")) 1)))

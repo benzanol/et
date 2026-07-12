@@ -40,7 +40,166 @@
  (et-assert-resolve Integer (string-to-char "abc"))
  (et-assert-resolve Boolean (char-equal ?a ?A)))
 
-;;; System / user info
+;;; Point and positions
+
+;; Buffer positions are Integers. These functions also accept markers,
+;; but markers are not modelled, so the integer-only signature is the
+;; precise one we can express.
 
 (et-declare
- (@function group-name (gid) (gid Number) (@return String|Nil)))
+ (@function point () (@return Integer))
+ (@function goto-char (position) (position Integer) (@return Integer))
+ (@function point-min () (@return Integer))
+ (@function point-max () (@return Integer))
+ (@function region-beginning () (@return Integer))
+ (@function region-end () (@return Integer))
+ (@function gap-position () (@return Integer))
+ (@function gap-size () (@return Integer))
+
+ ;; Nil when the position is outside the accessible portion.
+ (@function position-bytes (position) (position Integer) (@return Integer|Nil))
+ (@function byte-to-position (bytepos) (bytepos Integer) (@return Integer|Nil))
+
+ (@function pos-bol (&optional n) (n Integer) (@return Integer))
+ (@function pos-eol (&optional n) (n Integer) (@return Integer))
+ (@function line-beginning-position (&optional n) (n Integer) (@return Integer))
+ (@function line-end-position (&optional n) (n Integer) (@return Integer)))
+
+(et-test
+ (et-assert-resolve Integer (point))
+ (et-assert-resolve Integer (goto-char (point-min)))
+ (et-assert-resolve Integer (pos-bol 2))
+ (et-assert-resolve Integer|Nil (position-bytes 1))
+ (et-assert-resolve-errors (goto-char "1")))
+
+
+;;; Characters at point
+
+(et-declare
+ ;; `following-char'/`preceding-char' return 0 at the buffer's edge.
+ (@function following-char () (@return Integer))
+ (@function preceding-char () (@return Integer))
+ ;; `char-after'/`char-before' return nil outside the accessible portion.
+ (@function char-after (&optional pos) (pos Integer) (@return Integer|Nil))
+ (@function char-before (&optional pos) (pos Integer) (@return Integer|Nil))
+
+ (@function bobp () (@return Boolean))
+ (@function eobp () (@return Boolean))
+ (@function bolp () (@return Boolean))
+ (@function eolp () (@return Boolean)))
+
+(et-test
+ (et-assert-resolve Integer|Nil (char-after))
+ (et-assert-resolve Integer (following-char))
+ (et-assert-resolve Boolean (bobp)))
+
+
+;;; Buffer contents
+
+(et-declare
+ (@function buffer-substring (start end)
+            (start Integer) (end Integer) (@return String))
+ (@function buffer-substring-no-properties (start end)
+            (start Integer) (end Integer) (@return String))
+ (@function buffer-string () (@return String))
+ (@function delete-and-extract-region (start end)
+            (start Integer) (end Integer) (@return String))
+ (@function delete-region (start end)
+            (start Integer) (end Integer) (@return Nil))
+ (@function subst-char-in-region (start end fromchar tochar &optional noundo)
+            (start Integer) (end Integer) (fromchar Integer) (tochar Integer)
+            (noundo Any) (@return Nil))
+ (@function transpose-regions (startr1 endr1 startr2 endr2 &optional leave-markers)
+            (startr1 Integer) (endr1 Integer) (startr2 Integer) (endr2 Integer)
+            (leave-markers Any) (@return Nil)))
+
+(et-test
+ (et-assert-resolve String (buffer-substring 1 10))
+ (et-assert-resolve String (delete-and-extract-region 1 10))
+ (et-assert-resolve Nil (delete-region 1 10))
+ (et-assert-resolve-errors (buffer-substring 1)))
+
+
+;;; Insertion
+
+;; The insertion functions take any mix of strings and characters, and
+;; all of them return nil.
+
+(et-declare
+ (@function insert (&rest args) (args ListR<String|Integer>) (@return Nil))
+ (@function insert-and-inherit (&rest args) (args ListR<String|Integer>) (@return Nil))
+ (@function insert-before-markers (&rest args) (args ListR<String|Integer>) (@return Nil))
+ (@function insert-before-markers-and-inherit (&rest args)
+            (args ListR<String|Integer>) (@return Nil))
+ (@function insert-char (character &optional count inherit)
+            (character Integer) (count Integer) (inherit Any) (@return Nil))
+ (@function insert-byte (byte &optional count inherit)
+            (byte Integer) (count Integer) (inherit Any) (@return Nil)))
+
+(et-test
+ (et-assert-resolve Nil (insert "hi" ?a))
+ (et-assert-resolve Nil (insert-char ?a 3))
+ (et-assert-resolve-errors (insert 'sym)))
+
+
+;;; Narrowing
+
+(et-declare
+ (@function widen () (@return Nil))
+ (@function narrow-to-region (start end)
+            (start Integer) (end Integer) (@return Nil)))
+
+
+;;; Fields
+
+(et-declare
+ (@function delete-field (&optional pos) (pos Integer) (@return Nil))
+ (@function field-string (&optional pos) (pos Integer) (@return String))
+ (@function field-string-no-properties (&optional pos) (pos Integer) (@return String))
+ (@function field-beginning (&optional pos escape-from-edge limit)
+            (pos Integer) (escape-from-edge Any) (limit Integer) (@return Integer))
+ (@function field-end (&optional pos escape-from-edge limit)
+            (pos Integer) (escape-from-edge Any) (limit Integer) (@return Integer)))
+
+(et-test
+ (et-assert-resolve String (field-string))
+ (et-assert-resolve Integer (field-beginning (point))))
+
+
+;;; Save macros
+
+;; These evaluate their body like a `progn', restoring some piece of
+;; state afterwards, so the value of the last body form is the value of
+;; the whole form.
+
+(et-declare
+ (@macro save-excursion :progn t)
+ (@macro save-current-buffer :progn t)
+ (@macro save-restriction :progn t))
+
+(et-test
+ (et-assert-resolve String (save-excursion (goto-char 1) "done"))
+ (et-assert-resolve Nil (save-restriction)))
+
+
+;;; System / user info
+
+;; A uid/gid may be a float on systems where it does not fit in a fixnum,
+;; hence Number rather than Integer.
+
+(et-declare
+ (@function user-login-name (&optional uid) (uid Number) (@return String|Nil))
+ (@function user-real-login-name () (@return String))
+ (@function user-full-name (&optional uid) (uid Number) (@return String|Nil))
+ (@function user-uid () (@return Number))
+ (@function user-real-uid () (@return Number))
+ (@function group-name (gid) (gid Number) (@return String|Nil))
+ (@function group-gid () (@return Number))
+ (@function group-real-gid () (@return Number))
+ (@function system-name () (@return String))
+ (@function emacs-pid () (@return Integer)))
+
+(et-test
+ (et-assert-resolve String|Nil (user-login-name))
+ (et-assert-resolve Number (user-uid))
+ (et-assert-resolve Integer (emacs-pid)))
