@@ -98,17 +98,54 @@
 
 ;;; Bitwise operations
 
-;; All of these operate on (and produce) integers.  Their arguments may
-;; also be markers, but markers are not modelled, so the integer-only
-;; signature is the precise one we can express.
+;; All of these operate on (and produce) integers.  `logand'/`logior'/
+;; `logxor' also accept markers, which they convert to integers; the
+;; others are integer-only.
 
 (et-declare
- (@function logand (&rest ints) (ints ListR<Integer>) (@return Integer))
- (@function logior (&rest ints) (ints ListR<Integer>) (@return Integer))
- (@function logxor (&rest ints) (ints ListR<Integer>) (@return Integer))
+ (@function logand (&rest ints) (ints ListR<Integer|Marker>) (@return Integer))
+ (@function logior (&rest ints) (ints ListR<Integer|Marker>) (@return Integer))
+ (@function logxor (&rest ints) (ints ListR<Integer|Marker>) (@return Integer))
  (@function lognot (number) (number Integer) (@return Integer))
  (@function ash (value count) (value Integer) (count Integer) (@return Integer))
  (@function logcount (value) (value Integer) (@return Integer)))
+
+(et-test
+ (et-assert-call Integer logand Integer Marker)
+ (et-assert-call-errors ash Marker Integer))
+
+
+;;; Bool vector operations
+
+;; The set operations write into the optional third argument when it is
+;; given, and allocate a fresh bool vector otherwise; either way the
+;; result is the bool vector they produce.
+
+(et-declare
+ (@function bool-vector-exclusive-or (a b &optional c)
+            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+ (@function bool-vector-union (a b &optional c)
+            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+ (@function bool-vector-intersection (a b &optional c)
+            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+ (@function bool-vector-set-difference (a b &optional c)
+            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+ (@function bool-vector-not (a &optional b)
+            (a BoolVector) (b BoolVector) (@return BoolVector))
+ (@function bool-vector-subsetp (a b)
+            (a BoolVector) (b BoolVector) (@return Boolean))
+ (@function bool-vector-count-population (a)
+            (a BoolVector) (@return Integer))
+ ;; Counts the elements of A equal to B (as a truth value) from index I on.
+ (@function bool-vector-count-consecutive (a b i)
+            (a BoolVector) (b Any) (i Integer) (@return Integer)))
+
+(et-test
+ (et-assert-call BoolVector bool-vector-union BoolVector BoolVector)
+ (et-assert-call BoolVector bool-vector-not BoolVector)
+ (et-assert-call Boolean bool-vector-subsetp BoolVector BoolVector)
+ (et-assert-call Integer bool-vector-count-population BoolVector)
+ (et-assert-call-errors bool-vector-union BoolVector VectorR<Any>))
 
 
 ;;; Comparison / equality
@@ -188,6 +225,123 @@
             (@generics [T]) (object T)
             (@return (or (and True (bindsof (and T Function<Never~Any>)))
                          (and Nil (bindsof (subtract T Function<Never~Any>)))))))
+
+;; Predicates for the emacs-internal datatypes.
+
+(et-declare
+ (@function bufferp (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Buffer)))
+                         (and Nil (bindsof (subtract T Buffer))))))
+ (@function markerp (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Marker)))
+                         (and Nil (bindsof (subtract T Marker))))))
+ (@function char-table-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T CharTable)))
+                         (and Nil (bindsof (subtract T CharTable))))))
+ (@function bool-vector-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T BoolVector)))
+                         (and Nil (bindsof (subtract T BoolVector))))))
+ (@function threadp (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Thread)))
+                         (and Nil (bindsof (subtract T Thread))))))
+ (@function mutexp (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Mutex)))
+                         (and Nil (bindsof (subtract T Mutex))))))
+ (@function condition-variable-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T ConditionVariable)))
+                         (and Nil (bindsof (subtract T ConditionVariable))))))
+
+ ;; Wherever a number is accepted, a marker usually is too, so these two
+ ;; narrow to a union.
+ (@function integer-or-marker-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Integer|Marker)))
+                         (and Nil (bindsof (subtract T Integer|Marker))))))
+ (@function number-or-marker-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Number|Marker)))
+                         (and Nil (bindsof (subtract T Number|Marker)))))))
+
+(et-test
+ (et-assert-call True&{$a::Buffer} bufferp Buffer&{::$a})
+ (et-assert-call (or True&{$a::Marker} Nil&{$a::Integer})
+                 markerp {::$a}&{Marker|Integer})
+ (et-assert-call (or True&{$a::Marker} Nil&{$a::String})
+                 integer-or-marker-p {::$a}&{Marker|String})
+ (et-assert-resolve Boolean (bool-vector-p (bool-vector t))))
+
+
+;;; Function objects
+
+;; A function object is one of three leaf datatypes: `InterpretedFunction'
+;; (a lambda body), `ByteCodeFunction' (bytecode), or `Subr' (machine
+;; code -- a C builtin or a natively compiled Lisp function). `Closure' is
+;; the alias for the first two, which is exactly what `closurep' tests.
+;;
+;; These sit alongside the `Function' datatype rather than under it:
+;; `Function<ARGS~RET>' describes a callable's signature, while these
+;; describe its runtime representation. A value can be both, which is why
+;; narrowing with them intersects rather than replaces.
+
+(et-declare
+ (@function closurep (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Closure)))
+                         (and Nil (bindsof (subtract T Closure))))))
+ (@function interpreted-function-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T InterpretedFunction)))
+                         (and Nil (bindsof (subtract T InterpretedFunction))))))
+ (@function byte-code-function-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T ByteCodeFunction)))
+                         (and Nil (bindsof (subtract T ByteCodeFunction))))))
+ (@function subrp (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Subr)))
+                         (and Nil (bindsof (subtract T Subr))))))
+
+ ;; Only a subr can be natively compiled, so a true result narrows to
+ ;; `Subr'. A false one narrows to nothing: plenty of subrs are not
+ ;; natively compiled.
+ (@function native-comp-function-p (object)
+            (@generics [T]) (object T)
+            (@return (or (and True (bindsof (and T Subr))) Nil))))
+
+(et-test
+ (et-assert-call True&{$a::Subr} subrp Subr&{::$a})
+ (et-assert-call (or True&{$a::Closure} Nil&{$a::Subr})
+                 closurep {::$a}&{Closure|Subr})
+ ;; `Closure' is the union of the two, so each half narrows out of it.
+ (et-assert-call (or True&{$a::ByteCodeFunction} Nil&{$a::InterpretedFunction})
+                 byte-code-function-p {::$a}&Closure)
+ (et-assert-call (or True&{$a::InterpretedFunction} Nil&{$a::ByteCodeFunction})
+                 interpreted-function-p {::$a}&Closure)
+ ;; A false `native-comp-function-p' tells us nothing.
+ (et-assert-call (or True&{$a::Subr} Nil) native-comp-function-p Subr&{::$a}))
+
+
+;;; Subrs
+
+;; MAX is `many' for a `&rest' function, and `unevalled' for a special
+;; form.
+
+(et-declare
+ (@function subr-name (subr) (subr Subr) (@return String))
+ (@function subr-arity (subr)
+            (subr Subr) (@return Cons<Integer~Integer|@many|@unevalled>)))
+
+(et-test
+ (et-assert-call String subr-name Subr)
+ (et-assert-call Cons<Integer~Integer|@many|@unevalled> subr-arity Subr)
+ (et-assert-call-errors subr-name Closure))
 
 ;; These predicates have no exact datatype to narrow to (no Float,
 ;; natural-number, keyword, sequence, or array datatype exists), so they
@@ -332,3 +486,22 @@
 (et-test
  (et-assert-resolve Integer (fset 'foo 1))
  (et-assert-resolve-errors (fset "foo" 1)))
+
+
+;;; Buffer-local variables
+
+;; BUFFER defaults to the current buffer.  A variable's binding is local
+;; to a buffer or to a terminal, or to neither (nil).
+
+(et-declare
+ (@function local-variable-p (variable &optional buffer)
+            (variable Symbol) (buffer Buffer) (@return Boolean))
+ (@function local-variable-if-set-p (variable &optional buffer)
+            (variable Symbol) (buffer Buffer) (@return Boolean))
+ (@function variable-binding-locus (variable)
+            (variable Symbol) (@return Buffer|Terminal|Nil)))
+
+(et-test
+ (et-assert-resolve Boolean (local-variable-p 'foo))
+ (et-assert-resolve Buffer|Terminal|Nil (variable-binding-locus 'foo))
+ (et-assert-resolve-errors (local-variable-p "foo")))

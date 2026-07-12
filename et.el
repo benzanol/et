@@ -573,7 +573,8 @@ This is what is meant by 'nontrivial'."
          (b (et-datatype-name b-dt)))
 
     (when (< (cl-position b et--datatypes :key #'car) (cl-position a et--datatypes :key #'car))
-      (cl-rotatef a b))
+      (cl-rotatef a b)
+      (cl-rotatef a-dt b-dt))
 
     (pcase (plist-get (alist-get a et--datatypes) :overlap)
       ('t t)
@@ -582,7 +583,7 @@ This is what is meant by 'nontrivial'."
        (et-subtype? (et @lambda) (car (et-datatype-args a-dt))))
       ;; Is an emacs internal datatype a function
       ((guard (and (memq a '(Function DynFunction)) (eq b 'Emacs)))
-       (memq (car (et-datatype-args b-dt)) '(closure interpreted-function)))
+       (memq (car (et-datatype-args b-dt)) '(interpreted-function byte-code-function subr)))
 
       (overlap (not (not (memq b overlap)))))))
 
@@ -2578,9 +2579,17 @@ returning A itself is a valid approximation."
      ((et-subtype? (et-type a-case-raw) (et-type b-case-raw)) nil)
 
      ((et-alias-p a) (cl-loop for exp-case in (et-type-cases (et-alias-expand a))
-                              nconc (et--subtract-cases exp-case b-case)))
+                              for merged-case = (make-et-type-case
+                                                 :value (et-type-case-value exp-case)
+                                                 :binds (et-type-case-binds a-case)
+                                                 :typeofs (et-type-case-typeofs a-case))
+                              nconc (et--subtract-cases merged-case b-case)))
      ((et-alias-p b) (cl-loop for exp-case in (et-type-cases (et-alias-expand b))
-                              nconc (et--subtract-cases a-case exp-case)))
+                              for merged-case = (make-et-type-case
+                                                 :value (et-type-case-value exp-case)
+                                                 :binds (et-type-case-binds b-case)
+                                                 :typeofs (et-type-case-typeofs b-case))
+                              nconc (et--subtract-cases a-case merged-case)))
 
      ;; Todo: Handle more complex cases
      (t (list (funcall make-case a))))))
@@ -3234,11 +3243,13 @@ lazily because `List' is not yet defined when this file loads.")
            xwidget xwidget-view
            char-table bool-vector obarray
            finalizer
-           closure interpreted-function))
+           interpreted-function byte-code-function subr))
 
 (dolist (sym et-aliased-emacs-types)
   (let* ((alias (string-replace "-" "" (capitalize (format "%s" sym)))))
     (et--define-alias (intern alias) nil `(Emacs ,sym))))
+
+(et-defalias Closure (or InterpretedFunction ByteCodeFunction))
 
 
 ;;; ============================================================

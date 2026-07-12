@@ -312,6 +312,31 @@
  (et-assert-call String put NonNilSymbol NonNilSymbol String))
 
 
+;;; Hashing
+
+;; These digest either a string or (a portion of) a buffer. START and END
+;; are indices into the string, or positions in the buffer.
+
+(et-declare
+ (@function md5 (object &optional start end coding-system noerror)
+            (object Buffer|String) (start Position) (end Position)
+            (coding-system Symbol) (noerror Any)
+            (@return String))
+ (@function secure-hash (algorithm object &optional start end binary)
+            (algorithm Symbol) (object Buffer|String)
+            (start Position) (end Position) (binary Any)
+            (@return String))
+ ;; BUFFER-OR-NAME defaults to the current buffer.
+ (@function buffer-hash (&optional buffer-or-name)
+            (buffer-or-name Buffer|String) (@return String)))
+
+(et-test
+ (et-assert-resolve String (md5 "hi"))
+ (et-assert-resolve String (secure-hash 'sha256 "hi"))
+ (et-assert-resolve String (buffer-hash))
+ (et-assert-resolve-errors (md5 5)))
+
+
 ;;; Misc
 
 (et-declare

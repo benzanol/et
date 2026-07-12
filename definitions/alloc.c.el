@@ -83,3 +83,42 @@
  (et-assert-call Vector<Never> vector)
  (et-assert-call Vector<Number> vector Integer Number Positive)
  (et-assert-call Vector<Integer> make-vector Integer Integer))
+
+
+;;; Bool vectors
+
+;; A bool vector is its own emacs datatype: unlike a vector, it has no
+;; element type (its elements are always booleans), so it takes no
+;; arguments.
+
+(et-declare
+ (@function make-bool-vector (length init)
+            (length Integer) (init Any) (@return BoolVector))
+ (@function bool-vector (&rest objects)
+            (objects ListR<Any>) (@return BoolVector)))
+
+(et-test
+ (et-assert-resolve BoolVector (make-bool-vector 3 nil))
+ (et-assert-resolve BoolVector (bool-vector t nil t))
+ (et-assert-resolve-errors (make-bool-vector "3" nil)))
+
+
+;;; Markers
+
+;; A marker created this way points nowhere until it is set.
+
+(et-declare
+ (@function make-marker () (@return Marker)))
+
+(et-test
+ (et-assert-resolve Marker (make-marker)))
+
+
+;;; Finalizers
+
+(et-declare
+ (@function make-finalizer (function)
+            (function Function<Args~Any>) (@return Finalizer)))
+
+(et-test
+ (et-assert-resolve Finalizer (make-finalizer #'ignore)))
