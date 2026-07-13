@@ -97,7 +97,16 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 (defvar et--checker-expr nil)
 
-(defun et--check (expr)
+(et-defvar et--checker-recommendation Nil|*et-type
+  nil
+  "A hint to the current checker of what type its expression should be.
+
+This should ONLY be used in the checker for `lambda', in order to guess
+at the function type. It should not be used in any other checkers.
+
+This variable should only be modified by `et--check'.")
+
+(defun et--check (expr &optional recommendation)
   "Generates an `et-result' resulting from typechecking EXPR.
 
 If EXPR is self quoting (a number, string, etc.), the resulting type
@@ -121,7 +130,8 @@ If FUNC is a symbol with the `et-function-type' property set to an
 `et-type', then the arguments to the function will first be checked
 individually, and then will be passed to `et-funcall' as a list to
 determine the output type."
-  (let* ((et--checker-expr expr))
+  (let* ((et--checker-expr expr)
+         (et--checker-recommendation recommendation))
     (et-failed-boundary
      (or (et-error-boundary nil
            (or (et--check-1)
@@ -369,6 +379,12 @@ RETURN is a parsable expression for the return type.
   (let* ((flat (flatten-tree path))
          (expr (et--traverse-tree et--checker-expr flat)))
     (et-at flat (et--check expr))))
+
+(defun et-checker-sub-with-recommendation (recommendation &rest path)
+  "Like `et-checker-sub', but with a recommended type."
+  (let* ((flat (flatten-tree path))
+         (expr (et--traverse-tree et--checker-expr flat)))
+    (et-at flat (et--check expr recommendation))))
 
 (defun et-checker-remaining (&rest first-path)
   (cl-assert et--checker-expr)
@@ -1197,25 +1213,25 @@ Returns a plist with :declare to set the symbol type."
 (et-define-checker declare (et Nil))
 
 (et-define-pcase-checker et: `(,type-spec ,_expr)
-  (let* ((actual (et-checker-sub 2))
-         (declared (et-parse-type type-spec)))
+  (let* ((declared (et-parse-type type-spec))
+         (actual (et-checker-sub-with-recommendation declared 2)))
     (unless (et-subtype? actual declared)
-      (et-err 0 "Expected %s, found %s" (et-pp declared) (et-pp actual)))
+      (et-err 0 "Expected %s, found %s" declared actual))
     declared))
 
 (et-define-pcase-checker et! `(,type-spec ,_expr)
-  (let* ((actual (et-checker-sub 2))
-         (declared (et-parse-type type-spec)))
+  (let* ((declared (et-parse-type type-spec))
+         (actual (et-checker-sub-with-recommendation declared 2)))
     (when (and (not (et-never-p actual))
                (not (et-never-p declared))
                (et-never-p (et--supersect actual declared)))
       (et-err 0 "Types %s and %s have no overlap. Use et!! to supress this warning."
-              (et-pp declared) (et-pp actual)))
+              declared actual))
     declared))
 
 (et-define-pcase-checker et!! `(,type-spec ,_expr)
-  (let* ((_actual (et-checker-sub 2))
-         (declared (et-parse-type type-spec)))
+  (let* ((declared (et-parse-type type-spec))
+         (_actual (et-checker-sub-with-recommendation declared 2)))
     declared))
 
 (et-define-pcase-checker et-defvar `(,symbol ,type-spec . ,_rest)
