@@ -70,6 +70,19 @@
   `(let ((et--narrow-binds (append ,binds et--narrow-binds)))
      ,@body))
 
+(defun et-invalidate-var-narrows (var newtype)
+  "Remove now-invalid narrows from VAR.
+
+This should be run if VAR is set to NEWTYPE. For each existing narrow of
+VAR, that narrow is now invalid if and only if NEWTYPE is a subtype of
+the narrowed type."
+  (cl-loop for bind in et--narrow-binds
+           for (bvar . btype) = bind
+           unless (and (eq var bvar)
+                       (not (et-subtype? newtype btype)))
+           collect bind into new-binds
+           finally do (setq et--narrow-binds new-binds)))
+
 
 ;;;; Printing narrows
 
@@ -98,7 +111,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 (defvar et--checker-expr nil)
 
 (et-defvar et--checker-recommendation Nil|*et-type
-  nil
+           nil
   "A hint to the current checker of what type its expression should be.
 
 This should ONLY be used in the checker for `lambda', in order to guess
@@ -189,8 +202,11 @@ determine the output type."
         (et-add-typeof (et-current-var-type var) var))
 
        ;; Check if it is a global variable with a type
-       ((and (let type (get sym 'et-variable-type)) (guard type))
-        type)
+       ((and (let type (get sym 'et-variable-type))
+             (let var (get sym 'et-variable-var))
+             (guard type))
+        (if var (et-add-typeof (et-current-var-type var) var)
+          type))
 
        (_ (et-err nil "Free variable: %s" sym))))
 
@@ -976,6 +992,10 @@ Returns a plist with :constrain and :populate functions."
 
 ;;;; Identify variable directive
 
+(defun et--declare-variable-type (name type)
+  (put name 'et-variable-type type)
+  (put name 'et-variable-var (make-et-var :name name :type type)))
+
 (defun et--identify-variable-directive (form)
   "Identify a variable definition, returning a processing plist.
 
@@ -987,7 +1007,7 @@ Returns a plist with :declare to set the variable type."
       :declare
       (lambda ()
         (et-at 2
-          (put name 'et-variable-type (et-parse-type spec))))))
+          (et--declare-variable-type name (et-parse-type spec))))))
 
     (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
 
@@ -998,7 +1018,7 @@ Returns a plist with :declare to set the variable type."
         (et-err 2 "Expected %s, found %s" declared-type value-type))
 
     ;; Otherwise, declare it as any
-    (put name 'et-variable-type (et Any)))
+    (et--declare-variable-type name (et Any)))
 
   (et-literal name))
 
@@ -1190,14 +1210,14 @@ Returns a plist with :declare to set the symbol type."
 
 (et-define-pcase-checker :typeof `(,_expr)
   (let* ((type (et-checker-sub 1)))
-    (et-hint nil (et--remove-type-binds type))
-    (setq et--checker-expr (cadr et--checker-expr))
+    (et-hint nil type)
     type))
 
 (et-define-pcase-checker :typeof+ `(,_expr)
-  (let* ((type (et-checker-sub 1)))
+  (let* ((type (et-checker-sub 1))
+         (et-print-labels t)
+         (et-print-narrows t))
     (et-hint nil type)
-    (setq et--checker-expr (cadr et--checker-expr))
     type))
 
 (et-define-pcase-checker :expand spec
@@ -1250,7 +1270,7 @@ Returns a plist with :declare to set the symbol type."
 (et-define-pcase-checker et-defvar `(,symbol ,type-spec . ,_rest)
   (let* ((declared (et-at 2 (et-parse-type type-spec)))
          (actual (et-checker-sub 3)))
-    (put symbol 'et-variable-type declared)
+    (et--declare-variable-type symbol declared)
 
     (or (et-subtype? actual declared)
         (et-err 2 "Expected %s, found %s" declared actual))

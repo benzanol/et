@@ -1,64 +1,98 @@
 ;;; Place machinery
 
-;; Type checking `setf' revolves around WRITE TYPES: the type of values
-;; that may be stored into a place. Reading a place is never this
-;; file's concern -- a place expression appearing as a value is checked
-;; by the ordinary function definitions in the other files.
+;; Type checking `setf' revolves around assignments to places. Reading
+;; a place is never this file's concern -- a place expression appearing
+;; as a value is checked by the ordinary function definitions in the
+;; other files.
 ;;
 ;; Every settable function is given a "place checker" here, so that all
 ;; of the setf behavior lives in this one file. A place checker runs
 ;; exactly like an ordinary checker -- with `et--checker-expr' bound to
-;; the place expression -- and returns the place's write type. Inside a
-;; place checker, `et-checker-sub' checks an argument as a plain value,
-;; while `et--check-place-sub' resolves an argument which is itself a
-;; place (a container the setter stores a new value back into, like the
-;; plist argument of `plist-get').
+;; the place expression -- and receives the type being assigned. It
+;; validates that assignment and returns the place's write type. Inside
+;; a place checker, `et-checker-sub' checks an argument as a plain value,
+;; while `et--check-place-sub' checks assigning a type to an argument
+;; which is itself a place (a container the setter stores a new value
+;; back into, like the plist argument of `plist-get').
 
 (defmacro et--define-place-checker (func &rest body)
   "Define BODY as the place checker of FUNC.
-BODY should return the write type of the place, or nil after reporting
-an error."
+BODY runs with ASSIGN-TYPE bound to the assigned type and should validate
+it, then return the write type of the place."
   (declare (indent 1))
   (cl-assert (symbolp func))
-  `(setf (get ',func 'et-place-checker) (lambda () ,@body)))
+  `(setf (get ',func 'et-place-checker) (lambda (assign-type) ,@body)))
 
-(defun et--check-place-sub (&rest path)
-  "Resolve the sub-expression at PATH as a place, returning its write type.
-Returns nil after reporting an error if it is not a valid place."
+
+;;;; Check places
+
+(defun et--check-place-assignment (assign-type write-type &optional path)
+  "Check that ASSIGN-TYPE can be stored in WRITE-TYPE, then return WRITE-TYPE."
+  (when (and write-type (not (et-subtype? assign-type write-type)))
+    (et-err path "Expected %s, found %s" write-type assign-type))
+  write-type)
+
+(defun et--check-place-sub (assign-type &rest path)
+  "Check assigning ASSIGN-TYPE to the place at PATH and return its write type.
+Returns nil after reporting an error if the expression is not a valid place."
   (let* ((flat (flatten-tree path))
          (expr (et--traverse-tree et--checker-expr flat)))
     (et-at flat
       (pcase expr
-        ;; A variable place: the write type is the variable's current
-        ;; type, as in the `setq' checker. A global variable's write
-        ;; type is its declared `@variable' type.
+        ;; A variable place accepts its original declared/inferred type,
+        ;; regardless of its current control-flow narrowing.
         ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
-         (if-let* ((var (et-get-symbol-var sym)))
-             (et-current-var-type var)
-           (or (get sym 'et-variable-type)
-               (et-err nil "Assignment to free variable"))))
+         (let* ((var (or (et-get-symbol-var sym) (get sym 'et-variable-var)))
+                (write-type (or (when var (et-var-type var))
+                                (get sym 'et-variable-type))))
+           (if (not write-type)
+               (et-err nil "Assignment to free variable")
+             (et--check-place-assignment assign-type write-type)
+             (when var (et-invalidate-var-narrows var assign-type))
+             write-type)))
         (`(,(and head (pred symbolp)) . ,_)
          (if-let* ((checker (get head 'et-place-checker)))
              (let* ((et--checker-expr expr))
-               (funcall checker))
+               (funcall checker assign-type))
            (et-err nil "Not a settable place: `%s'" head)))
         (_ (et-err nil "Invalid place: %s" expr))))))
+
+(defun et--setf-checker ()
+  "Check the place/value pairs in `et--checker-expr' and return the last value type."
+  (cl-loop with val-type = (et Nil)
+           for (_place _val) on (cdr et--checker-expr) by #'cddr
+           for place-pos upfrom 1 by 2
+           do (setq val-type (et-checker-sub (1+ place-pos)))
+           do (et--check-place-sub val-type place-pos)
+           finally return val-type))
+
+
+;;;; setq tests
+
+(et-declare
+ (@variable et--eval-test-variable Integer)
+ (@variable et--eval-test-list List<Integer>))
+
+(et-test
+ ;; `setq' returns the assigned value's type, just like `setf'.
+ (et-assert-resolve 5 (setq et--eval-test-variable 5))
+ (et-assert-resolve-errors (setq et--eval-test-variable "s"))
+ (et-assert-resolve-errors (setq et--eval-free-variable 5))
+ ;; Assignment invalidates an incompatible branch narrowing.
+ (et-assert-no-resolve Nil
+   (if et--eval-test-list
+       nil
+     (setq et--eval-test-list (list 1))
+     (when et--eval-test-list (car et--eval-test-list)))))
 
 
 ;;;; setf
 
-;; (setf PLACE VAL ...) checks each VAL against its PLACE's write type,
-;; and returns the last VAL.
+;; (setf PLACE VAL ...) checks each VAL, then checks assigning it to
+;; PLACE, and returns the last VAL.
 
 (et-define-pcase-checker setf (and args (guard (eq 0 (mod (length args) 2))))
-  (cl-loop with val-type = (et Nil)
-           for (_place _val) on args by #'cddr
-           for place-pos upfrom 1 by 2
-           for write-type = (et--check-place-sub place-pos)
-           do (setq val-type (et-checker-sub (1+ place-pos)))
-           when (and write-type (not (et-subtype? val-type write-type)))
-           do (et-err (1+ place-pos) "Expected %s, found %s" write-type val-type)
-           finally return val-type))
+  (et--setf-checker))
 
 (et-test
  ;; A variable place, like `setq'
@@ -170,12 +204,18 @@ whichever case the container turns out to be. A nil-only TYPE yields
       ('nil (et-any))
       (_ (apply #'et--supersect facets)))))
 
-(et--define-place-checker car (et--place-cons-slots 'car))
-(et--define-place-checker cdr (et--place-cons-slots 'cdr))
-(et--define-place-checker caar (et--place-cons-slots 'caar))
-(et--define-place-checker cadr (et--place-cons-slots 'cadr))
-(et--define-place-checker cdar (et--place-cons-slots 'cdar))
-(et--define-place-checker cddr (et--place-cons-slots 'cddr))
+(et--define-place-checker car
+  (et--check-place-assignment assign-type (et--place-cons-slots 'car)))
+(et--define-place-checker cdr
+  (et--check-place-assignment assign-type (et--place-cons-slots 'cdr)))
+(et--define-place-checker caar
+  (et--check-place-assignment assign-type (et--place-cons-slots 'caar)))
+(et--define-place-checker cadr
+  (et--check-place-assignment assign-type (et--place-cons-slots 'cadr)))
+(et--define-place-checker cdar
+  (et--check-place-assignment assign-type (et--place-cons-slots 'cdar)))
+(et--define-place-checker cddr
+  (et--check-place-assignment assign-type (et--place-cons-slots 'cddr)))
 
 (et-test
  (et-assert-resolve 2
@@ -210,15 +250,18 @@ whichever case the container turns out to be. A nil-only TYPE yields
 
 (et--define-place-checker nth
   (et-checker-resolve 'Integer 1)
-  (et--place-write-slot (et-checker-sub 2) 'list-elem 2))
+  (et--check-place-assignment
+   assign-type (et--place-write-slot (et-checker-sub 2) 'list-elem 2)))
 
 (et--define-place-checker aref
   (et-checker-resolve 'Integer 2)
-  (et--place-write-slot (et-checker-sub 1) 'array-elem 1))
+  (et--check-place-assignment
+   assign-type (et--place-write-slot (et-checker-sub 1) 'array-elem 1)))
 
 (et--define-place-checker elt
   (et-checker-resolve 'Integer 2)
-  (et--place-write-slot (et-checker-sub 1) 'elem 1))
+  (et--check-place-assignment
+   assign-type (et--place-write-slot (et-checker-sub 1) 'elem 1)))
 
 (et-test
  (et-assert-resolve 5
@@ -265,15 +308,17 @@ contributes `Any', since storing into it is unconstrained."
 
 (et--define-place-checker symbol-value
   (et-checker-resolve 'Symbol 1)
-  (et--place-symbol-write (et-checker-sub 1) 'et-variable-type))
+  (et--check-place-assignment
+   assign-type (et--place-symbol-write (et-checker-sub 1) 'et-variable-type)))
 
 (et--define-place-checker get
   (et-checker-resolve 'Symbol 1)
-  (et--place-symbol-write (et-checker-sub 2) 'et-symbol-property-type))
+  (et--check-place-assignment
+   assign-type (et--place-symbol-write (et-checker-sub 2) 'et-symbol-property-type)))
 
 (et--define-place-checker symbol-function
   (et-checker-resolve 'Symbol 1)
-  (et-any))
+  (et--check-place-assignment assign-type (et-any)))
 
 (et-declare
  (@variable et--gv-test-variable Integer)
@@ -301,19 +346,17 @@ contributes `Any', since storing into it is unconstrained."
 ;; plist (KEY v), which must fit the place on its own.
 
 (et--define-place-checker plist-get
-  (when-let* ((write-type (et--check-place-sub 1))
-              (key-type (et--remove-type-binds (et-checker-sub 2)))
-              (val-write (et--plist-lookup write-type key-type
-                                           (lambda (fmt &rest args) (apply #'et-err 0 fmt args)))))
-    (let* ((read-type (et--remove-type-binds (et-checker-sub 1)))
-           (fresh-plist (et-alias 'Cons key-type (et-alias 'Cons val-write (et-literal nil)))))
-      (unless (et-subtype? (et--non-nil read-type) write-type)
-        (et-err 1 "Cannot store %s back into a place expecting %s" read-type write-type))
-      (unless (or (et-never-p (et--supersect read-type (et Nil)))
-                  (et-subtype? fresh-plist write-type))
-        (et-err 1 "Cannot store the new plist %s into a place expecting %s"
-                fresh-plist write-type))
-      val-write)))
+  (let* ((key-type (et--remove-type-binds (et-checker-sub 2)))
+         (read-type (et--remove-type-binds (et-checker-sub 1)))
+         (non-nil-read (et--non-nil read-type))
+         (nil-possible (not (et-never-p (et--supersect read-type (et Nil)))))
+         (fresh-plist (et-alias 'Cons key-type (et-alias 'Cons assign-type (et-literal nil))))
+         (stored-type (if nil-possible (et--or non-nil-read fresh-plist) non-nil-read)))
+    (when-let* ((write-type (et--check-place-sub stored-type 1))
+                (val-write (et--plist-lookup
+                            write-type key-type
+                            (lambda (fmt &rest args) (apply #'et-err 0 fmt args)))))
+      (et--check-place-assignment assign-type val-write))))
 
 (et-test
  (et-assert-resolve List<Integer>
@@ -338,17 +381,14 @@ contributes `Any', since storing into it is unconstrained."
 ;; fresh entry must fit back into the alist's place.
 
 (et--define-place-checker alist-get
-  (when-let* ((al-write (et--check-place-sub 2))
-              (entry-type (or (et-checker-infer al-write [C] ListR<C> C)
-                              (et-err 2 "Expected an alist place, found %s" al-write)))
-              (val-write (et--place-write-slot entry-type 'cdr 2)))
-    (let* ((key-type (et--remove-type-binds (et-checker-sub 1)))
-           (al-read (et--remove-type-binds (et-checker-sub 2)))
-           (new-alist (et-dt 'ConsFresh (et-dt 'ConsFresh key-type val-write) al-read)))
-      (unless (et-subtype? new-alist al-write)
-        (et-err 2 "Cannot store a new (%s . %s) entry into a place expecting %s"
-                key-type val-write al-write))
-      val-write)))
+  (let* ((key-type (et--remove-type-binds (et-checker-sub 1)))
+         (al-read (et--remove-type-binds (et-checker-sub 2)))
+         (new-alist (et-dt 'ConsFresh (et-dt 'ConsFresh key-type assign-type) al-read)))
+    (when-let* ((al-write (et--check-place-sub new-alist 2))
+                (entry-type (or (et-checker-infer al-write [C] ListR<C> C)
+                                (et-err 2 "Expected an alist place, found %s" al-write)))
+                (val-write (et--place-write-slot entry-type 'cdr 2)))
+      (et--check-place-assignment assign-type val-write))))
 
 (et-test
  (et-assert-resolve 5
@@ -385,12 +425,10 @@ contributes `Any', since storing into it is unconstrained."
 When INCLUDE-OLD, the place may also keep its old value (`cl-pushnew').
 Returns the stored type, which is also the macro's return type."
   (let* ((val-type (et--remove-type-binds (et-checker-sub 1)))
-         (write-type (et--check-place-sub 2))
          (read-type (et--remove-type-binds (et-checker-sub 2)))
          (new-type (et-dt 'ConsFresh val-type read-type))
          (new-type (if include-old (et--or new-type read-type) new-type)))
-    (when (and write-type (not (et-subtype? new-type write-type)))
-      (et-err 1 "Cannot push %s onto a place expecting %s" val-type write-type))
+    (et--check-place-sub new-type 2)
     new-type))
 
 (et-define-pcase-checker push `(,_val ,_place)
@@ -428,16 +466,12 @@ Returns the stored type, which is also the macro's return type."
 ;; matchers that type `car' and `cdr' themselves (see data.c.el).
 
 (et-define-pcase-checker pop `(,_place)
-  (let* ((write-type (et--check-place-sub 1))
-         (read-type (et--remove-type-binds (et-checker-sub 1)))
+  (let* ((read-type (et--remove-type-binds (et-checker-sub 1)))
          (car-type (et-checker-infer read-type [T] (MatchCar T) T))
          (cdr-type (et-checker-infer read-type [T] (MatchCdr T) T)))
-    (cond
-     ((not (and car-type cdr-type))
-      (et-err 1 "Cannot pop from %s" read-type))
-     ((and write-type (not (et-subtype? cdr-type write-type)))
-      (et-err 1 "Cannot store the tail %s back into a place expecting %s"
-              cdr-type write-type)))
+    (if (not (and car-type cdr-type))
+        (et-err 1 "Cannot pop from %s" read-type)
+      (et--check-place-sub cdr-type 1))
     car-type))
 
 (et-test
@@ -465,7 +499,6 @@ Returns the stored type, which is also the macro's return type."
 
 (defun et--place-arith-type (name)
   (let* ((x? (cddr et--checker-expr))
-         (write-type (et--check-place-sub 1))
          (read-type (et--remove-type-binds (et-checker-sub 1)))
          (x-type (if x? (et--remove-type-binds (et-checker-sub 2)) (et-literal 1)))
          (int (et IntOrMarker))
@@ -475,8 +508,7 @@ Returns the stored type, which is also the macro's return type."
       (et-err 1 "Cannot %s a place of type %s" name read-type))
     (when (and x? (not (et-subtype? x-type (et NumOrMarker))))
       (et-err 2 "Expected NumOrMarker, found %s" x-type))
-    (when (and write-type (not (et-subtype? new-type write-type)))
-      (et-err 1 "Cannot store %s into a place expecting %s" new-type write-type))
+    (et--check-place-sub new-type 1)
     new-type))
 
 (et-define-pcase-checker cl-incf (or `(,_place) `(,_place ,_x))
