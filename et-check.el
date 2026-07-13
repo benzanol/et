@@ -54,7 +54,10 @@
 ;;;; Narrowed bindings
 
 (defvar et--narrow-binds nil
-  "Stack of (`et-var' . `et-type').")
+  "Stack of (`et-var'|nil . `et-type').
+
+If the car of an entry is nil, that means that entry has been
+invalidated.")
 
 (defun et-current-var-type (variable)
   (or (alist-get variable et--narrow-binds)
@@ -78,10 +81,9 @@ VAR, that narrow is now invalid if and only if NEWTYPE is a subtype of
 the narrowed type."
   (cl-loop for bind in et--narrow-binds
            for (bvar . btype) = bind
-           unless (and (eq var bvar)
-                       (not (et-subtype? newtype btype)))
-           collect bind into new-binds
-           finally do (setq et--narrow-binds new-binds)))
+           when (and (eq var bvar)
+                     (not (et-subtype? newtype btype)))
+           do (setcar bind nil)))
 
 
 ;;;; Printing narrows

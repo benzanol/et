@@ -361,10 +361,78 @@
 ;;;; while
 
 ;; A `while' form always evaluates to nil; test and body are still checked.
+;;
+;; The test is re-evaluated before every iteration, so its narrows hold at the
+;; top of every pass through the body, exactly like `when'. Narrows established
+;; *above* the loop are different: they only survive until the body assigns the
+;; variable, which invalidates them for every subsequent iteration.
+;;
+;; So the body is first checked for that invalidation alone: running it makes
+;; each `setq'/`setf' inside kill the outer narrows it invalidates, and those
+;; kills persist afterwards. Such a pass runs without the test's narrows -- the
+;; test hasn't been checked yet, and it couldn't be, since checking it before
+;; the kills would derive the test type from narrows the body destroys. Its
+;; diagnostics are therefore unreliable, so it is wrapped in a result boundary
+;; and discarded.
+;;
+;; One such pass is not enough, because a kill can depend on a narrow that a
+;; later kill destroys:
+;;
+;;     (while ...
+;;       (setq prev node)              ; `node' still narrowed here, so `prev'
+;;                                     ; keeps its narrow...
+;;       (setq node (node-next node)))  ; ...but this kills `node's narrow, so on
+;;                                     ; the next iteration `prev' inherits a
+;;                                     ; value that `node's narrow excluded
+;;
+;; So the pass is repeated until it stops killing anything. Narrows are only
+;; ever invalidated, never added, so the count of live ones decreases
+;; monotonically and this terminates -- and for the common body that assigns
+;; nothing, the first pass kills nothing and it stops immediately.
+;;
+;; Only once the narrows have settled are the test and the real body checked.
 (et-define-pcase-checker while `(,_test . ,_body)
-  (et-checker-sub 1)
-  (et-checker-remaining 2)
+  (cl-loop with prev-live = nil
+           for live = (cl-count-if #'car et--narrow-binds)
+           until (eql live prev-live)
+           do (setq prev-live live)
+           do (et-result-boundary (et-checker-remaining 2)))
+
+  (let* ((non-nil-test (et--non-nil (et-checker-sub 1))))
+    (et-checker-hint-narrows 0 "WHILE:\\n%s" non-nil-test)
+    (et-with-narrow-binds (et--type-binds non-nil-test)
+      (et-checker-remaining 2)))
+
   (et Nil))
+
+(et-test
+ (et-assert-resolve Nil (while nil "body"))
+ ;; The body sees the test's narrows: the test runs before every iteration
+ (et-assert-resolve Nil
+   (let* ((a String|Number 4))
+     (while (stringp a) (:assert-subtype a String))))
+ ;; A narrow from above the loop survives if the body never invalidates it
+ (et-assert-resolve Nil
+   (let* ((a String|Number 4))
+     (when (stringp a)
+       (while t (:assert-subtype a String)))))
+ ;; ...but not if the body assigns the variable: the assignment has already
+ ;; happened by the time the body is re-entered
+ (et-assert-resolve-errors
+  (let* ((a String|Number 4))
+    (when (stringp a)
+      (while t (:assert-subtype a String) (setq a 5)))))
+ ;; A narrow killed by the body invalidates the narrows that were derived from
+ ;; it earlier in that same body: `b' is assigned from `a' while `a' still looks
+ ;; narrowed, but `a's narrow is killed further down, so `b's must go too
+ (et-assert-resolve-errors
+  (let* ((a String|Integer 0)
+         (b String|Integer 0))
+    (when (and (integerp a) (integerp b))
+      (while t
+        (:assert-subtype b Integer)
+        (setq b a)
+        (setq a "s"))))))
 
 
 ;;; Nonlocal exit
