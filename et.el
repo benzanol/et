@@ -625,7 +625,7 @@ the two args respectively."
 
 ;;;; Datatype matching
 
-(defun et--datatype-constraints (sub-name sub-args super-name super-args co contra iso co-literal mk-super)
+(defun et--datatype-constraints (sub-name sub-args super-name super-args co contra iso co-literal mk-super dyn-fn)
   "Determine when one datatype to be a subtype of another.
 
 Returns an EtMatchResult required for (SUB-NAME SUB-ARGS) to be a
@@ -646,7 +646,13 @@ The ConsFull/PList case is the only one that synthesizes a brand new
 super value (a `ConsR') instead of passing existing super-args to CO.
 Since super-args may be either types or matcher reprs depending on the
 caller, MK-SUPER builds that synthesized super value in the caller's
-language. See `et--cons-is-plist'."
+language. See `et--cons-is-plist'.
+
+DYN-FN (a function or nil) handles a `DynFunction' sub against a
+`Function' super whose args are matcher reprs, which cannot be resolved
+until the matcher's generics are known. It is called with SUB-ARGS and
+SUPER-ARGS and should return an EtMatchResult recording the deferred
+check (see the `R:FN' constraint)."
   (cl-flet ((valid-if (valid)
               (if valid (make-et-match-result :success t)
                 (et--failed-match-result))))
@@ -676,15 +682,19 @@ language. See `et--cons-is-plist'."
       (`(VectorFresh VectorFull) (funcall co (car sub-args) (car super-args)))
 
       (`(DynFunction Function)
-       (if-let* ((func-input (car super-args))
-                 (func-output (cadr super-args))
-                 ((and (et-type-p func-input) (et-type-p func-output)))
-                 (dyn-result (et-funcall (apply #'et-dt 'DynFunction sub-args)
-                                         (car super-args)))
-                 ((et-match-result-success dyn-result))
-                 ((et-subtype? (et-match-result-value dyn-result) func-output)))
-           (valid-if t)
-         (valid-if nil)))
+       (let* ((func-input (car super-args))
+              (func-output (cadr super-args)))
+         (cond
+          ;; We can use a simple funcall + subtype approach
+          ((and (et-type-p func-input) (et-type-p func-output))
+           (let* ((dyn-result (et-funcall (apply #'et-dt 'DynFunction sub-args) func-input)))
+             (valid-if (and (et-match-result-success dyn-result)
+                            (et-subtype? (et-match-result-value dyn-result) func-output)))))
+          ;; The super args are matcher reprs; defer the check to
+          ;; constraint satisfaction, once the generics are known.
+          (dyn-fn (funcall dyn-fn sub-args super-args))
+          ;; This is never actually reached in the current codebase
+          (t (valid-if nil)))))
 
       (`(,_ NonNil) (valid-if (not (eq sub-name 'Symbol))))
       (`(,_ Symbol) (valid-if (memq sub-name '(NonNilSymbol Var))))
@@ -1311,7 +1321,15 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          (lambda (type ms) (et--iso-constraints (make-matcher ms) type))
          (lambda (literal ms) (et--sub-constraints-0 (make-matcher ms) (et-literal literal)))
          ;; The synthesized super (PList side, m-args) is a matcher repr
-         #'et--cons-plist-super-matcher)
+         #'et--cons-plist-super-matcher
+         ;; A DynFunction type against a Function matcher factor can only
+         ;; be resolved once the matcher's generics are known, so record
+         ;; an R:FN constraint for constraint satisfaction.
+         (lambda (dyn-args fn-args)
+           (make-et-match-result
+            :success t
+            :value (list (list 'R:FN (car dyn-args) (cadr dyn-args)
+                               (car fn-args) (cadr fn-args))))))
       ;; supertype matching (sub=MATCHER < super=TYPE)
       (et--datatype-constraints
        m-name m-args t-name t-args
@@ -1322,7 +1340,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          (let ((literal-m (make-matcher (et-make-mr (et-q (((S:DT Literal ,literal))))))))
            (et--super-constraints-0 literal-m type)))
        ;; The synthesized super (PList side, t-args) is a type
-       #'et--cons-plist-super-type))))
+       #'et--cons-plist-super-type
+       nil))))
 
 
 ;;;; Super constraints
@@ -1400,8 +1419,15 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          (Tuple (or @Q:EQ @Q:GEQ @Q:LEQ) EtGeneric *et-type))
  (@alias EtNoinferConstraint
          (Tuple (or @R:LEQ @R:GEQ) *et-repr<@TYPE> *et-type))
+ (@alias EtMatchFunctionConstraint
+         (Tuple @R:FN
+                ;; The DynFunction matcher and output (sub)
+                *et-matcher *et-repr<@TYPE>
+                ;; The Function input and output (super)
+                *et-repr<@TYPE> *et-repr<@TYPE>))
  (@alias EtMatchConstraint
-         (or EtTypeConstraint EtNoinferConstraint))
+         (or EtTypeConstraint EtNoinferConstraint
+             EtMatchFunctionConstraint))
 
  (@alias EtBRFactor
          (or (TupleStar @S:DT EtDatatypeName List<Any>)
@@ -2293,7 +2319,8 @@ same as [T (<= T Number)]."
              (lambda (a b) (valid-if (et--subtype?-0 b a)))
              (lambda (a b) (valid-if (and (et--subtype?-0 a b) (et--subtype?-0 b a))))
              (lambda (literal b) (valid-if (and (et--subtype?-0 (et-literal literal) b))))
-             #'et--cons-plist-super-type)))
+             #'et--cons-plist-super-type
+             nil)))
 
       (et-match-result-success result))))
 
@@ -2706,7 +2733,61 @@ types to be the never type."
             (let* ((replaced (et-repr-to-type tr gen-repls))
                    (valid? (if (eq fact 'R:LEQ) (et-subtype? replaced type) (et-subtype? type replaced))))
               (unless valid? (cl-return 'INVALID)))
-            finally return (mapcar #'cdr gen-repls))))
+            finally return (et--match-satisfy-fn-constraints constraints gen-repls))))
+
+(defun et--match-satisfy-fn-constraints (constraints gen-repls)
+  "Process the `R:FN' constraints in CONSTRAINTS, with known generics.
+
+Each constraint is (R:FN DYN-MATCHER DYN-OUT-REPR FN-IN-MR FN-OUT-MR),
+recorded when a `DynFunction' type was matched against a `Function'
+matcher factor. With GEN-REPLS now determined, FN-IN-MR resolves to a
+concrete arglist type, the DynFunction infers its output for that
+arglist, and FN-OUT-MR must accommodate that output: a bare generic is
+enlarged to include it (rechecking that generic's upper bounds),
+anything else must already be a supertype of it.
+
+Returns the final list of generic types, or `INVALID'."
+  (declare (et (constraints List<EtMatchConstraint>)
+               (gen-repls AList<EtGeneric~*et-type>)
+               (@return List<*et-type>|@INVALID)))
+
+  (cl-flet ((to-type (repr)
+              ;; The reprs come from a matcher, so they can contain
+              ;; factors which are invalid in a type (like S:SET), in
+              ;; which case the match should simply fail.
+              (condition-case-unless-debug nil (et-repr-to-type repr gen-repls)
+                (error 'INVALID))))
+
+    (cl-loop
+     for q in constraints
+     when (eq (car q) 'R:FN)
+     do
+     (pcase-let* ((`(,_ ,dyn-matcher ,dyn-out-repr ,fn-in-mr ,fn-out-mr) q)
+                  (input (to-type fn-in-mr))
+                  (result (unless (eq input 'INVALID)
+                            (et-infer dyn-matcher input dyn-out-repr))))
+       (unless (and result (et-match-result-success result)) (cl-return 'INVALID))
+
+       (pcase (et-repr-dnf fn-out-mr)
+         ;; A bare generic output: enlarge the generic to include the
+         ;; inferred output, rechecking its upper bounds
+         (`(((S:GENERIC ,var)))
+          (let* ((entry (or (assq var gen-repls) (cl-return 'INVALID)))
+                 (enlarged (et-simplify-type (et--or (cdr entry) (et-match-result-value result)))))
+            (unless (cl-loop for (fact g type) in constraints
+                             always (or (not (eq g var))
+                                        (not (memq fact '(Q:EQ Q:LEQ)))
+                                        (et-subtype? enlarged type)))
+              (cl-return 'INVALID))
+            (setcdr entry enlarged)))
+         ;; Otherwise the output is fixed, so it must already be a
+         ;; supertype of the inferred output
+         (_ (let* ((out-type (to-type fn-out-mr)))
+              (unless (and (not (eq out-type 'INVALID))
+                           (et-subtype? (et-match-result-value result) out-type))
+                (cl-return 'INVALID))))))
+
+     finally return (mapcar #'cdr gen-repls))))
 
 
 ;;;; Binds utils
