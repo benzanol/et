@@ -71,7 +71,7 @@
             "-l" "et-cache"
             "--eval" (eval (format "(et-process-directory %S :eval t)"
                                    (expand-file-name "definitions" et-source-directory)))
-            "--eval" (eval (format "(et-flycheck-check-file %S %S :check t :test %S)"
+            "--eval" (eval (format "(et-flycheck-check-file %S %S :eval t :check t :test %S)"
                                    (buffer-file-name) (et--flycheck-temp-file)
                                    et-flycheck-do-test)))
   :error-patterns

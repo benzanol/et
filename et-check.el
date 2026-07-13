@@ -695,7 +695,7 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
                (@return EtBR)))
   (cond
    (req (et-repr ConsR ,(car req) ,(et--params-to-input-repr (cdr req) opt rest)))
-   (opt (et-repr or Nil (ConsR ,(car opt) ,(et--params-to-input-repr nil (cdr opt) rest))))
+   (opt (et-repr or Nil (ConsR (or Nil ,(car opt)) ,(et--params-to-input-repr nil (cdr opt) rest))))
    (t rest)))
 
 (et-test
@@ -1064,7 +1064,7 @@ Returns a plist with :declare to set the symbol type."
   (let* ((identified (et-result-map #'et--identify-expr exprs)))
 
     ;; Evaluate the buffer
-    ;; This must occur first, in case the buffer defines custom type keywords
+    ;; This must occur first, in case the buffer defines custom type keywords, macros, etc
     (when (or test eval)
       (cl-loop for expr in exprs
                for pos upfrom 0
