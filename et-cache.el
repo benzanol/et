@@ -726,7 +726,7 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
     (when et--fp-active
       (cl-pushnew spec et--fp-specs :test #'equal))))
 
-(defun et--cache-capture-function (expr)
+(defun et--cache-capture-function (expr &rest _)
   "Advice on `et--check': record a called typed function as a dependency."
   (et--cache-try
     (when (and et--fp-active (consp expr)
@@ -771,7 +771,7 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 
 ;;;; Cached check
 
-(defun et--check-cached (orig expr)
+(defun et--check-cached (orig expr &optional recommendation)
   "Around advice on `et--check' implementing the defun cache.
 
 For a root defun with a parsed signature, return its cached result when
@@ -782,7 +782,7 @@ pass straight through to ORIG."
                 (eq (car-safe expr) 'defun)
                 (symbolp (cadr expr))
                 (get (cadr expr) 'et-function-signature)))
-      (funcall orig expr)
+      (funcall orig expr recommendation)
 
     ;; Guarded lookup: a fresh, fingerprint-valid entry is wrapped in a
     ;; list so a hit (any value, even nil) is distinguishable from a miss
@@ -810,7 +810,7 @@ pass straight through to ORIG."
          (let* ((et--fp-active t)
                 (et--fp-specs nil)
                 (et--fp-funcs nil)
-                (result (et-result-boundary (funcall orig expr))))
+                (result (et-result-boundary (funcall orig expr recommendation))))
            (et--cache-try
              (puthash name
                       (make-et--cached-defun
