@@ -1886,6 +1886,17 @@ which are invalid for types."
 (et--define-spec-segment Nil S:DT () (list 'Literal nil))
 (et--define-spec-segment True S:DT () (list 'Literal t))
 
+(et--define-spec-segment fn S:DT (&rest args)
+  (let* ((gen-vec (when (vectorp (car args)) (pop args)))
+         (in (or (pop args) 'Nil))
+         (out (or (pop args) 'Any)))
+    (or (null args) (error "Too many arguments for `fn'"))
+    (if gen-vec
+        (list 'DynFunction (et-parse-matcher in gen-vec et--parsing-generics)
+              (et-parse-repr out (append (et--gen-vec-generics gen-vec) et--parsing-generics)
+                             'TYPE))
+      (list 'Function (et--parse-sub in) (et--parse-sub out)))))
+
 (et--define-spec-segment Never :full () nil)
 (et--define-spec-segment or :full (&rest args)
   (let* ((ps (mapcar #'et--parse-sub args))
@@ -2212,7 +2223,7 @@ which are invalid for types."
   `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
                      ,gen-vec))
 
-(defun et-parse-matcher (spec gen-vec)
+(defun et-parse-matcher (spec gen-vec &optional extra-gens)
   "Parse SPEC as an `et-matcher' with GEN-VEC.
 
 GEN-VEC is a list of symbols and constraint specs. A constraint
@@ -2228,7 +2239,8 @@ same as [T (<= T Number)]."
     (make-et-matcher
      :generics generics
      :constraints (et--gen-vec-constraints gen-vec)
-     :repr (et-parse-repr spec generics 'MATCHER))))
+     :repr (et-parse-repr spec (append generics extra-gens)
+                          'MATCHER))))
 
 (defun et-pp-matcher (matcher)
   "Format an `et-matcher' into a human-readable string."
