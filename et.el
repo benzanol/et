@@ -3211,6 +3211,9 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias True [] (Literal t))
 (et-defalias Boolean [] (or (Literal nil) (Literal t)))
 
+;; All functions are a subtype of AnyFn
+(et-defalias AnyFn [] (Function Never Any))
+
 ;; ConsR/ListR/*R can be thought of as "read only references" to a
 ;; type. It is merely a shortcut for "[(T <= Number)] List<T>" for
 ;; function parameters. Actual data, such as return values from

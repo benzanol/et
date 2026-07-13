@@ -1003,6 +1003,18 @@ Returns a plist with :declare to set the variable type."
   (et-literal name))
 
 
+;;;; Identify checker directive
+
+(defun et--identify-checker-directive (form)
+  (pcase (cdr form)
+    (`(,(and sym (pred symbolp)) ,(and arglist (pred listp)) . ,body)
+     (let* ((fn `(lambda ,arglist ,@body)))
+       `(:declare
+         ,(lambda ()
+            (put sym 'et-checker (lambda () (apply fn et--checker-expr)))))))
+    (_ (et-fatal nil "Expected format (@checker NAME ARGLIST BODY...)"))))
+
+
 ;;;; Get/put types
 
 (defun et--identify-symbol-property-directive (form)
@@ -1056,7 +1068,8 @@ Returns a plist with :declare to set the symbol type."
              (`(@variable . ,_) (et--identify-variable-directive form))
              (`(@function . ,_) (et--identify-function-directive form))
              (`(@macro . ,_) (et--identify-macro-directive form))
-             (`(@symbol-property . ,_) (et--identify-symbol-property-directive form))))
+             (`(@symbol-property . ,_) (et--identify-symbol-property-directive form))
+             (`(@checker . ,_) (et--identify-checker-directive form))))
          collect
          (cons pos plist)))
 
@@ -1351,15 +1364,24 @@ heuristic is by searching (using `equal') for each nested call to
 
 (advice-add #'et--check :around #'et--macroexpand-check-advice)
 
-(defun et-macroexpand-checker ()
-  "Type checker which expands a macro and type-checks the expansion."
+(defun et-checker-expansion (expanded &optional recommendation)
+  "Type check EXPANSION, an expr which was built from the current expr.
 
-  (let* ((expanded (macroexpand-1 et--checker-expr))
-         ;; Only the very root macroexpand expr exists in the actual code.
+EXPANSION is not literally present in the current expression, but it was
+built from the current expression, so parts of the current expression
+probably exist somewhere inside of EXPANSION, and should be mapped back
+onto the original expression."
+  (let* (;; Only the very root macroexpand expr exists in the actual code.
          ;; If we get another expansion inside an expansion, keep the original root-level expr
          (et--macroexpand-expr (or et--macroexpand-expr et--checker-expr)))
     (et-with-sticky-path
-     (et--check expanded))))
+     (et--check expanded recommendation))))
+
+(defun et-macroexpand-checker ()
+  "Type checker which expands a macro and type-checks the expansion."
+  (unless (macrop (car et--checker-expr))
+    (et-fatal 0 "Macro not defined: %s" (car et--checker-expr)))
+  (et-checker-expansion (macroexpand-1 et--checker-expr)))
 
 
 ;;;; Progn/prog1 checkers
