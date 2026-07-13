@@ -465,12 +465,12 @@
     (if (et-type-p output-type) output-type
       (et-err 0 "Cannot apply %s with args %s" func-type args-type))))
 
-(et-define-checker funcall
-  (let* ((func-type (et-checker-sub 1))
-         (args-type (et--tuple 'ConsR (et-checker-remaining 2)))
-         (output-type (et-checker-funcall func-type args-type)))
-    (if (et-type-p output-type) output-type
-      (et-err 0 "Cannot call %s with args %s" func-type args-type))))
+(et-declare
+ (@function funcall (function &rest arguments)
+            (@generics [A R])
+            (function (fn A R))
+            (arguments A)
+            (@return R)))
 
 (et-test
  (et-assert-resolve Integer (funcall (lambda ([x Integer] [y Integer]) x) 1 2))
