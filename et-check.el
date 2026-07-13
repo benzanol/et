@@ -729,7 +729,27 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
                (@return EtBR)))
   (cond
    (req (et-repr ConsR ,(car req) ,(et--params-to-input-repr (cdr req) opt rest)))
-   (opt (et-repr or Nil (ConsR (or Nil ,(car opt)) ,(et--params-to-input-repr nil (cdr opt) rest))))
+   (opt
+    ;; The remaining optional/rest arguments may contain generics.
+    ;; In the tail=Nil case, all of these generics should be assigned to nil.
+    ;;
+    ;; This will create some crazy looking parameter types if there
+    ;; are generics deep in the optional parameters, but it is
+    ;; required so that those generics will be correctly inferred as
+    ;; Nil rather than Never.
+    (cl-loop for repr in (append opt (list rest))
+             ;; Only if the repr is JUST a generic
+             when (pcase repr ((cl-struct et-repr (dnf `(((S:GENERIC ,_))))) t))
+             collect repr into gen-reprs
+             finally return
+             (let* ((tail (et--params-to-input-repr nil (cdr opt) rest))
+                    (type-if-provided
+                     ;; Normally the type is Type|Nil, but if the type is a generic, no need for that
+                     (if (pcase (car opt) ((cl-struct et-repr (dnf `(((S:GENERIC ,_))))) t))
+                         (car opt)
+                       `(or Nil ,(car opt)))))
+               (et-repr or (and Nil ,@gen-reprs)
+                        (ConsR ,type-if-provided ,tail)))))
    (t rest)))
 
 (et-test
