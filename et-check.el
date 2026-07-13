@@ -1218,6 +1218,15 @@ Returns a plist with :declare to set the symbol type."
          (declared (et-parse-type type-spec)))
     declared))
 
+(et-define-pcase-checker et-defvar `(,symbol ,type-spec . ,_rest)
+  (let* ((declared (et-at 2 (et-parse-type type-spec)))
+         (actual (et-checker-sub 3)))
+    (put symbol 'et-variable-type declared)
+
+    (or (et-subtype? actual declared)
+        (et-err 2 "Expected %s, found %s" declared actual))
+    (et Literal ,symbol)))
+
 
 ;;;; Pcase et-*
 

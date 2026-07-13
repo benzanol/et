@@ -390,7 +390,7 @@ function returns nil."
                  for v = (plist-get plist-args k)
                  if v collect v
                  else do (funcall error-fn "Key %s not found in %s"
-                                  (et-pp (et-literal k)) (et-pp plist-type))
+                                  k (et-pp plist-type))
                  and return nil)))
     (apply #'et--or val-types)))
 

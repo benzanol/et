@@ -170,7 +170,9 @@ expression that is not actually in the buffer, ensure that
 (et--define-diagnostics-function et-hint hint)
 
 (defun et-fatal (relative fmt &rest args)
-  (et-at relative (error "%s" (if args (apply #'format fmt args) fmt))))
+  (et-at relative
+    (error "%s" (if args (apply #'format fmt (mapcar #'et-pp args))
+                  (et-pp fmt)))))
 
 
 ;;;; Boundaries
@@ -711,7 +713,7 @@ language. See `et--cons-is-plist'."
       ((guard (eq sub-name super-name))
        ;; Datatypes of the same type (except PList and Struct) should have the same number of arguments
        (unless (eq (length sub-args) (length super-args))
-         (error "Arg length mismatch: %s %s %s %s" sub-name sub-args super-name super-args))
+         (et-fatal nil "Arg length mismatch: %s %s %s %s" sub-name sub-args super-name super-args))
        (cl-loop for sub-arg in sub-args
                 for super-arg in super-args
                 for role in (et--datatype-arg-roles super-name super-args)

@@ -174,6 +174,25 @@
  (et-assert-resolve String|Integer|Nil (xor "a" 5)))
 
 
+;;; Hooks
+
+;; These deliberately do not inspect the hook variable's type: the hook
+;; is just a symbol, and the function is any function.
+(et-declare
+ (@function add-hook (hook function &optional depth local)
+            (hook Symbol) (function Function<Never~Any>) (depth Integer|Boolean) (local Any)
+            (@return Any))
+ (@function remove-hook (hook function &optional local)
+            (hook Symbol) (function Function<Never~Any>) (local Any)
+            (@return Any)))
+
+(et-test
+ (et-assert-resolve Any (add-hook 'my-hook #'ignore))
+ (et-assert-resolve Any (remove-hook 'my-hook #'ignore))
+ (et-assert-resolve-errors (add-hook "my-hook" #'ignore))
+ (et-assert-resolve-errors (add-hook 'my-hook 5)))
+
+
 ;;; Macros
 
 ;; `if-let' and the `when-let' family all macroexpand into `if-let*', so

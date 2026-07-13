@@ -36,6 +36,13 @@
 (defmacro et-declare (&rest _) nil)
 (defmacro et-test (&rest _) nil)
 
+(defmacro et-defvar (symbol _type &rest rest)
+  "Expands to a normal defvar, but with a place for a type annotation.
+
+\(fn SYMBOL TYPE &optional INITVALUE DOCSTRING)"
+  (declare (indent 2) (doc-string 4))
+  `(defvar ,symbol . ,rest))
+
 (unless (alist-get 'et defun-declarations-alist)
   (setf (alist-get 'et defun-declarations-alist) (list #'ignore)))
 

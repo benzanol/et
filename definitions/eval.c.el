@@ -161,11 +161,23 @@
 (et-define-pcase-checker setq (and args (guard (eq 0 (mod (length args) 2))))
   (cl-loop for (var-sym _val) on args by #'cddr
            for var-pos upfrom 1 by 2
-           for var = (or (et-get-symbol-var var-sym)
-                         (et-err var-pos "Assignment to free variable"))
-           for type = (if var (et-current-var-type var) (et Any))
+           for var = (et-get-symbol-var var-sym)
+           for type = (cond (var (et-current-var-type var))
+                            ;; A global variable with a declared type
+                            ((get var-sym 'et-variable-type))
+                            (t (et-err var-pos "Assignment to free variable")
+                               (et Any)))
            do (et-checker-resolve type (1+ var-pos))
            finally return (if var (et-add-typeof type var) type)))
+
+(et-declare
+ (@variable et--eval-test-variable Integer))
+
+(et-test
+ ;; `setq' returns the variable's type, as it does for local variables
+ (et-assert-resolve Integer (setq et--eval-test-variable 5))
+ (et-assert-resolve-errors (setq et--eval-test-variable "s"))
+ (et-assert-resolve-errors (setq et--eval-free-variable 5)))
 
 
 ;;;; and/or
