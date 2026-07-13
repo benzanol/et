@@ -1036,6 +1036,11 @@ a valid `et-type-case-value'."
            into cases
            finally return (make-et-type :cases cases)))
 
+(defun et-type-single (type)
+  "Assume type is a single case, and extract the case value."
+  (cl-assert (eq 1 (length (et-type-cases type))))
+  (et-type-case-value (car (et-type-cases type))))
+
 (defun et-dt (name &rest args)
   (cl-assert (et--datatype-name? name))
   (et-type (make-et-datatype :name name :args args)))

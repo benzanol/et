@@ -234,18 +234,54 @@
     (if (null then) (et Nil)
       (et--and-return-type cond-type (lambda () (et-checker-tail 2))))))
 
+(defun et--unless-return-type (cond-type checker)
+  ;; The body is evaluated only when the condition is nil.  When the
+  ;; condition is non-nil, `unless' returns nil, not the condition value.
+  (let* ((nil-cond (et--supersect cond-type (et Nil)))
+         (nil-binds (et--type-binds nil-cond))
+         (output-type (et-with-narrow-binds nil-binds (funcall checker)))
+
+         (output-non-nil (et--non-nil output-type))
+         (merged-non-nil-binds
+          (et--intersect-binds nil nil-binds (et--type-binds output-non-nil)))
+
+         (output-nil (et--supersect output-type (et Nil)))
+         (merged-nil-binds
+          (et--intersect-binds nil nil-binds (et--type-binds output-nil)))
+
+         (truthy-cond-nil
+          (et--replace-type-binds (et Nil)
+                                  (et--type-binds (et--non-nil cond-type)))))
+
+    (et--or truthy-cond-nil
+            (et--replace-type-binds output-non-nil merged-non-nil-binds)
+            (et--replace-type-binds output-nil merged-nil-binds))))
+
 (et-define-pcase-checker unless `(,_cond . ,_else)
   (let* ((cond-type (et-checker-sub 1)))
     (et-checker-hint-narrows 0 "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
-    ;; Special case for empty then block because (when cond) always returns nil
-    (et--or-return-type cond-type (lambda () (et-checker-tail 2)))))
+    ;; Special case for empty body because (unless cond) always returns nil
+    (if (null _else) (et Nil)
+      (et--unless-return-type cond-type (lambda () (et-checker-tail 2)))))))
 
 (et-test
  (equal (et String|Nil)
         (et--remove-type-binds
          (et-typecheck
           (let* ((a String|Number 4))
-            (when (stringp a) a))))))
+            (when (stringp a) a)))))
+ (let ((got (et--remove-type-binds
+             (et-typecheck
+              (let* ((a String|Nil "s"))
+                (unless a 1)))))
+       (want (et Integer|Nil)))
+   (and (et-subtype? got want) (et-subtype? want got)))
+ (let ((got (et--remove-type-binds
+             (et-typecheck
+              (let* ((a String|Number|Nil 4))
+                (unless (stringp a) a)))))
+       (want (et Number|Nil)))
+   (and (et-subtype? got want) (et-subtype? want got)))))
 
 
 ;;;; if-let*
