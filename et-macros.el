@@ -40,7 +40,7 @@
   "Expands to a normal defvar, but with a place for a type annotation.
 
 \(fn SYMBOL TYPE &optional INITVALUE DOCSTRING)"
-  (declare (indent 2) (doc-string 4))
+  (declare (indent 3) (doc-string 4))
   `(defvar ,symbol . ,rest))
 
 (unless (alist-get 'et defun-declarations-alist)

@@ -1011,7 +1011,7 @@ Returns a plist with :declare to set the variable type."
      (let* ((fn `(lambda ,arglist ,@body)))
        `(:declare
          ,(lambda ()
-            (put sym 'et-checker (lambda () (apply fn et--checker-expr)))))))
+            (put sym 'et-checker (lambda () (apply fn (cdr et--checker-expr))))))))
     (_ (et-fatal nil "Expected format (@checker NAME ARGLIST BODY...)"))))
 
 

@@ -17,6 +17,12 @@
 (advice-remove #'et--check #'et--macroexpand-check-advice)
 (advice-add #'et--check :around #'et--lambda-macroexpand-check-advice)
 
+(defvar et--lambda-generic-counter 0)
+
+(defun et--lambda-generic ()
+  "Return a fresh interned generic for lambda parameter inference."
+  (intern (format "P%s" (cl-incf et--lambda-generic-counter))))
+
 (defun et--lambda-function-parts (function-type)
   "Return FUNCTION-TYPE's input and output types, or nil.
 
@@ -44,9 +50,9 @@ matcher used for declarations.  Its inferred generic values are the
 types of ARGLIST's required, optional, keyword, and rest parameters."
   (when-let* ((parts (et--lambda-function-parts function-type)))
     (pcase-let* ((`(,required ,optional ,keys ,rest)
-                  (et--parse-arglist-params arglist))
+                 (et--parse-arglist-params arglist))
                  (params (append required optional keys rest))
-                 (generics (cl-loop for _param in params collect (make-symbol "lambda-param")))
+                 (generics (cl-loop for _param in params collect (et--lambda-generic)))
                  (param-reprs
                  (cl-loop for param in params
                            for generic in generics
@@ -99,18 +105,48 @@ types of ARGLIST's required, optional, keyword, and rest parameters."
 
 (defun et--lambda-check-recommended (arglist recommendation)
   "Check an undeclared lambda using its recommended FUNCTION type."
-  (if-let* ((parts (et--lambda-function-parts recommendation))
-            (vars (et--lambda-parameter-types recommendation arglist)))
-      (let* ((actual-return (et-with-vars vars (et-checker-tail 2)))
-             (expected-return (cdr parts)))
-        (or (et-subtype? actual-return expected-return)
-            (et-err 0 "Expected %s, found %s" expected-return actual-return))
-        recommendation)
+  (if-let* ((parts (et--lambda-function-parts recommendation)))
+      (if-let* ((vars (et--lambda-parameter-types recommendation arglist)))
+          (let* ((actual-return (et-with-vars vars (et-checker-tail 2)))
+                 (expected-return (cdr parts)))
+            (or (et-subtype? actual-return expected-return)
+                (et-err 0 "Expected %s, found %s" expected-return actual-return))
+            recommendation)
+        (et-err 0 "Lambda argument list %s is incompatible with recommended input type %s"
+                arglist (car parts))
+        (et-with-vars (mapcar (lambda (param) (et-new-var param (et-never)))
+                              (apply #'append (et--parse-arglist-params arglist)))
+          (et-checker-tail 2))
+        (et-never))
     (et-err 0 "Expected a concrete Function type recommendation")
     (et-with-vars (mapcar (lambda (param) (et-new-var param (et-never)))
                           (apply #'append (et--parse-arglist-params arglist)))
       (et-checker-tail 2))
     (et-never)))
+
+(defun et--lambda-inferred-type (arglist)
+  "Infer a lambda's type with unannotated parameters.
+
+Required, optional, and keyword parameters are `Any'; a rest parameter
+is `ListR<Any>'."
+  (pcase-let* ((`(,required ,optional ,keys ,rest)
+                (et--parse-arglist-params arglist))
+               (ordinary-params (append required optional keys))
+               (any-param-reprs
+                (lambda (params)
+                  (cl-loop for param in params collect (cons param (et-repr Any)))))
+               (rest-param-reprs
+                (cl-loop for param in rest collect (cons param (et-repr ListR<Any>))))
+               (input
+                (et--generate-func-input nil nil nil
+                                         (funcall any-param-reprs required)
+                                         (funcall any-param-reprs optional)
+                                         (funcall any-param-reprs keys)
+                                         rest-param-reprs))
+               (vars
+                (append (mapcar (lambda (param) (et-new-var param (et-any))) ordinary-params)
+                        (mapcar (lambda (param) (et-new-var param (et-alias 'ListR (et-any)))) rest))))
+    (et-dt 'Function input (et-with-vars vars (et-checker-tail 2)))))
 
 (et-define-pcase-checker lambda `(,(and arglist (pred listp)) . ,body)
   (let* ((args-and-body (cons arglist body)))
@@ -120,11 +156,7 @@ types of ARGLIST's required, optional, keyword, and rest parameters."
      (et--checker-recommendation
       (et--lambda-check-recommended arglist et--checker-recommendation))
      (t
-      (et-err 0 "Lambda has no declared type")
-      (et-with-vars (mapcar (lambda (param) (et-new-var param (et-never)))
-                            (apply #'append (et--parse-arglist-params arglist)))
-        (et-checker-tail 2))
-      (et-never)))))
+      (et--lambda-inferred-type arglist)))))
 
 
 ;;;; Tests
@@ -143,7 +175,7 @@ types of ARGLIST's required, optional, keyword, and rest parameters."
   (et: Function<Args<Integer>~String>
     (lambda (x) x)))
 
- (et-assert-resolve-errors
-  (lambda (x) x)))
+ (et-assert-resolve Function<Args<Any>~Any>
+   (lambda (x) x)))
 
 ;;; lambda.el ends here

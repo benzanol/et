@@ -1776,6 +1776,7 @@ which are invalid for types."
    stream))
 
 (defvar et-print-labels nil)
+(defvar et-print-narrows nil)
 
 (defvar et--to-string-loops 'N/A)
 
@@ -1791,6 +1792,9 @@ which are invalid for types."
            (cl-loop for (name . args) in factors
                     for print = (or (get name 'et-repr-print)
                                     (error "Invalid repr: %s" name))
+                    unless (and (not et-print-narrows)
+                                (eq name 'S:OP)
+                                (memq (car args) '(typeof bind)))
                     collect (apply print args) into and-strings
                     finally return
                     (if and-strings (string-join and-strings " & ") "Any"))
