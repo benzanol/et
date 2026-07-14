@@ -140,6 +140,8 @@
             (string1 String) (string2 String) (@return Boolean))
  (@function string-replace (from-string to-string in-string)
             (from-string String) (to-string String) (in-string String) (@return String))
+ (@function kbd (keys)
+            (keys String) (@return KeySequence))
  (@function split-string (string &optional separators omit-nulls trim)
             (string String) (separators String|Nil) (omit-nulls Any) (trim String|Nil)
             (@return ListFresh<String>)))
@@ -149,11 +151,13 @@
  (et-assert-resolve Boolean (string-suffix-p "c" "abc"))
  (et-assert-resolve String (string-trim "  hi  "))
  (et-assert-resolve String (string-replace "a" "b" "abc"))
+ (et-assert-resolve KeySequence (kbd "C-c C-c"))
  (et-assert-resolve ListFresh<String> (split-string "a b c"))
  (et-assert-resolve String (string-trim-left "  hi"))
  (et-assert-resolve String (string-trim-right "hi  "))
  (et-assert-resolve Boolean (string-greaterp "b" "a"))
- (et-assert-resolve-errors (string-trim 5)))
+ (et-assert-resolve-errors (string-trim 5))
+ (et-assert-resolve-errors (kbd 5)))
 
 
 ;;; Misc utilities
@@ -286,20 +290,10 @@
 
 ;;;; if-let*
 
-;; Like `let*', except that every binding is a condition: the THEN branch
-;; runs only when all of them are non-nil. So each binding is checked
-;; knowing that all the previous ones were non-nil, and is bound to the
-;; non-nil part of its value's type. The same knowledge narrows the THEN
-;; branch, which is what `let*' checking of the expansion cannot express.
-;;
-;; A binding is (NAME VALUE), (VALUE) — checked but not bound — or a bare
-;; symbol, whose own value must be non-nil.
-;;
-;; The ELSE branch only knows that *some* binding was nil, which narrows
-;; nothing, and none of the bindings are in scope there.
+(defun et--check-let-condition-bindings (bindings bindings-path)
+  "Check conditional let BINDINGS and return (VARS . NARROWS).
 
-(et-define-pcase-checker if-let*
-    `(,(and bindings (pred listp)) ,_then . ,_else)
+BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'."
   (cl-loop
    with vars = nil
    with narrows = nil
@@ -307,22 +301,69 @@
    for idx upfrom 0
    for (name . rel) =
    (pcase binding
-     (`(,(and name (pred symbolp)) ,_value) (cons name (list 1 idx 1)))
-     (`(,_value) (cons nil (list 1 idx 0)))
-     ((pred symbolp) (cons nil (list 1 idx)))
-     (_ (et-fatal (list 1 idx) "Expected (NAME VALUE), (VALUE), or SYMBOL")))
+     (`(,(and name (pred symbolp)) ,_value)
+      (cons name (append bindings-path (list idx 1))))
+     (`(,_value) (cons nil (append bindings-path (list idx 0))))
+     ((pred symbolp) (cons nil (append bindings-path (list idx))))
+     (_ (et-fatal (append bindings-path (list idx))
+                  "Expected (NAME VALUE), (VALUE), or SYMBOL")))
 
    for value-type = (et-with-vars vars
                       (et-with-narrow-binds narrows (et-checker-sub rel)))
    for non-nil = (et--non-nil value-type)
    do (setq narrows (append (et--type-binds non-nil) narrows))
    when name do (push (et-new-var name (et--unfreshen-type non-nil)) vars)
+   finally return (cons vars narrows)))
 
-   finally return
-   (let* ((then-type (et-with-vars vars
-                       (et-with-narrow-binds narrows (et-checker-sub 2))))
-          (else-type (et-checker-tail 3)))
-     (et-simplify-type (et--or then-type else-type)))))
+;; `if-let*' is like `let*', except that every binding is a condition: the
+;; THEN branch runs only when all of them are non-nil. So each binding is
+;; checked knowing that all the previous ones were non-nil, and is bound to
+;; the non-nil part of its value's type. The same knowledge narrows the THEN
+;; branch, which is what `let*' checking of the expansion cannot express.
+;;
+;; `while-let' uses the same binding rules. It then behaves like `while':
+;; all bindings are re-evaluated before every iteration, the body sees their
+;; successful non-nil narrows, and the whole form returns nil.
+;;
+;; A binding is (NAME VALUE), (VALUE) - checked but not bound - or a bare
+;; symbol, whose own value must be non-nil.
+;;
+;; The `if-let*' ELSE branch only knows that *some* binding was nil, which
+;; narrows nothing, and none of the bindings are in scope there.
+
+(et-define-pcase-checker if-let*
+    `(,(and bindings (pred listp)) ,_then . ,_else)
+  (pcase-let ((`(,vars . ,narrows)
+               (et--check-let-condition-bindings bindings '(1))))
+    (let* ((then-type (et-with-vars vars
+                        (et-with-narrow-binds narrows (et-checker-sub 2))))
+           (else-type (et-checker-tail 3)))
+      (et-simplify-type (et--or then-type else-type)))))
+
+(et-define-pcase-checker while-let
+    `(,(and bindings (pred listp)) . ,_body)
+  (cl-loop with prev-live = nil
+           for live = (cl-count-if #'car et--narrow-binds)
+           until (eql live prev-live)
+           do (setq prev-live live)
+           do (et-result-boundary
+                (pcase-let ((`(,vars . ,narrows)
+                             (et--check-let-condition-bindings bindings '(1))))
+                  (et-with-vars vars
+                    (et-with-narrow-binds narrows
+                      (et-checker-remaining 2))))))
+
+  (pcase-let ((`(,vars . ,narrows)
+               (et--check-let-condition-bindings bindings '(1))))
+    (et-checker-hint-narrows 0 "WHILE-LET:\\n%s"
+                             (if narrows
+                                 (apply #'et--supersect (mapcar #'cdr narrows))
+                               (et True)))
+    (et-with-vars vars
+      (et-with-narrow-binds narrows
+        (et-checker-remaining 2))))
+
+  (et Nil))
 
 (et-test
  ;; Each binding is narrowed to its non-nil part inside THEN
@@ -348,6 +389,30 @@
                (let* ((a String|Number 4))
                  (if-let* ((b (stringp a))) a "fallback")))
               (et String)))
+
+(et-test
+ (et-assert-resolve Nil
+   (while-let ((a (car (list 1 2))))
+     (:assert-subtype a Integer)))
+ ;; A later binding sees the earlier ones, already non-nil.
+ (et-assert-resolve Nil
+   (let* ((a String|Nil "s"))
+     (while-let ((b a)
+                 (c (concat b "!")))
+       (:assert-subtype c String))))
+ ;; The condition narrows outer variables in the loop body.
+ (et-assert-resolve Nil
+   (let* ((a String|Number 4))
+     (while-let ((b (stringp a)))
+       (:assert-subtype a String))))
+ ;; Like `while', narrows from above the loop do not survive assignment in
+ ;; the body on the next iteration.
+ (et-assert-resolve-errors
+  (let* ((a String|Number 4))
+    (when (stringp a)
+      (while-let ((b t))
+        (:assert-subtype a String)
+        (setq a 5))))))
 
 
 ;;; Body macros

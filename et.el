@@ -3398,8 +3398,6 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias IntOrMarker (or Integer Marker))
 (et-defalias NumOrMarker (or Number Marker))
 
-(et-defalias Keymap (Cons @keymap Any))
-
 
 ;;; ============================================================
 ;;; Provide

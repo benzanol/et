@@ -493,10 +493,10 @@ function, which will be called during the corresponding phase of
 pre-processing. Most identifiers should only use :declare, except in the
 rare event that the identifier is declaring some custom type."
   (declare (indent 2))
-  `(put ',symbol 'et-identifier
+  `(put ',symbol 'et-identify
         (lambda . ,(cl--transform-lambda
                     (cons arglist body)
-                    (intern (format "et-identifier:%s" symbol))))))
+                    (intern (format "et-identify:%s" symbol))))))
 
 (defun et--identify-expr (expr)
   (cons
@@ -536,8 +536,8 @@ rare event that the identifier is declaring some custom type."
 
        ;; Custom identifier
        (`(,(and name (pred symbolp)) . ,rest)
-        (when-let* ((identifier (get name 'et-identifier)))
-          (list (cons nil (apply identifier rest)))))))))
+        (when-let* ((identify (get name 'et-identify)))
+          (list (cons nil (apply identify rest)))))))))
 
 
 ;;;; Process exprs
@@ -1046,7 +1046,7 @@ Returns a plist with :declare to set the variable type."
 
     (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
 
-(et-define-identifier et--identify-et-defvar (name spec &rest _)
+(et-define-identifier et-defvar (name spec &rest _)
   (list
    :declare
    (lambda ()
@@ -1441,15 +1441,15 @@ heuristic is by searching (using `equal') for each nested call to
              unless (eq path 'NO) return (cons idx path)
              finally return 'NO)))
 
-(defun et--macroexpand-check-advice (func expr)
+(defun et--macroexpand-check-advice (func expr &optional rec)
   (if (or (null et--macroexpand-expr)
           (null et--sticky-path))
-      (funcall func expr)
+      (funcall func expr rec)
 
     (let* ((path (et--path-in-tree expr et--macroexpand-expr)))
-      (if (eq path 'NO) (funcall func expr)
+      (if (eq path 'NO) (funcall func expr rec)
         (let* ((et--sticky-path nil))
-          (et-at path (funcall func expr)))))))
+          (et-at path (funcall func expr rec)))))))
 
 (advice-add #'et--check :around #'et--macroexpand-check-advice)
 

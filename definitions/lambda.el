@@ -1,21 +1,5 @@
 ;;; lambda.el --- Type checking for lambda expressions -*- lexical-binding: t; -*-
-
 ;;; Code:
-
-;; `et--check' gained an optional recommendation after this advice was
-;; installed in et-check.el.  Keep macroexpansion path tracking intact while
-;; forwarding that argument, which is necessary for lambda recommendations.
-(defun et--lambda-macroexpand-check-advice (func expr &optional recommendation)
-  (if (or (null et--macroexpand-expr) (null et--sticky-path))
-      (funcall func expr recommendation)
-    (let* ((path (et--path-in-tree expr et--macroexpand-expr)))
-      (if (eq path 'NO)
-          (funcall func expr recommendation)
-        (let* ((et--sticky-path nil))
-          (et-at path (funcall func expr recommendation)))))))
-
-(advice-remove #'et--check #'et--macroexpand-check-advice)
-(advice-add #'et--check :around #'et--lambda-macroexpand-check-advice)
 
 (defvar et--lambda-generic-counter 0)
 
@@ -50,11 +34,11 @@ matcher used for declarations.  Its inferred generic values are the
 types of ARGLIST's required, optional, keyword, and rest parameters."
   (when-let* ((parts (et--lambda-function-parts function-type)))
     (pcase-let* ((`(,required ,optional ,keys ,rest)
-                 (et--parse-arglist-params arglist))
+                  (et--parse-arglist-params arglist))
                  (params (append required optional keys rest))
                  (generics (cl-loop for _param in params collect (et--lambda-generic)))
                  (param-reprs
-                 (cl-loop for param in params
+                  (cl-loop for param in params
                            for generic in generics
                            collect (cons param
                                          (make-et-repr :target 'BOTH
@@ -177,5 +161,6 @@ is `ListR<Any>'."
 
  (et-assert-resolve Function<Args<Any>~Any>
    (lambda (x) x)))
+
 
 ;;; lambda.el ends here
