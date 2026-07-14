@@ -39,7 +39,8 @@
 
 (defun et-get-symbol-var (sym)
   (cl-assert (symbolp sym))
-  (alist-get sym et--binds))
+  (or (alist-get sym et--binds)
+      (get sym 'et-variable-var)))
 
 (defmacro et-with-vars (vars &rest body)
   "VARS can contain nil values."
@@ -65,7 +66,7 @@ invalidated.")
 
 (defun et-get-symbol-type (sym)
   (cl-assert (symbolp sym))
-  (when-let ((var (et-get-symbol-var sym)))
+  (when-let* ((var (et-get-symbol-var sym)))
     (et-current-var-type var)))
 
 (defmacro et-with-narrow-binds (binds &rest body)
@@ -214,16 +215,9 @@ determine the output type."
     ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
     ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
      (pcase nil
-       ;; Check if the variable is locally scoped
+       ;; Check if there is a variable (local OR global scoped) associated with it
        ((and (let var (et-get-symbol-var sym)) (guard var))
         (et-add-typeof (et-current-var-type var) var))
-
-       ;; Check if it is a global variable with a type
-       ((and (let type (get sym 'et-variable-type))
-             (let var (get sym 'et-variable-var))
-             (guard type))
-        (if var (et-add-typeof (et-current-var-type var) var)
-          type))
 
        (_ (et-err nil "Free variable: %s" sym))))
 
@@ -1291,11 +1285,13 @@ Returns a plist with :declare to set the symbol type."
       (et-with-diagnostic-prefix id (et-hint nil type)))
     type))
 
-(et-define-pcase-checker :typeof+ `(,_expr)
+(et-define-pcase-checker :typeof+ `(,_expr . ,rest)
   (let* ((type (et-checker-sub 1))
+         (id (car rest))
          (et-print-labels t)
          (et-print-narrows t))
-    (et-hint nil type)
+    (if (null id) (et-hint nil type)
+      (et-with-diagnostic-prefix id (et-hint nil type)))
     type))
 
 (et-define-pcase-checker :expand spec

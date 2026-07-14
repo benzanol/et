@@ -90,7 +90,7 @@
               (format "(:eval (format \"[%s] %%s\" (et-pp (et-function-type #'%S))))"
                       id symbol)))
     (list start end
-          (concat "(:typeof "
+          (concat "(:typeof+ "
                   (buffer-substring-no-properties start end)
                   " "
                   (prin1-to-string id)

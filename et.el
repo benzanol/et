@@ -2114,7 +2114,7 @@ which are invalid for types."
    :binds (list (cons var type))))
 
 (et-define-op typeof ([var :const])
-  :to-string (format "{typeof %s}" (et-var-name var))
+  :to-string (format "{= %s}" (et-var-name var))
   (make-et-type-case :value (make-et-datatype :name 'Any) :typeofs (list var)))
 
 (et-define-op bindsof (type)

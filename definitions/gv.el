@@ -60,11 +60,14 @@ Returns nil after reporting an error if the expression is not a valid place."
 (defun et--setf-checker ()
   "Check the place/value pairs in `et--checker-expr' and return the last value type."
   (cl-loop with val-type = (et Nil)
-           for (_place _val) on (cdr et--checker-expr) by #'cddr
+           for (place _val) on (cdr et--checker-expr) by #'cddr
            for place-pos upfrom 1 by 2
            do (setq val-type (et-checker-sub (1+ place-pos)))
            do (et--check-place-sub val-type place-pos)
-           finally return val-type))
+           finally return
+           (if-let* ((var (when (symbolp place) (et-get-symbol-var place))))
+               (et-add-typeof val-type var)
+             val-type)))
 
 
 ;;;; setq tests
@@ -417,6 +420,7 @@ contributes `Any', since storing into it is unconstrained."
 ;; same machinery: read the place normally (through the ordinary
 ;; function definitions), compute the type of the value being stored,
 ;; and check it against the place's write type.
+
 
 ;;;; push / cl-pushnew
 
