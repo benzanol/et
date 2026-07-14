@@ -475,6 +475,155 @@ PATH is the path to the subexpression."
 
 ;;; ============================================================
 ;;; Processing
+;;;; Identify expr
+
+(defvar et--processed-requires nil
+  "List of libraries which have been processed due to a `require'.")
+
+(defmacro et-define-identifier (symbol arglist &rest body)
+  "Define an identifier for a particular symbol.
+
+The arguments to the identifier will be the cdr of the expression which
+triggered identification. The function will be called in a result
+boundary, with the current path set to said expression.
+
+The identifier should return a plist that can contain the properties
+:constrain, :populate, and :declare, each of which is a 0-argument
+function, which will be called during the corresponding phase of
+pre-processing. Most identifiers should only use :declare, except in the
+rare event that the identifier is declaring some custom type."
+  (declare (indent 2))
+  `(put ',symbol 'et-identifier
+        (lambda . ,(cl--transform-lambda
+                    (cons arglist body)
+                    (intern (format "et-identifier:%s" symbol))))))
+
+(defun et--identify-expr (expr)
+  (cons
+   expr
+   (et-error-boundary nil
+     (pcase expr
+
+       ;; Load required files
+       (`(require ,name)
+        (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
+               (load-path (cons dir load-path))
+               (library (or (locate-library (symbol-name (eval name)))
+                            (error "Library `%s' not found" name))))
+          (unless (member library et--processed-requires)
+            (push library et--processed-requires)
+            ;; Process the buffer without propagating diagnostics
+            (et--process-exprs (et--file-exprs library))))
+        nil)
+
+       ;; Process a root declaration block
+       ((or `(et-declare . ,forms)
+            (and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms))))
+        (cl-loop
+         for form in forms
+         for pos upfrom 1
+         for plist =
+         (et-error-boundary pos
+           (pcase form
+             (`(@alias . ,_) (et--identify-alias-directive form))
+             (`(@variable . ,_) (et--identify-variable-directive form))
+             (`(@function . ,_) (et--identify-function-directive form))
+             (`(@macro . ,_) (et--identify-macro-directive form))
+             (`(@symbol-property . ,_) (et--identify-symbol-property-directive form))
+             (`(@checker . ,_) (et--identify-checker-directive form))))
+         collect
+         (cons pos plist)))
+
+       ;; Custom identifier
+       (`(,(and name (pred symbolp)) . ,rest)
+        (when-let* ((identifier (get name 'et-identifier)))
+          (list (cons nil (apply identifier rest)))))))))
+
+
+;;;; Process exprs
+
+(defvar et--processing-phase nil "Used for debugging `et--process-exprs'.")
+(defvar et--processing-expr nil "Used for debugging `et--process-exprs'.")
+
+(cl-defun et--process-exprs (exprs &key check test eval only-check)
+  (let* ((identified (et-result-map #'et--identify-expr exprs)))
+
+    ;; Evaluate the buffer
+    ;; This must occur first, in case the buffer defines custom type keywords, macros, etc
+    (when (or test eval)
+      (cl-loop for expr in exprs
+               for pos upfrom 0
+               do
+               (let* ((et--processing-phase :eval)
+                      (et--processing-expr expr))
+                 (et-error-boundary pos
+                   (et-wrap-errors "Runtime error: %s" (eval expr))))))
+
+    ;; For each expression, et--identify-expr returns a list of
+    ;; process-plists. A process-plist describes how to process that
+    ;; expression in each phase. For each phase, we want to perform
+    ;; the correct action across all expressions.
+
+    (dolist (phase '(:constrain :populate :declare))
+      (cl-loop for (expr . expr-plists) in identified
+               for idx upfrom 0
+               do
+               (let* ((et--processing-phase phase)
+                      (et--processing-expr expr))
+                 (et-at idx
+                   (cl-loop for (path . plist) in expr-plists
+                            for func = (plist-get plist phase)
+                            when func do (et-error-boundary path (funcall func)))))))
+
+    ;; Type-check all root-level expressions
+    (when (or check only-check)
+      (cl-loop for expr in exprs
+               for pos upfrom 0
+               when (and (consp expr)
+                         (or (et-function-type (car expr))
+                             (get (car expr) 'et-checker))
+                         ;; Only check a certain index when only-check is specified
+                         (or (null only-check) (eq only-check pos)))
+               do
+               (let* ((et--processing-phase :check)
+                      (et--processing-expr expr))
+                 (et-error-boundary pos (et--check expr)))))
+
+    ;; Run tests
+    (when test
+      ;; Run the tests
+      (cl-loop
+       for expr in exprs
+       for pos upfrom 0
+       when (eq #'et-test (car expr))
+       do
+       (cl-loop for test in (cdr expr)
+                for test-idx upfrom 1
+                do
+                (let* ((et--processing-phase :test)
+                       (et--processing-expr test))
+                  (et-at (list pos test-idx)
+                    (pcase (eval test)
+                      ('nil (et-warn nil "Evaluated to nil"))
+                      ((and result (pred et-result-p))
+                       (when (et-result-failed result)
+                         (et-propagate-result result)))))))))))
+
+
+;;;; Processing helpers
+
+(defun et--buffer-exprs ()
+  (save-excursion
+    (goto-char (point-min))
+    (cl-loop while t
+             for expr = (condition-case _ (read (current-buffer))
+                          (error (cl-return exprs)))
+             collect expr into exprs)))
+
+(defun et--file-exprs (file)
+  (with-temp-buffer (insert-file-contents file) (et--buffer-exprs)))
+
+
 ;;;; Functions
 ;;;;; Parse declarations
 
@@ -811,22 +960,21 @@ OUTPUT-REPR each converted to concrete types."
 
 ;;;;; Identification
 
-(defun et--identify-defun (body)
+(et-define-identifier defun (name &rest rest)
   (list
    :declare
    (lambda ()
-     (when-let* ((name (cadr body))
-                 (sig (et-at-offset 2 (et--parse-function-signature (cddr body)))))
+     (when-let* ((sig (et-at-offset 2 (et--parse-function-signature rest))))
        (put name 'et-function-signature sig)
        (et--assign-function-declarations name (et-func-sig-declarations sig))))))
 
-(defun et--identify-defmacro (body)
+(et-define-identifier defmacro (name &rest rest)
   (list
    :declare
    (lambda ()
-     (when-let* ((found (et-at-offset 2 (et--find-function-declarations (cddr body))))
+     (when-let* ((found (et-at-offset 2 (et--find-function-declarations rest)))
                  (decls (car found)))
-       (et--assign-function-declarations (cadr body) decls)))))
+       (et--assign-function-declarations name decls)))))
 
 (defun et--declare-function (name arglist declares)
   (let* ((param-groups (et-at 2 (et--parse-arglist-params arglist)))
@@ -878,7 +1026,6 @@ OUTPUT-REPR each converted to concrete types."
 
 
 ;;;; Variables
-;;;;; Identify variable directive
 
 (defun et--declare-variable-type (name type)
   (put name 'et-variable-type type)
@@ -899,22 +1046,12 @@ Returns a plist with :declare to set the variable type."
 
     (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
 
-
-;;;;; Identify et-defvar
-
-(defun et--identify-et-defvar (expr)
-  (pcase expr
-    (`(et-defvar ,(and name (pred symbolp)) ,spec . ,_)
-     (list
-      :declare
-      (lambda ()
-        (et-at 2
-          (et--declare-variable-type name (et-parse-type spec))))))
-
-    (_ (et-fatal nil "Expected format (et-defvar NAME TYPE [VALUE DOC])"))))
-
-
-;;;;; defvar/et-defvar checker
+(et-define-identifier et--identify-et-defvar (name spec &rest _)
+  (list
+   :declare
+   (lambda ()
+     (et-at 2
+       (et--declare-variable-type name (et-parse-type spec))))))
 
 (et-define-pcase-checker (defvar et-defvar) `(,(and (pred symbolp) name) . ,_)
   (if-let* ((declared-type (get name 'et-variable-type))
@@ -932,6 +1069,9 @@ Returns a plist with :declare to set the variable type."
 
 
 ;;;; Identify cl-defstruct
+
+(et-define-identifier cl-defstruct (&rest args)
+  (et--identify-cl-defstruct (cons #'cl-defstruct args)))
 
 (defun et--identify-cl-defstruct (expr)
   "Identify a `cl-defstruct' expression, returning a processing plist."
@@ -1118,142 +1258,6 @@ Returns a plist with :declare to set the symbol type."
           (put symbol 'et-symbol-property-type (et-parse-type spec))))))
 
     (_ (et-fatal nil "Expected format (@symbol-property SYMBOL TYPE)"))))
-
-
-;;;; Identify expr
-
-(defvar et--processed-requires nil
-  "List of libraries which have been processed due to a `require'.")
-
-(defun et--identify-expr (expr)
-  (cons
-   expr
-   (et-error-boundary nil
-     (pcase expr
-
-       ;; Load required files
-       (`(require ,name)
-        (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
-               (load-path (cons dir load-path))
-               (library (or (locate-library (symbol-name (eval name)))
-                            (error "Library `%s' not found" name))))
-          (unless (member library et--processed-requires)
-            (push library et--processed-requires)
-            ;; Process the buffer without propagating diagnostics
-            (et--process-exprs (et--file-exprs library)))))
-
-       ;; Process a root declaration block
-       ((or `(et-declare . ,forms)
-            (and (pred vectorp) (app (lambda (v) (append v nil)) `(et . ,forms))))
-        (cl-loop
-         for form in forms
-         for pos upfrom 1
-         for plist =
-         (et-error-boundary pos
-           (pcase form
-             (`(@alias . ,_) (et--identify-alias-directive form))
-             (`(@variable . ,_) (et--identify-variable-directive form))
-             (`(@function . ,_) (et--identify-function-directive form))
-             (`(@macro . ,_) (et--identify-macro-directive form))
-             (`(@symbol-property . ,_) (et--identify-symbol-property-directive form))
-             (`(@checker . ,_) (et--identify-checker-directive form))))
-         collect
-         (cons pos plist)))
-
-       ;; Process a defun/defmacro
-       (`(defun ,(pred symbolp) ,(pred listp) . ,_)
-        (list (cons nil (et--identify-defun expr))))
-       (`(defmacro ,(pred symbolp) ,(pred listp) . ,_)
-        (list (cons nil (et--identify-defmacro expr))))
-       ;; Process a struct
-       (`(cl-defstruct . ,_)
-        (list (cons nil (et--identify-cl-defstruct expr))))
-       ;; Process a defvar
-       (`(et-defvar . ,_) (list (cons nil (et--identify-et-defvar expr))))))))
-
-
-;;;; Process exprs
-
-(defvar et--processing-phase nil "Used for debugging `et--process-exprs'.")
-(defvar et--processing-expr nil "Used for debugging `et--process-exprs'.")
-
-(cl-defun et--process-exprs (exprs &key check test eval only-check)
-  (let* ((identified (et-result-map #'et--identify-expr exprs)))
-
-    ;; Evaluate the buffer
-    ;; This must occur first, in case the buffer defines custom type keywords, macros, etc
-    (when (or test eval)
-      (cl-loop for expr in exprs
-               for pos upfrom 0
-               do
-               (let* ((et--processing-phase :eval)
-                      (et--processing-expr expr))
-                 (et-error-boundary pos
-                   (et-wrap-errors "Runtime error: %s" (eval expr))))))
-
-    ;; For each expression, et--identify-expr returns a list of
-    ;; process-plists. A process-plist describes how to process that
-    ;; expression in each phase. For each phase, we want to perform
-    ;; the correct action across all expressions.
-
-    (dolist (phase '(:constrain :populate :declare))
-      (cl-loop for (expr . expr-plists) in identified
-               for idx upfrom 0
-               do
-               (let* ((et--processing-phase phase)
-                      (et--processing-expr expr))
-                 (et-at idx
-                   (cl-loop for (path . plist) in expr-plists
-                            for func = (plist-get plist phase)
-                            when func do (et-error-boundary path (funcall func)))))))
-
-    ;; Type-check all root-level expressions
-    (when (or check only-check)
-      (cl-loop for expr in exprs
-               for pos upfrom 0
-               when (and (consp expr)
-                         (or (et-function-type (car expr))
-                             (get (car expr) 'et-checker))
-                         ;; Only check a certain index when only-check is specified
-                         (or (null only-check) (eq only-check pos)))
-               do
-               (let* ((et--processing-phase :check)
-                      (et--processing-expr expr))
-                 (et-error-boundary pos (et--check expr)))))
-
-    ;; Run tests
-    (when test
-      ;; Run the tests
-      (cl-loop
-       for expr in exprs
-       for pos upfrom 0
-       when (eq #'et-test (car expr))
-       do
-       (cl-loop for test in (cdr expr)
-                for test-idx upfrom 1
-                do
-                (let* ((et--processing-phase :test)
-                       (et--processing-expr test))
-                  (et-at (list pos test-idx)
-                    (pcase (eval test)
-                      ('nil (et-warn nil "Evaluated to nil"))
-                      ((and result (pred et-result-p))
-                       (when (et-result-failed result)
-                         (et-propagate-result result)))))))))))
-
-
-;;;; Processing helpers
-
-(defun et--buffer-exprs ()
-  (save-excursion
-    (goto-char (point-min))
-    (cl-loop while t
-             for expr = (condition-case _ (read (current-buffer))
-                          (error (cl-return exprs)))
-             collect expr into exprs)))
-
-(defun et--file-exprs (file)
-  (with-temp-buffer (insert-file-contents file) (et--buffer-exprs)))
 
 
 ;;; ============================================================

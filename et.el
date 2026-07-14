@@ -3304,7 +3304,26 @@ lazily because `List' is not yet defined when this file loads.")
 
 ;;; ============================================================
 ;;; Define aliases
-;;;; Data aliases
+;;;; Basic aliases
+
+(et-defalias Nil [] (Literal nil))
+(et-defalias True [] (Literal t))
+(et-defalias Boolean [] (or (Literal nil) (Literal t)))
+
+;; All functions are a subtype of AnyFn
+(et-defalias AnyFn [] (Function Never Any))
+
+(et-define-custom-alias Vector (&optional a)
+  (if a (et-ql VectorFull ,a ,a)
+    (et-ql VectorFull Any Never)))
+
+(et-defalias VectorR [E] VectorFull<E~Never>)
+(et-defalias VectorW [E] VectorFull<Any~E>)
+
+(et-defalias Indirect [T] T)
+
+
+;;;; Cons aliases
 
 (et-define-custom-alias Cons (&optional a b)
   (if a (et-ql ConsFull ,a ,a ,(or b a) ,(or b a))
@@ -3315,20 +3334,6 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias ConsRW [L R] (ConsFull L Never Any R))
 (et-defalias ConsWR [L R] (ConsFull Any L R Never))
 
-(et-define-custom-alias Vector (&optional a)
-  (if a (et-ql VectorFull ,a ,a)
-    (et-ql VectorFull Any Never)))
-
-(et-defalias VectorR [E] VectorFull<E~Never>)
-(et-defalias VectorW [E] VectorFull<Any~E>)
-
-(et-defalias Nil [] (Literal nil))
-(et-defalias True [] (Literal t))
-(et-defalias Boolean [] (or (Literal nil) (Literal t)))
-
-;; All functions are a subtype of AnyFn
-(et-defalias AnyFn [] (Function Never Any))
-
 ;; ConsR/ListR/*R can be thought of as "read only references" to a
 ;; type. It is merely a shortcut for "[(T <= Number)] List<T>" for
 ;; function parameters. Actual data, such as return values from
@@ -3338,12 +3343,10 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias List [E] (or Nil (Cons E (List E))))
 (et-defalias NonNilListR [E] (ConsR E (ListR E)))
 
-(et-defalias Indirect [T] T)
-
 (et-defalias Tree [E] (or (List (Tree E)) E))
 (et-defalias TreeR [E] (or (ListR (TreeR E)) E))
 (et-defalias ConsTree [E] (or (Cons (ConsTree E) (ConsTree E)) E))
-(et-defalias ConsTreeR [E] (or (ConsR ConsTreeR<E> ConsTreeR<E>) Indirect<E>))
+(et-defalias ConsTreeR [E] (or (ConsR ConsTreeR<E> ConsTreeR<E>) (Indirect E)))
 
 (et-defalias AList [K V] (List (Cons K V)))
 (et-defalias AListR [K V] (ListR (ConsR K V)))
@@ -3368,6 +3371,11 @@ lazily because `List' is not yet defined when this file loads.")
 (et-define-custom-alias TupleWithTail (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
 (et-define-custom-alias TupleStar (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
 
+(et-define-custom-alias Repeat (&rest args)
+  (et--expand-tailed-tuple-spec 'Cons (append args (list (cons 'Repeat args)))))
+(et-define-custom-alias RepeatR (&rest args)
+  (et--expand-tailed-tuple-spec 'ConsR (append args (list (cons 'Repeat args)))))
+
 
 ;;;; Emacs aliases
 
@@ -3389,6 +3397,8 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias Font (or FontSpec FontEntity FontObject))
 (et-defalias IntOrMarker (or Integer Marker))
 (et-defalias NumOrMarker (or Number Marker))
+
+(et-defalias Keymap (Cons @keymap Any))
 
 
 ;;; ============================================================

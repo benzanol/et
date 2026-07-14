@@ -738,7 +738,7 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 
 (defun et--hash-name-func-type (name)
   "Hash NAME's function type, or nil if it has none."
-  (when-let* ((ft (get name 'et-function-type)))
+  (when-let* ((ft (et-function-type name)))
     (et-hash-value (et-hash-items (list ft)))))
 
 (defun et--hash-type-spec (spec)
