@@ -119,8 +119,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
   (get symbol 'et-function-type))
 
-(et-defvar et--checker-recommendation Nil|*et-type
-           nil
+(et-defvar et--checker-recommendation Nil|*et-type nil
   "A hint to the current checker of what type its expression should be.
 
 This should ONLY be used in the checker for `lambda', in order to guess
@@ -482,7 +481,7 @@ PATH is the path to the subexpression."
 
 ;;; ============================================================
 ;;; Processing
-;;;; Function definitions
+;;;; Functions
 ;;;;; Parse declarations
 
 (cl-defstruct et--func-declarations
@@ -876,6 +875,60 @@ OUTPUT-REPR each converted to concrete types."
   (et-literal name))
 
 
+;;;; Variables
+;;;;; Identify variable directive
+
+(defun et--declare-variable-type (name type)
+  (put name 'et-variable-type type)
+  (put name 'et-variable-var (make-et-var :name name :type type)))
+
+(defun et--identify-variable-directive (form)
+  "Identify a variable definition, returning a processing plist.
+
+During identification, just validates the format.
+Returns a plist with :declare to set the variable type."
+  (pcase (cdr form)
+    (`(,(and name (pred symbolp)) ,spec)
+     (list
+      :declare
+      (lambda ()
+        (et-at 2
+          (et--declare-variable-type name (et-parse-type spec))))))
+
+    (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
+
+
+;;;;; Identify et-defvar
+
+(defun et--identify-et-defvar (expr)
+  (pcase expr
+    (`(et-defvar ,(and name (pred symbolp)) ,spec . ,_)
+     (list
+      :declare
+      (lambda ()
+        (et-at 2
+          (et--declare-variable-type name (et-parse-type spec))))))
+
+    (_ (et-fatal nil "Expected format (et-defvar NAME TYPE [VALUE DOC])"))))
+
+
+;;;;; defvar/et-defvar checker
+
+(et-define-pcase-checker (defvar et-defvar) `(,(and (pred symbolp) name) . ,_)
+  (if-let* ((declared-type (get name 'et-variable-type))
+            (value-pos (if (eq #'defvar (car et--checker-expr)) 2 3))
+            (value-type (or (when (nth value-pos et--checker-expr)
+                              (et-checker-sub value-pos))
+                            (et Nil))))
+      (unless (et-subtype? value-type declared-type)
+        (et-err 2 "Expected %s, found %s" declared-type value-type))
+
+    ;; Otherwise, declare it as any
+    (et--declare-variable-type name (et Any)))
+
+  (et-literal name))
+
+
 ;;;; Identify cl-defstruct
 
 (defun et--identify-cl-defstruct (expr)
@@ -1035,39 +1088,6 @@ Returns a plist with :constrain and :populate functions."
                       (et-parse-repr spec generics (or target 'BOTH)))))))))
 
 
-;;;; Identify variable directive
-
-(defun et--declare-variable-type (name type)
-  (put name 'et-variable-type type)
-  (put name 'et-variable-var (make-et-var :name name :type type)))
-
-(defun et--identify-variable-directive (form)
-  "Identify a variable definition, returning a processing plist.
-
-During identification, just validates the format.
-Returns a plist with :declare to set the variable type."
-  (pcase (cdr form)
-    (`(,(and name (pred symbolp)) ,spec)
-     (list
-      :declare
-      (lambda ()
-        (et-at 2
-          (et--declare-variable-type name (et-parse-type spec))))))
-
-    (_ (et-fatal nil "Expected format (@variable NAME TYPE)"))))
-
-(et-define-pcase-checker defvar `(,(and (pred symbolp) name) . ,rest)
-  (if-let* ((declared-type (get name 'et-variable-type))
-            (value-type (or (when (car rest) (et-checker-sub 2)) (et Nil))))
-      (unless (et-subtype? value-type declared-type)
-        (et-err 2 "Expected %s, found %s" declared-type value-type))
-
-    ;; Otherwise, declare it as any
-    (et--declare-variable-type name (et Any)))
-
-  (et-literal name))
-
-
 ;;;; Identify checker directive
 
 (defun et--identify-checker-directive (form)
@@ -1143,10 +1163,11 @@ Returns a plist with :declare to set the symbol type."
         (list (cons nil (et--identify-defun expr))))
        (`(defmacro ,(pred symbolp) ,(pred listp) . ,_)
         (list (cons nil (et--identify-defmacro expr))))
-
        ;; Process a struct
        (`(cl-defstruct . ,_)
-        (list (cons nil (et--identify-cl-defstruct expr))))))))
+        (list (cons nil (et--identify-cl-defstruct expr))))
+       ;; Process a defvar
+       (`(et-defvar . ,_) (list (cons nil (et--identify-et-defvar expr))))))))
 
 
 ;;;; Process exprs
@@ -1315,15 +1336,6 @@ Returns a plist with :declare to set the symbol type."
   (let* ((declared (et-parse-type type-spec))
          (_actual (et-checker-sub-with-recommendation declared 2)))
     declared))
-
-(et-define-pcase-checker et-defvar `(,symbol ,type-spec . ,_rest)
-  (let* ((declared (et-at 2 (et-parse-type type-spec)))
-         (actual (et-checker-sub 3)))
-    (et--declare-variable-type symbol declared)
-
-    (or (et-subtype? actual declared)
-        (et-err 2 "Expected %s, found %s" declared actual))
-    (et Literal ,symbol)))
 
 
 ;;;; Pcase et-*
