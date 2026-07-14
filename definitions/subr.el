@@ -262,7 +262,7 @@
     (et-checker-hint-narrows 0 "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
     ;; Special case for empty body because (unless cond) always returns nil
     (if (null _else) (et Nil)
-      (et--unless-return-type cond-type (lambda () (et-checker-tail 2)))))))
+      (et--unless-return-type cond-type (lambda () (et-checker-tail 2))))))
 
 (et-test
  (equal (et String|Nil)
@@ -281,7 +281,7 @@
               (let* ((a String|Number|Nil 4))
                 (unless (stringp a) a)))))
        (want (et Number|Nil)))
-   (and (et-subtype? got want) (et-subtype? want got)))))
+   (and (et-subtype? got want) (et-subtype? want got))))
 
 
 ;;;; if-let*
@@ -337,7 +337,7 @@
                (let* ((a String|Nil "s"))
                  (if-let* ((b a)
                            (c (concat b "!")))
-                   c
+                     c
                    "fallback")))
               (et String))
  ;; Bindings are not in scope in the ELSE branch

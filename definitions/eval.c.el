@@ -120,7 +120,7 @@
 
     ;; Symbol: look up its function type
     ((and sym (pred symbolp))
-     (if-let* ((func-type (get sym 'et-function-type)))
+     (if-let* ((func-type (et-function-type sym)))
          func-type
        (et-err nil "No function type for `%s'" sym)))
 

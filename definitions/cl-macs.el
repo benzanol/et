@@ -677,7 +677,7 @@ bindings are checked, so each one sees the ones before it. Otherwise
 none of them are installed until all of them have been checked."
   (pcase-let* ((`(,bindings . ,_body) (cdr et--checker-expr))
                (originals (cl-loop for (name) in bindings
-                                   collect (cons name (get name 'et-function-type)))))
+                                   collect (cons name (et-function-type name)))))
     (unwind-protect
         (let* ((types (cl-loop for binding in bindings
                                for idx upfrom 0

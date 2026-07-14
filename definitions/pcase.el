@@ -137,7 +137,7 @@ FUN must be a symbol with a narrowing `et-function-type' (such as the
 predicates defined with `et-define-predicate'). Returns nil when no such
 domain can be determined."
   (when-let* (((symbolp fun))
-              (ftype (get fun 'et-function-type))
+              (ftype (et-function-type fun))
               (synth (et-new-var (gensym "et-pcase-pred") (et-any)))
               (arg (et-type (make-et-type-case
                              :value (make-et-datatype :name 'Any)
@@ -174,7 +174,7 @@ FUN is nil. When FUN's domain is unknown, no narrowing occurs."
 FUN may be a symbol with an `et-function-type'. Other forms (lambdas,
 partial applications) are not analysed and yield Any."
   (or (when-let* (((symbolp fun))
-                  (ftype (get fun 'et-function-type))
+                  (ftype (et-function-type fun))
                   (out (et-checker-funcall ftype (et--tuple 'ConsR (list type))))
                   ((et-type-p out)))
         out)

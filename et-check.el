@@ -632,6 +632,7 @@ PATH is the path to the subexpression."
            (param-reprs (et--func-declarations-param-reprs decls))
            (generics (et--func-declarations-generics decls))
            (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
+
       (et--with-scoped-datatypes scoped
         (make-et-func-sig
          :declarations decls
@@ -643,13 +644,21 @@ PATH is the path to the subexpression."
          ;; Both vars and expected-return may contain the scoped types
          :scoped scoped
          :vars
-         (cl-loop for param-group in param-reprs nconc
+         (cl-loop for param-group in param-reprs
+                  for param-group-idx upfrom 0
+                  nconc
                   (cl-loop for (name . repr) in param-group
                            ;; Replace each generic in the parameter reprs with the corresponding scoped datatype
                            for type = (cl-loop for gen in generics
                                                for scoped-args in scoped
                                                collect (cons gen (apply #'et-dt 'Scoped scoped-args)) into gen-repls
                                                finally return (et-repr-to-type repr gen-repls))
+                           ;; Ensure that optional parameters are nillable
+                           when (and (eq param-group-idx 1) (not (et-subtype? (et Nil) type))
+                                     (not (pcase (et-type-single type)
+                                            ((cl-struct et-datatype (name 'Scoped)) t))))
+                           do (et-err nil "Optional %s is not nillable" name)
+
                            collect (make-et-var :name name :type type)))
          :expected-return
          (cl-loop for (name unique constraints) in scoped
@@ -757,14 +766,9 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
              when (pcase repr ((cl-struct et-repr (dnf `(((S:GENERIC ,_))))) t))
              collect repr into gen-reprs
              finally return
-             (let* ((tail (et--params-to-input-repr nil (cdr opt) rest))
-                    (type-if-provided
-                     ;; Normally the type is Type|Nil, but if the type is a generic, no need for that
-                     (if (pcase (car opt) ((cl-struct et-repr (dnf `(((S:GENERIC ,_))))) t))
-                         (car opt)
-                       `(or Nil ,(car opt)))))
+             (let* ((tail (et--params-to-input-repr nil (cdr opt) rest)))
                (et-repr or (and Nil ,@gen-reprs)
-                        (ConsR ,type-if-provided ,tail)))))
+                        (ConsR ,(car opt) ,tail)))))
    (t rest)))
 
 (et-test
@@ -862,9 +866,13 @@ OUTPUT-REPR each converted to concrete types."
 
 ;;;;; Checker
 
+(et-defvar et-checking-defun Nil|Var nil
+  "The defun currently being checked.")
+
 (et-define-pcase-checker defun `(,name . ,_)
   (when-let* ((sig (get name 'et-function-signature))
-              ((not (plist-get (et-func-sig-props sig) :skip))))
+              ((not (plist-get (et-func-sig-props sig) :skip)))
+              (et-checking-defun name))
 
     (et--with-scoped-datatypes (et-func-sig-scoped sig)
       (et-with-vars (et-func-sig-vars sig)
