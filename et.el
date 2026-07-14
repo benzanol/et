@@ -146,14 +146,28 @@ expression that is not actually in the buffer, ensure that
 (defvar et--result-diagnostics nil
   "Diagnostics collected for the current result.")
 
+(defvar et--diagnostic-prefixes nil
+  "Prefixes to show for all diagnostics, in reverse order.")
+
 (defvar et--result-failed nil)
 
+
+(defmacro et-with-diagnostic-prefix (prefix-obj &rest body)
+  (declare (indent 1))
+  `(let* ((et--diagnostic-prefixes (cons ,prefix-obj et--diagnostic-prefixes )))
+     ,@body))
+
+(defun et--diagnostic-message (fmt args)
+  (cl-loop for prefix in et--diagnostic-prefixes
+           collect (format "[%s]" (et-pp prefix)) into prefixes
+           finally return
+           (let* ((msg (if args (apply #'format fmt (mapcar #'et-pp args)) (et-pp fmt))))
+             (string-join (nreverse (cons msg prefixes)) " "))))
 
 (defun et--diagnostic (rel severity fmt &rest args)
   (unless et--in-result? (error "Not in a result boundary"))
   (push (list (et--resolve-path rel) severity
-              (if args (apply #'format fmt (mapcar #'et-pp args))
-                (et-pp fmt)))
+              (et--diagnostic-message fmt args))
         et--result-diagnostics)
   ;; Intentionally return nil
   nil)
@@ -171,8 +185,7 @@ expression that is not actually in the buffer, ensure that
 
 (defun et-fatal (relative fmt &rest args)
   (et-at relative
-    (error "%s" (if args (apply #'format fmt (mapcar #'et-pp args))
-                  (et-pp fmt)))))
+    (error "%s" (et--diagnostic-message fmt args))))
 
 
 ;;;; Boundaries

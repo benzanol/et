@@ -112,6 +112,13 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 (defvar et--checker-expr nil)
 
+(defun et-function-type (symbol)
+  (when (get symbol 'et-deferred-declare)
+    (ignore (et-result-boundary (funcall (get symbol 'et-deferred-declare))))
+    (put symbol 'et-deferred-declare nil))
+
+  (get symbol 'et-function-type))
+
 (et-defvar et--checker-recommendation Nil|*et-type
            nil
   "A hint to the current checker of what type its expression should be.
@@ -156,6 +163,11 @@ determine the output type."
 (defun et--check-1 ()
   (pcase et--checker-expr
     (`(,func . ,_args)
+     ;; If this function is lazily declared, and hasn't been declared yet, do it now
+     (when (get func 'et-deferred-declare)
+       (ignore (et-result-boundary (funcall (get func 'et-deferred-declare))))
+       (put func 'et-deferred-declare nil))
+
      (pcase nil
        ;; Custom checker
        ((and (let checker (get func 'et-checker)) (guard checker)
@@ -164,7 +176,7 @@ determine the output type."
           (et-fatal nil "Checker for `%s' had invalid return: %s" func output)))
 
        ;; Function type property
-       ((and (let func-type (get func 'et-function-type)) (guard func-type))
+       ((and (let func-type (et-function-type func)) (guard func-type))
         (let* ((arg-types (cl-loop for type in (et-checker-remaining 1) for pos upfrom 1
                                    collect (et-copy-with type :label (list :position pos))))
                (args-type (et--tuple 'Cons arg-types))
@@ -819,15 +831,22 @@ OUTPUT-REPR each converted to concrete types."
                  (decls (car found)))
        (et--assign-function-declarations (cadr body) decls)))))
 
+(defun et--declare-function (name arglist declares)
+  (let* ((param-groups (et-at 2 (et--parse-arglist-params arglist)))
+         (decls (et-at-offset 3 (et--parse-function-declarations param-groups declares))))
+    (et--assign-function-declarations name decls)))
+
+(defvar et-defer-declarations t)
+
 (defun et--identify-function-directive (form)
   (list
    :declare
    (lambda ()
-     (pcase-let*
-         ((`(@function ,name ,arglist . ,declares) form)
-          (param-groups (et-at 2 (et--parse-arglist-params arglist)))
-          (decls (et-at-offset 3 (et--parse-function-declarations param-groups declares))))
-       (et--assign-function-declarations name decls)))))
+     (pcase-let* ((`(@function ,name ,arglist . ,declares) form))
+       (if et-defer-declarations
+           (put name 'et-deferred-declare
+                (lambda () (et--declare-function name arglist declares)))
+         (et--declare-function name arglist declares))))))
 
 (defun et--identify-macro-directive (form)
   (let* ((name (cadr form)))
@@ -1135,7 +1154,7 @@ Returns a plist with :declare to set the symbol type."
 (defvar et--processing-phase nil "Used for debugging `et--process-exprs'.")
 (defvar et--processing-expr nil "Used for debugging `et--process-exprs'.")
 
-(cl-defun et--process-exprs (exprs &key check test eval)
+(cl-defun et--process-exprs (exprs &key check test eval only-check)
   (let* ((identified (et-result-map #'et--identify-expr exprs)))
 
     ;; Evaluate the buffer
@@ -1166,12 +1185,14 @@ Returns a plist with :declare to set the symbol type."
                             when func do (et-error-boundary path (funcall func)))))))
 
     ;; Type-check all root-level expressions
-    (when check
+    (when (or check only-check)
       (cl-loop for expr in exprs
                for pos upfrom 0
                when (and (consp expr)
-                         (or (get (car expr) 'et-function-type)
-                             (get (car expr) 'et-checker)))
+                         (or (et-function-type (car expr))
+                             (get (car expr) 'et-checker))
+                         ;; Only check a certain index when only-check is specified
+                         (or (null only-check) (eq only-check pos)))
                do
                (let* ((et--processing-phase :check)
                       (et--processing-expr expr))
@@ -1234,9 +1255,11 @@ Returns a plist with :declare to set the symbol type."
     (error (setq et--checker-expr nil) (et-literal nil))
     (:success (et-err nil "Didn't error"))))
 
-(et-define-pcase-checker :typeof `(,_expr)
-  (let* ((type (et-checker-sub 1)))
-    (et-hint nil type)
+(et-define-pcase-checker :typeof `(,_expr . ,rest)
+  (let* ((type (et-checker-sub 1))
+         (id (car rest)))
+    (if (null id) (et-hint nil type)
+      (et-with-diagnostic-prefix id (et-hint nil type)))
     type))
 
 (et-define-pcase-checker :typeof+ `(,_expr)
@@ -1260,7 +1283,7 @@ Returns a plist with :declare to set the symbol type."
   (et Nil))
 
 (et-define-pcase-checker :eval `(,expr)
-  (et-hint nil (cl-prin1-to-string (eval expr)))
+  (et-hint nil (et-pp (eval expr)))
   (setq et--checker-expr nil)
   (et Nil))
 
