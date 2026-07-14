@@ -2125,6 +2125,18 @@ which are invalid for types."
                      (et-repr-to-string yes) (et-repr-to-string no))
   (if (et-subtype? sub super) (et--totype-sub yes) (et--totype-sub no)))
 
+(et-define-op if? (type [yes :repr] [no :repr])
+  :to-string (format "{if %s then %s else %s}"
+                     (et-repr-to-string type) (et-repr-to-string yes) (et-repr-to-string no))
+  ;; (TYPE is always true) <=> (Nil is not a subtype of TYPE)
+  (if (et-subtype? (et Nil) type) (et--totype-sub no) (et--totype-sub yes)))
+
+(et-define-op if-nil? (type [yes :repr] [no :repr])
+  :to-string (format "{if %s is nil then %s else %s}"
+                     (et-repr-to-string type) (et-repr-to-string yes) (et-repr-to-string no))
+  ;; (TYPE is always nil) <=> (TYPE is a subtype of Nil)
+  (if (et-subtype? type (et Nil)) (et--totype-sub yes) (et--totype-sub no)))
+
 (et-define-op eval ([func :const] &rest args)
   :to-string (format "{eval %s on %s}" func (mapconcat #'et-repr-to-string args ", "))
   (apply func args))
