@@ -191,8 +191,12 @@ determine the output type."
              (if (and arg-type param-repr)
                  (et-err arg-pos "[%s] Expected %s, found %s" param-name
                          (et-repr-to-string param-repr) arg-type)
-               (et-err (or arg-pos 0) ; its possible to have an arg label without a param label
-                       "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))
+               (pcase (et-type-single func-type)
+                 ((or (cl-struct et-datatype (name 'Function) (args `(,input ,_)))
+                      (and (cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,_)))
+                           (let input (et-repr-to-string (et-matcher-repr matcher)))))
+                  (et-err (or arg-pos 0) "Expected %s, got %s" input args-type))
+                 (_ (et-err (or arg-pos 0) "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))))
 
        (_ (et-err 0 "No type for `%s'" func))))
 

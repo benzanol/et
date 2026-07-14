@@ -1048,8 +1048,8 @@ a valid `et-type-case-value'."
 
 (defun et-type-single (type)
   "Assume type is a single case, and extract the case value."
-  (cl-assert (eq 1 (length (et-type-cases type))))
-  (et-type-case-value (car (et-type-cases type))))
+  (when (eq 1 (length (et-type-cases type)))
+    (et-type-case-value (car (et-type-cases type)))))
 
 (defun et-dt (name &rest args)
   (cl-assert (et--datatype-name? name))
