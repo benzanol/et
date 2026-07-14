@@ -137,15 +137,15 @@
 
 (et-declare
  (@function bool-vector-exclusive-or (a b &optional c)
-            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+            (a BoolVector) (b BoolVector) (c BoolVector|Nil) (@return BoolVector))
  (@function bool-vector-union (a b &optional c)
-            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+            (a BoolVector) (b BoolVector) (c BoolVector|Nil) (@return BoolVector))
  (@function bool-vector-intersection (a b &optional c)
-            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+            (a BoolVector) (b BoolVector) (c BoolVector|Nil) (@return BoolVector))
  (@function bool-vector-set-difference (a b &optional c)
-            (a BoolVector) (b BoolVector) (c BoolVector) (@return BoolVector))
+            (a BoolVector) (b BoolVector) (c BoolVector|Nil) (@return BoolVector))
  (@function bool-vector-not (a &optional b)
-            (a BoolVector) (b BoolVector) (@return BoolVector))
+            (a BoolVector) (b BoolVector|Nil) (@return BoolVector))
  (@function bool-vector-subsetp (a b)
             (a BoolVector) (b BoolVector) (@return Boolean))
  (@function bool-vector-count-population (a)
@@ -477,7 +477,7 @@
  (@function symbol-name (symbol) (symbol Symbol) (@return String))
  (@function number-to-string (number) (number Number) (@return String))
  (@function string-to-number (string &optional base)
-            (string String) (base Integer) (@return Number))
+            (string String) (base Integer|Nil) (@return Number))
  ;; `type-of'/`cl-type-of' always return a (non-nil) type-naming symbol.
  (@function type-of (object) (object Any) (@return NonNilSymbol))
  (@function cl-type-of (object) (object Any) (@return NonNilSymbol)))
@@ -513,9 +513,9 @@
 
 (et-declare
  (@function local-variable-p (variable &optional buffer)
-            (variable Symbol) (buffer Buffer) (@return Boolean))
+            (variable Symbol) (buffer Buffer|Nil) (@return Boolean))
  (@function local-variable-if-set-p (variable &optional buffer)
-            (variable Symbol) (buffer Buffer) (@return Boolean))
+            (variable Symbol) (buffer Buffer|Nil) (@return Boolean))
  (@function variable-binding-locus (variable)
             (variable Symbol) (@return Buffer|Terminal|Nil)))
 

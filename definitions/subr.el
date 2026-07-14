@@ -68,11 +68,11 @@
  (@function delete-dups (list)
             (@generics [T]) (list ListR<T>) (@return List<T>))
  (@function last (list &optional n)
-            (@generics [T]) (list ListR<T>) (n Integer) (@return ListR<T>))
+            (@generics [T]) (list ListR<T>) (n Integer|Nil) (@return ListR<T>))
  (@function butlast (list &optional n)
-            (@generics [T]) (list ListR<T>) (n Integer) (@return ListFresh<T>))
+            (@generics [T]) (list ListR<T>) (n Integer|Nil) (@return ListFresh<T>))
  (@function nbutlast (list &optional n)
-            (@generics [T]) (list ListR<T>) (n Integer) (@return ListR<T>))
+            (@generics [T]) (list ListR<T>) (n Integer|Nil) (@return ListR<T>))
  ;; `remove' copies its argument; `remq' may share the input tail.
  (@function remove (elt seq)
             (@generics [T]) (elt Any) (seq ListR<T>) (@return ListFresh<T>))
@@ -83,7 +83,7 @@
  (@function flatten-list (tree)
             (@generics [T]) (tree T) (@return (ListFresh (leaves T))))
  (@function number-sequence (from &optional to inc)
-            (from Number) (to Number) (inc Number) (@return ListFresh<Number>))
+            (from Number) (to Number|Nil) (inc Number|Nil) (@return ListFresh<Number>))
 
  ;; `copy-tree' deeply freshens its argument's structure.
  (@function copy-tree (tree &optional vecp)
@@ -112,7 +112,7 @@
 
 (et-declare
  (@function gensym (&optional prefix)
-            (prefix String) (@return Var))
+            (prefix String|Nil) (@return Var))
  (@function error (string &rest args)
             (string String) (args ListR<Any>) (@return Never)))
 
@@ -131,17 +131,17 @@
  (@function string-suffix-p (suffix string &optional ignore-case)
             (suffix String) (string String) (ignore-case Any) (@return Boolean))
  (@function string-trim (string &optional trim-left trim-right)
-            (string String) (trim-left String) (trim-right String) (@return String))
+            (string String) (trim-left String|Nil) (trim-right String|Nil) (@return String))
  (@function string-trim-left (string &optional regexp)
-            (string String) (regexp String) (@return String))
+            (string String) (regexp String|Nil) (@return String))
  (@function string-trim-right (string &optional regexp)
-            (string String) (regexp String) (@return String))
+            (string String) (regexp String|Nil) (@return String))
  (@function string-greaterp (string1 string2)
             (string1 String) (string2 String) (@return Boolean))
  (@function string-replace (from-string to-string in-string)
             (from-string String) (to-string String) (in-string String) (@return String))
  (@function split-string (string &optional separators omit-nulls trim)
-            (string String) (separators String) (omit-nulls Any) (trim String)
+            (string String) (separators String|Nil) (omit-nulls Any) (trim String|Nil)
             (@return ListFresh<String>)))
 
 (et-test

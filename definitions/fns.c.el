@@ -134,7 +134,7 @@
             (@generics [T])
             (function Function<Args<T>~String>)
             (sequence ListR<T>)
-            (separator String)
+            (separator String|Nil)
             (@return String)))
 
 (et-test
@@ -256,7 +256,7 @@
 
 (et-declare
  (@function string-search (needle haystack &optional start-pos)
-            (needle String) (haystack String) (start-pos Integer)
+            (needle String) (haystack String) (start-pos Integer|Nil)
             (@return Integer|Nil))
  (@function string-distance (string1 string2 &optional bytecompare)
             (string1 String) (string2 String) (bytecompare Any)
@@ -319,16 +319,16 @@
 
 (et-declare
  (@function md5 (object &optional start end coding-system noerror)
-            (object Buffer|String) (start IntOrMarker) (end IntOrMarker)
-            (coding-system Symbol) (noerror Any)
+            (object Buffer|String) (start IntOrMarker|Nil) (end IntOrMarker|Nil)
+            (coding-system Symbol|Nil) (noerror Any)
             (@return String))
  (@function secure-hash (algorithm object &optional start end binary)
             (algorithm Symbol) (object Buffer|String)
-            (start IntOrMarker) (end IntOrMarker) (binary Any)
+            (start IntOrMarker|Nil) (end IntOrMarker|Nil) (binary Any)
             (@return String))
  ;; BUFFER-OR-NAME defaults to the current buffer.
  (@function buffer-hash (&optional buffer-or-name)
-            (buffer-or-name Buffer|String) (@return String)))
+            (buffer-or-name Buffer|String|Nil) (@return String)))
 
 (et-test
  (et-assert-resolve String (md5 "hi"))

@@ -29,7 +29,7 @@
  (@function multibyte-char-to-unibyte (ch) (ch Integer) (@return Integer))
  (@function char-resolve-modifiers (char) (char Integer) (@return Integer))
  (@function get-byte (&optional position string)
-            (position Integer) (string String) (@return Integer)))
+            (position Integer|Nil) (string String|Nil) (@return Integer)))
 
 (et-test
  (et-assert-resolve Integer (max-char))
@@ -43,7 +43,7 @@
 (et-declare
  (@function char-width (char) (char Integer) (@return Integer))
  (@function string-width (string &optional from to)
-            (string String) (from Integer) (to Integer) (@return Integer)))
+            (string String) (from Integer|Nil) (to Integer|Nil) (@return Integer)))
 
 (et-test
  (et-assert-resolve Integer (char-width ?a))

@@ -58,17 +58,17 @@
  (@function gap-position () (@return Integer))
  (@function gap-size () (@return Integer))
  ;; BUFFER defaults to the current buffer.
- (@function buffer-size (&optional buffer) (buffer Buffer) (@return Integer))
+ (@function buffer-size (&optional buffer) (buffer Buffer|Nil) (@return Integer))
 
  ;; Nil when the position is outside the accessible portion.
  (@function position-bytes (position) (position IntOrMarker) (@return Integer|Nil))
  (@function byte-to-position (bytepos) (bytepos Integer) (@return Integer|Nil))
 
  ;; N is a line count, not a position.
- (@function pos-bol (&optional n) (n Integer) (@return Integer))
- (@function pos-eol (&optional n) (n Integer) (@return Integer))
- (@function line-beginning-position (&optional n) (n Integer) (@return Integer))
- (@function line-end-position (&optional n) (n Integer) (@return Integer)))
+ (@function pos-bol (&optional n) (n Integer|Nil) (@return Integer))
+ (@function pos-eol (&optional n) (n Integer|Nil) (@return Integer))
+ (@function line-beginning-position (&optional n) (n Integer|Nil) (@return Integer))
+ (@function line-end-position (&optional n) (n Integer|Nil) (@return Integer)))
 
 (et-test
  (et-assert-resolve Integer (point))
@@ -101,8 +101,8 @@
  (@function following-char () (@return Integer))
  (@function preceding-char () (@return Integer))
  ;; `char-after'/`char-before' return nil outside the accessible portion.
- (@function char-after (&optional pos) (pos IntOrMarker) (@return Integer|Nil))
- (@function char-before (&optional pos) (pos IntOrMarker) (@return Integer|Nil))
+ (@function char-after (&optional pos) (pos IntOrMarker|Nil) (@return Integer|Nil))
+ (@function char-before (&optional pos) (pos IntOrMarker|Nil) (@return Integer|Nil))
 
  (@function bobp () (@return Boolean))
  (@function eobp () (@return Boolean))
@@ -137,7 +137,7 @@
  ;; BUFFER may be a buffer or the name of one; START and END default to
  ;; the accessible portion of it.
  (@function insert-buffer-substring (buffer &optional start end)
-            (buffer Buffer|String) (start IntOrMarker) (end IntOrMarker) (@return Nil))
+            (buffer Buffer|String) (start IntOrMarker|Nil) (end IntOrMarker|Nil) (@return Nil))
  ;; Every argument may be nil: a nil buffer means the current buffer, and
  ;; a nil position means that buffer's `point-min'/`point-max'.
  (@function compare-buffer-substrings (buffer1 start1 end1 buffer2 start2 end2)
@@ -168,9 +168,9 @@
  (@function insert-before-markers-and-inherit (&rest args)
             (args ListR<String|Integer>) (@return Nil))
  (@function insert-char (character &optional count inherit)
-            (character Integer) (count Integer) (inherit Any) (@return Nil))
+            (character Integer) (count Integer|Nil) (inherit Any) (@return Nil))
  (@function insert-byte (byte &optional count inherit)
-            (byte Integer) (count Integer) (inherit Any) (@return Nil)))
+            (byte Integer) (count Integer|Nil) (inherit Any) (@return Nil)))
 
 (et-test
  (et-assert-resolve Nil (insert "hi" ?a))
@@ -189,13 +189,13 @@
 ;;; Fields
 
 (et-declare
- (@function delete-field (&optional pos) (pos IntOrMarker) (@return Nil))
- (@function field-string (&optional pos) (pos IntOrMarker) (@return String))
- (@function field-string-no-properties (&optional pos) (pos IntOrMarker) (@return String))
+ (@function delete-field (&optional pos) (pos IntOrMarker|Nil) (@return Nil))
+ (@function field-string (&optional pos) (pos IntOrMarker|Nil) (@return String))
+ (@function field-string-no-properties (&optional pos) (pos IntOrMarker|Nil) (@return String))
  (@function field-beginning (&optional pos escape-from-edge limit)
-            (pos IntOrMarker) (escape-from-edge Any) (limit IntOrMarker) (@return Integer))
+            (pos IntOrMarker|Nil) (escape-from-edge Any) (limit IntOrMarker|Nil) (@return Integer))
  (@function field-end (&optional pos escape-from-edge limit)
-            (pos IntOrMarker) (escape-from-edge Any) (limit IntOrMarker) (@return Integer)))
+            (pos IntOrMarker|Nil) (escape-from-edge Any) (limit IntOrMarker|Nil) (@return Integer)))
 
 (et-test
  (et-assert-resolve String (field-string))
@@ -224,9 +224,9 @@
 ;; hence Number rather than Integer.
 
 (et-declare
- (@function user-login-name (&optional uid) (uid Number) (@return String|Nil))
+ (@function user-login-name (&optional uid) (uid Number|Nil) (@return String|Nil))
  (@function user-real-login-name () (@return String))
- (@function user-full-name (&optional uid) (uid Number) (@return String|Nil))
+ (@function user-full-name (&optional uid) (uid Number|Nil) (@return String|Nil))
  (@function user-uid () (@return Number))
  (@function user-real-uid () (@return Number))
  (@function group-name (gid) (gid Number) (@return String|Nil))

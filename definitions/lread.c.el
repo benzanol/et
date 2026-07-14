@@ -6,14 +6,14 @@
 ;; stands for the value of the `obarray' variable.
 
 (et-declare
- (@function obarray-make (&optional size) (size Integer) (@return Obarray))
+ (@function obarray-make (&optional size) (size Integer|Nil) (@return Obarray))
  (@function obarray-clear (obarray) (obarray Obarray) (@return Nil))
  (@function obarrayp (object)
             (@generics [T]) (object T)
             (@return (or (and True (bindsof (and T Obarray)))
                          (and Nil (bindsof (subtract T Obarray))))))
  (@function mapatoms (function &optional obarray)
-            (function Function<Args<Symbol>~Any>) (obarray Obarray)
+            (function Function<Args<Symbol>~Any>) (obarray Obarray|Nil)
             (@return Nil)))
 
 (et-test
@@ -28,13 +28,13 @@
 
 (et-declare
  (@function intern (name &optional obarray)
-            (name String) (obarray Obarray) (@return Symbol))
+            (name String) (obarray Obarray|Nil) (@return Symbol))
  (@function intern-soft (name &optional obarray)
-            (name String|Symbol) (obarray Obarray) (@return Symbol|Nil))
+            (name String|Symbol) (obarray Obarray|Nil) (@return Symbol|Nil))
  (@function unintern (name obarray)
             (name String|Symbol) (obarray Obarray|Nil) (@return Boolean))
  (@function read-from-string (string &optional start end)
-            (string String) (start Integer) (end Integer)
+            (string String) (start Integer|Nil) (end Integer|Nil)
             (@return Cons<Any~Integer>)))
 
 (et-test

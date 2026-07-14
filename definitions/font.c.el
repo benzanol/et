@@ -25,7 +25,7 @@
 
 (et-declare
  (@function fontp (object &optional extra-type)
-            (@generics [T]) (object T) (extra-type Symbol)
+            (@generics [T]) (object T) (extra-type Symbol|Nil)
             (@return (or (and True (bindsof (and T Font)))
                          (and Nil (bindsof (subtract T Font)))))))
 
@@ -64,15 +64,15 @@
 
 (et-declare
  (@function list-fonts (font-spec &optional frame num prefer)
-            (font-spec FontSpec) (frame Frame) (num Integer) (prefer FontSpec)
+            (font-spec FontSpec) (frame Frame|Nil) (num Integer|Nil) (prefer FontSpec|Nil)
             (@return List<FontEntity>))
  (@function find-font (font-spec &optional frame)
-            (font-spec FontSpec) (frame Frame)
+            (font-spec FontSpec) (frame Frame|Nil)
             (@return FontEntity|Nil))
  (@function font-match-p (spec font)
             (spec FontSpec) (font Font) (@return Boolean))
  (@function font-family-list (&optional frame)
-            (frame Frame) (@return List<String>)))
+            (frame Frame|Nil) (@return List<String>)))
 
 (et-test
  (et-assert-call List<FontEntity> list-fonts FontSpec)
@@ -87,14 +87,14 @@
 
 (et-declare
  (@function open-font (font-entity &optional size frame)
-            (font-entity FontEntity) (size Integer) (frame Frame)
+            (font-entity FontEntity) (size Integer|Nil) (frame Frame|Nil)
             (@return FontObject|Nil))
  (@function close-font (font-object &optional frame)
-            (font-object FontObject) (frame Frame) (@return Nil))
+            (font-object FontObject) (frame Frame|Nil) (@return Nil))
  ;; The font used to display the character at POSITION, in WINDOW's buffer
  ;; or -- when STRING is given -- at that index into STRING.
  (@function font-at (position &optional window string)
-            (position IntOrMarker) (window Window) (string String)
+            (position IntOrMarker) (window Window|Nil) (string String|Nil)
             (@return FontObject|Nil)))
 
 (et-test

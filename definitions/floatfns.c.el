@@ -12,12 +12,12 @@
 (et-declare
  (@function acos (arg) (arg Number) (@return Number))
  (@function asin (arg) (arg Number) (@return Number))
- (@function atan (y &optional x) (y Number) (x Number) (@return Number))
+ (@function atan (y &optional x) (y Number) (x Number|Nil) (@return Number))
  (@function cos (arg) (arg Number) (@return Number))
  (@function sin (arg) (arg Number) (@return Number))
  (@function tan (arg) (arg Number) (@return Number))
  (@function exp (arg) (arg Number) (@return Number))
- (@function log (arg &optional base) (arg Number) (base Number) (@return Number))
+ (@function log (arg &optional base) (arg Number) (base Number|Nil) (@return Number))
  (@function sqrt (arg) (arg Number) (@return Number)))
 
 (et-test
@@ -82,10 +82,10 @@
 ;; round in place, and so return a float.
 
 (et-declare
- (@function ceiling (arg &optional divisor) (arg Number) (divisor Number) (@return Integer))
- (@function floor (arg &optional divisor) (arg Number) (divisor Number) (@return Integer))
- (@function round (arg &optional divisor) (arg Number) (divisor Number) (@return Integer))
- (@function truncate (arg &optional divisor) (arg Number) (divisor Number) (@return Integer))
+ (@function ceiling (arg &optional divisor) (arg Number) (divisor Number|Nil) (@return Integer))
+ (@function floor (arg &optional divisor) (arg Number) (divisor Number|Nil) (@return Integer))
+ (@function round (arg &optional divisor) (arg Number) (divisor Number|Nil) (@return Integer))
+ (@function truncate (arg &optional divisor) (arg Number) (divisor Number|Nil) (@return Integer))
 
  (@function fceiling (arg) (arg Number) (@return Number))
  (@function ffloor (arg) (arg Number) (@return Number))
