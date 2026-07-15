@@ -1,3 +1,25 @@
+;;;; Function declarations
+
+(et-declare
+ (@function cl-position (item sequence &key test test-not key start end from-end)
+            (@generics [E K])
+            (item Any)
+            (sequence (or (and String (set E Integer)) ListR<E> VectorR<E>))
+            (test (or Nil (Function (Args Any K) Any)))
+            (test-not (or Nil (Function (Args Any K) Any)))
+            (key (or Nil (Function (Args E) K)))
+            (start Integer|Nil) (end Integer|Nil) (from-end Any)
+            (@return Integer|Nil)))
+
+(et-test
+ (et-assert-resolve Integer|Nil (cl-position 2 (list 1 2 3)))
+ (et-assert-resolve Integer|Nil
+   (cl-position 'b (list (cons 'a 1) (cons 'b 2)) :key #'car :test #'eq))
+ (et-assert-resolve Integer|Nil
+   (cl-position ?b "abc" :start 1 :from-end t))
+ (et-assert-resolve-errors (cl-position 1 (list 1) :start "0")))
+
+
 ;;;; Keywords
 
 (defvar et--loop-keywords
