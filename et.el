@@ -121,7 +121,7 @@ expression that is not actually in the buffer, ensure that
       et--path)))
 
 (defmacro et-at (rel &rest body)
-  (declare (indent 1))
+  (declare (indent 1) (et (@expand)))
   (let* ((orig-var (gensym 'orig)))
     ;; On error, we want the path to stay where it is, hence using setq instead of let
     `(let ((,orig-var et--path))
@@ -130,7 +130,7 @@ expression that is not actually in the buffer, ensure that
          (setq et--path ,orig-var)))))
 
 (defmacro et-at-offset (offset &rest body)
-  (declare (indent 1))
+  (declare (indent 1) (et (@expand)))
   ;; On error, we want the path to stay where it is, hence using setq instead of let
   `(let ((et--path-offset (+ et--path-offset ,offset)))
      ,@body))
@@ -437,7 +437,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
  (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
 
 (defvar et--datatypes
-  (et!! AList<EtDatatypeName~EtDatatypeProps>
+  (et! AList<EtDatatypeName~EtDatatypeProps>
     '((Any :args nil :overlap t :predicate (lambda (v) t))
       ;; Literal<VALUE> is a type matching only the value VALUE
       ;; A literal CANNOT be ephemeral (like a buffer), it must be printable and readable

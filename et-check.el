@@ -515,7 +515,7 @@ rare event that the identifier is declaring some custom type."
           (unless (member library et--processed-requires)
             (push library et--processed-requires)
             ;; Process the buffer without propagating diagnostics
-            (et--process-exprs (et--file-exprs library))))
+            (et--process-exprs (et--file-exprs library) :eval t)))
         nil)
 
        ;; Process a root declaration block
@@ -555,6 +555,11 @@ rare event that the identifier is declaring some custom type."
     (when (or test eval)
       (cl-loop for expr in exprs
                for pos upfrom 0
+               ;; Do not evaluate defuns that are already defined.
+               ;; This exists purely to avoid issues with et type-checking itself.
+               unless (pcase expr
+                        (`(,(or 'defun 'cl-defun 'defmacro) ,name . ,_)
+                         (symbol-function name)))
                do
                (let* ((et--processing-phase :eval)
                       (et--processing-expr expr))
@@ -634,13 +639,16 @@ rare event that the identifier is declaring some custom type."
   param-reprs input-type return-repr generics constraints props)
 
 (defun et--find-function-declarations (body)
+  (declare (et (body ListR<Sexp>)
+               (@return Nil|ConsR<*et--func-declarations~Integer>)))
+
   (when-let*
       ((declare-pos (cl-position 'declare body :key #'car-safe :start 1))
-       (declare-block (nth declare-pos body))
+       (declare-block (et! ListR<Sexp> (nth declare-pos body)))
        (et-pos (cl-position 'et declare-block :key #'car-safe))
        (et-block (nth et-pos declare-block))
        ;; Start the actual parsing
-       (param-groups (et-at 0 (et--parse-arglist-params (car body)))))
+       (param-groups (et-at 0 (et--parse-arglist-params (et! (car body))))))
     (et-at (list declare-pos et-pos)
       (et-at-offset 1 ; after the `et'
         (cons (et--parse-function-declarations param-groups (cdr et-block))
@@ -1332,20 +1340,13 @@ Returns a plist with :declare to set the symbol type."
       (et-err 0 "Expected %s, found %s" declared actual))
     declared))
 
-(et-define-pcase-checker et! `(,type-spec ,_expr)
-  (let* ((declared (et-parse-type type-spec))
-         (actual (et-checker-sub-with-recommendation declared 2)))
-    (when (and (not (et-never-p actual))
-               (not (et-never-p declared))
-               (et-never-p (et--supersect actual declared)))
-      (et-err 0 "Types %s and %s have no overlap. Use et!! to supress this warning."
-              declared actual))
-    declared))
-
-(et-define-pcase-checker et!! `(,type-spec ,_expr)
-  (let* ((declared (et-parse-type type-spec))
-         (_actual (et-checker-sub-with-recommendation declared 2)))
-    declared))
+(et-define-pcase-checker et! args
+  (pcase (length args)
+    (1 (et-checker-sub 1) (et Never))
+    (2 (let* ((declared (et-parse-type (car args))))
+         (et-checker-sub-with-recommendation declared 2)
+         declared))
+    (n (et-fatal 0 "Wrong number of arguments: %s" n))))
 
 
 ;;;; Pcase et-*

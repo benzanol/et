@@ -30,8 +30,9 @@
 ;;; Code:
 
 (defmacro et: (_type-spec expr) (declare (indent 1)) expr)
-(defmacro et! (_type-spec expr) (declare (indent 1)) expr)
-(defmacro et!! (_type-spec expr) (declare (indent 1)) expr)
+(defmacro et! (&rest args)
+  (declare (indent 1)) 
+  (if (cdr args) (cadr args) (car args)))
 
 (defmacro et-declare (&rest _) nil)
 (defmacro et-test (&rest _) nil)
