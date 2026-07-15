@@ -1,18 +1,3 @@
-;;; Cons matching aliases
-
-;; `MatchCar'/`MatchCdr' are matcher-only aliases used by `car'/`cdr'
-;; (and the c[ad]+r family in subr.el): matching a value against
-;; `MatchCar<T>' binds T to the type produced by calling `car' on it.
-
-(et-declare
- (@alias MatchCar [T] :matcher-only t
-         (or (and Nil (set T Nil))
-             (ConsR T Any)))
- (@alias MatchCdr [T] :matcher-only t
-         (or (and Nil (set T Nil))
-             (ConsR Any T))))
-
-
 ;;; Arithmetic
 
 ;; Everywhere a number is accepted, a marker is too: it is converted to
@@ -395,14 +380,24 @@
 ;;; Cons cells
 
 (et-declare
+ (@alias MatchCar [T] :matcher-only t
+         (or (and Nil (set T Nil))
+             (ConsR T Any)))
+ (@alias MatchCdr [T] :matcher-only t
+         (or (and Nil (set T Nil))
+             (ConsR Any T))))
+
+(et-declare
  (@function car (list)
             (@generics [T]) (list (MatchCar T)) (@return T))
  (@function cdr (list)
             (@generics [T]) (list (MatchCdr T)) (@return T))
  (@function car-safe (object)
-            (@generics [T]) (object Any|ConsR<T~Any>) (@return T))
+            (@generics [O]) (object O)
+            (@return (infer O [T] ConsR<T~Any> T Nil)))
  (@function cdr-safe (object)
-            (@generics [T]) (object Any|ConsR<Any~T>) (@return T))
+            (@generics [O]) (object O)
+            (@return (infer O [T] ConsR<Any~T> T Nil)))
  ;; NOTE: the parameter order here is preserved verbatim from the
  ;; original `setcar' checker.
  (@function setcar (a b)

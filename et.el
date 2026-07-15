@@ -2146,6 +2146,12 @@ which are invalid for types."
            :binds (et--type-binds type)))))
 
 (et-define-op infer (type [gen-vec :generics] [matcher :matcher] [yes :repr] [no :repr])
+  :parse
+  (list (et--parse-sub type)
+        gen-vec
+        (et-parse-matcher matcher gen-vec et--parsing-generics)
+        (et--parse-sub yes (et--gen-vec-generics gen-vec))
+        (et--parse-sub no))
   :to-string (format "{if %s matches %s then %s else %s}"
                      (et-repr-to-string type) (et-pp-matcher matcher)
                      (et-repr-to-string yes) (et-repr-to-string no))
@@ -3397,6 +3403,11 @@ lazily because `List' is not yet defined when this file loads.")
   (et--expand-tailed-tuple-spec 'Cons (append args (list (cons 'Repeat args)))))
 (et-define-custom-alias RepeatR (&rest args)
   (et--expand-tailed-tuple-spec 'ConsR (append args (list (cons 'Repeat args)))))
+
+(et-defalias Sexp []
+  (or Symbol String Number
+      (ConsR Sexp Sexp)
+      (VectorR Sexp)))
 
 
 ;;;; Emacs aliases
