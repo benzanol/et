@@ -1233,9 +1233,20 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (et--verify-matcher matcher)
   (et--verify-type type)
 
-  (et--stop-recursion et--constraints-stack (list 'sub (et-matcher-repr matcher) type)
-                      (make-et-match-result :success t :value nil)
-    (et--sub-constraints-1 matcher type)))
+  (or
+   ;; Just a narrow, temporary way of processing a single scoped constraint
+   (pcase (et-type-single type)
+     ((cl-struct et-datatype (name 'Scoped) (args `(,_ ,_ ,qs)))
+      (cl-loop for (op _ qtype) in qs
+               for result = (when (eq op 'Q:LEQ)
+                              (et--sub-constraints-0 matcher qtype))
+               when (and result (et-match-result-success result))
+               return result
+               finally return (et--failed-match-result))))
+
+   (et--stop-recursion et--constraints-stack (list 'sub (et-matcher-repr matcher) type)
+                       (make-et-match-result :success t :value nil)
+     (et--sub-constraints-1 matcher type))))
 
 (defun et--sub-constraints-1 (matcher type)
   (declare (et (matcher *et-matcher) (type *et-type)
@@ -1366,9 +1377,20 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (et--verify-matcher matcher)
   (et--verify-type type)
 
-  (et--stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type)
-                      (make-et-match-result :success t :value nil)
-    (et--super-constraints-1 matcher type)))
+  ;; The 'super' version of scoped constraint checking
+  (or
+   (pcase (et-type-single type)
+     ((cl-struct et-datatype (name 'Scoped) (args `(,_ ,_ ,qs)))
+      (cl-loop for (op _ qtype) in qs
+               for result = (when (eq op 'Q:GEQ)
+                              (et--super-constraints-0 matcher qtype))
+               when (and result (et-match-result-success result))
+               return result
+               finally return (et--failed-match-result))))
+
+   (et--stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type)
+                       (make-et-match-result :success t :value nil)
+     (et--super-constraints-1 matcher type))))
 
 (defun et--super-constraints-1 (matcher type)
   (declare (et (matcher *et-matcher) (type *et-type)

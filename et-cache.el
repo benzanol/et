@@ -622,7 +622,7 @@ non-nil instead."
           (when (file-exists-p et-cache-nonfile-file)
             (list et-cache-nonfile-file))))
 
-(defun et-clear-source-cache (source)
+(defun et-clear-cache (source)
   "Empty SOURCE's cached results, rewriting its cache file in place.
 SOURCE is the original source file path, or nil for the non-file cache.
 Interactively, clears the cache for the current buffer's file."
@@ -630,7 +630,7 @@ Interactively, clears the cache for the current buffer's file."
   (et-with-cache-source source
     (setq et--current-cache (make-et-cache))))
 
-(defun et-clear-cache ()
+(defun et-clear-all-cache ()
   "Empty every source's cached results, rewriting the cache files in place."
   (interactive)
   (dolist (file (et--all-cache-files))
