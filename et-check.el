@@ -480,7 +480,7 @@ PATH is the path to the subexpression."
 (defvar et--processed-requires nil
   "List of libraries which have been processed due to a `require'.")
 
-(defmacro et-define-identifier (symbol arglist &rest body)
+(defmacro et-define-identifier (name arglist &rest body)
   "Define an identifier for a particular symbol.
 
 The arguments to the identifier will be the cdr of the expression which
@@ -493,10 +493,12 @@ function, which will be called during the corresponding phase of
 pre-processing. Most identifiers should only use :declare, except in the
 rare event that the identifier is declaring some custom type."
   (declare (indent 2))
-  `(put ',symbol 'et-identify
-        (lambda . ,(cl--transform-lambda
-                    (cons arglist body)
-                    (intern (format "et-identify:%s" symbol))))))
+  `(let* ((identify
+           (lambda . ,(cl--transform-lambda
+                       (cons arglist body)
+                       (intern (format "et-identify:%s" name))))))
+     ,@(cl-loop for sym in (if (listp name) name (list name))
+                collect `(put ',sym 'et-identify identify))))
 
 (defun et--identify-expr (expr)
   (cons
@@ -958,9 +960,9 @@ OUTPUT-REPR each converted to concrete types."
            (et-repr-to-type output-repr nil))))
 
 
-;;;;; Identification
+;;;;; Identify
 
-(et-define-identifier defun (name &rest rest)
+(et-define-identifier (defun cl-defun) (name &rest rest)
   (list
    :declare
    (lambda ()
@@ -1011,7 +1013,7 @@ OUTPUT-REPR each converted to concrete types."
 (et-defvar et-checking-defun Nil|Var nil
   "The defun currently being checked.")
 
-(et-define-pcase-checker defun `(,name . ,_)
+(et-define-pcase-checker (defun cl-defun) `(,name . ,_)
   (when-let* ((sig (get name 'et-function-signature))
               ((not (plist-get (et-func-sig-props sig) :skip)))
               (et-checking-defun name))
