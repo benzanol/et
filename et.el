@@ -527,12 +527,13 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 (defvar et--scoped-datatypes nil
   "A list of (NAME SCOPED CONSTRAINTS).")
 
-(defun et--make-scoped-datatypes (matcher)
-  (declare (et (matcher Nil|*et-matcher)
+(defun et--make-scoped-datatypes (generics constraints)
+  (declare (et (generics ListR<EtGeneric>)
+               (constraints ListR<EtTypeConstraints>)
                (@return (List (Tuple Var Var List<EtTypeConstraint>)))))
 
-  (cl-loop for name in (when matcher (et-matcher-generics matcher))
-           for qs = (cl-loop for q in (when matcher (et-matcher-constraints matcher))
+  (cl-loop for name in generics
+           for qs = (cl-loop for q in constraints
                              when (eq (cadr q) name)
                              collect q)
            collect (list name (gensym (format "scoped-%s@" name)) qs)))

@@ -763,192 +763,19 @@ rare event that the identifier is declaring some custom type."
 
 
 ;;;; Functions
-;;;;; Parse declarations
+;;;;; Types
 
-(cl-defstruct et--func-declarations
-  "The result of parsing the function declarations."
-  param-reprs input-type return-repr generics constraints props)
-
-(defun et--find-function-declarations (body)
-  (declare (et (body ListR<Sexp>)
-               (@return Nil|ConsR<*et--func-declarations~Integer>)))
-
-  (when-let*
-      ((declare-pos (cl-position 'declare body :key #'car-safe :start 1))
-       (declare-block (et! ListR<Sexp> (nth declare-pos body)))
-       (et-pos (cl-position 'et declare-block :key #'car-safe))
-       (et-block (nth et-pos declare-block))
-       ;; Start the actual parsing
-       (param-groups (et-at 0 (et--parse-arglist-params (et! (car body))))))
-    (et-at (list declare-pos et-pos)
-      (et-at-offset 1 ; after the `et'
-        (cons (et--parse-function-declarations param-groups (cdr et-block))
-              (1+ declare-pos))))))
-
-(defun et--assign-function-declarations (func decls)
-  "Assign relevant symbol properties to FUNC."
-  (declare (et (func Var) (decls *et--func-declarations) (@return Nil)))
-  (put func 'et-function-declarations decls)
-
-  ;; Assign `et-function-type' if applicable
-  (when-let* ((type (et--func-decls-to-type decls)))
-    (put func 'et-function-type type))
-
-  ;; Assign the checker if applicable
-  (when-let* ((checker (plist-get (et--func-declarations-props decls) :checker)))
-    (put func 'et-checker checker)))
-
-(defun et--func-decls-to-input (decls)
-  (pcase-let* (((cl-struct et--func-declarations param-reprs generics constraints) decls))
-    (apply #'et--generate-func-input nil generics constraints param-reprs)))
-
-(defun et--func-decls-to-type (decls)
-  (when-let* ((input (et--func-decls-to-input decls))
-              (return-repr (et--func-declarations-return-repr decls)))
-    (if (et-matcher-p input)
-        (et-dt 'DynFunction input return-repr)
-      (et-dt 'Function input (et-repr-to-type return-repr)))))
-
-(defun et--parse-function-declarations (param-groups declares)
-  (let* ((param-reprs
-          (cl-loop for group in param-groups
-                   collect (cl-loop for name in group collect (cons name (et-repr Any)))))
-         any-params return-repr gen-vec generics constraints props)
-
-    ;; Parse the fields of the declare block
-    (dotimes (form-idx (length declares))
-      (et-error-boundary form-idx
-        (pcase (nth form-idx declares)
-          (`(@return ,spec)
-           (when return-repr (et-fatal 0 "Multiple @return clauses"))
-           (et-at 1
-             (setq return-repr (et-parse-repr spec generics))))
-          (`(@return . ,_) (et-fatal 0 "Expected (@return TYPE)"))
-
-          (`(@generics ,(and gv (pred vectorp)))
-           (when gen-vec (et-fatal 0 "Multiple @generic clauses"))
-           (when return-repr (et-fatal 0 "@generic must come before @return"))
-           (when any-params (et-fatal 0 "@generic must come before parameter declarations"))
-           (et-at 1
-             (setq gen-vec gv
-                   generics (et--gen-vec-generics gv)
-                   constraints (et--gen-vec-constraints gv))))
-          (`(@generics . ,_) (et-fatal 0 "Expected (@generics [VARS...])"))
-
-          (`(@skip)
-           (when (plist-get props :skip) (et-fatal 0 "Multiple @skip clauses"))
-           (setq props (cl-list* :skip t props)))
-
-          ;; Can contain `narrows', `vars', `all'
-          (`(@show . ,show)
-           (when (plist-get props :show) (et-fatal 0 "Multiple @show clauses"))
-           (setq props (cl-list* :skip show props)))
-
-          (`(@checker ,checker)
-           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
-           (setq props (cl-list* :checker checker props)))
-
-          (`(@expand)
-           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
-           (setq props (cl-list* :checker #'et-macroexpand-checker props)))
-          (`(@progn)
-           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
-           (setq props (cl-list* :checker #'et-progn-checker props)))
-          (`(@prog1)
-           (when (plist-get props :checker) (et-fatal 0 "Multiple checkers specified"))
-           (setq props (cl-list* :checker #'et-prog1-checker props)))
-
-          ;; Parameters
-          (`(,(and name (pred symbolp)) ,spec)
-           (let* ((entry (cl-loop for group in param-reprs
-                                  for entry = (assq name group)
-                                  when entry return entry
-                                  finally do (et-fatal 0 "Not a parameter: %s" name))))
-             (et-at 1
-               (setq any-params t)
-               (setcdr entry (et-parse-repr spec generics)))))
-
-          (_ (error "Invalid format")))))
-
-    (make-et--func-declarations
-     :param-reprs param-reprs
-     :return-repr return-repr
-     :generics generics
-     :constraints constraints
-     :props props)))
-
-
-;;;;; Parse signature
-
-;; Function processing happens in two phases:
-;;
-;; 1. `et--parse-defun-signature' must be run after all types are
-;; defined.
-;;
-;; 2. Checking the function body must happen after all functions and
-;; variabels are defined.
-
-(cl-defstruct et-func-sig
-  (declarations nil :et *et--func-declarations)
-  (func-type nil :et *et-type)
-  (props nil :et List<Any>)
-  ;; Things necessary for typechecking the body
-  (source nil :et List<Any>) ; Some nthcdr of the function body containing the code
-  (source-pos nil :et Integer) ; Position of source RELATIVE TO ARGLIST (1 if right after arglist)
-  ;; Both vars and expected-return may contain the scoped types
-  (scoped nil :et (List (Tuple EtGeneric Symbol List<EtTypeConstraint>)))
-  (vars nil :et List<*et-var>)
-  (expected-return nil :et *et-type))
-
-(defun et--parse-function-signature (body)
-  "The current path should point to ARGLIST."
-  (declare (et (body List<Any>)
-               (@return Nil|*et-result<*et-func-sig>)
-               (@skip)))
-
-  (when-let* ((found (et--find-function-declarations body))
-              (decls (car found))
-              (source-pos (cdr found))
-              (return-repr (et--func-declarations-return-repr decls)))
-
-    ;; Construct the function signature
-    (let* ((input (et--func-decls-to-input decls))
-           (param-reprs (et--func-declarations-param-reprs decls))
-           (generics (et--func-declarations-generics decls))
-           (scoped (et--make-scoped-datatypes (when (et-matcher-p input) input))))
-
-      (et--with-scoped-datatypes scoped
-        (make-et-func-sig
-         :declarations decls
-         :func-type (et--func-decls-to-type decls) ; will be non-nil if return-repr is non-nil
-         :props (et--func-declarations-props decls)
-         ;; Things necessary for typechecking the body
-         :source (nthcdr source-pos body)
-         :source-pos source-pos
-         ;; Both vars and expected-return may contain the scoped types
-         :scoped scoped
-         :vars
-         (cl-loop for param-group in param-reprs
-                  for param-group-idx upfrom 0
-                  nconc
-                  (cl-loop for (name . repr) in param-group
-                           ;; Replace each generic in the parameter reprs with the corresponding scoped datatype
-                           for type = (cl-loop for gen in generics
-                                               for scoped-args in scoped
-                                               collect (cons gen (apply #'et-dt 'Scoped scoped-args)) into gen-repls
-                                               finally return (et-repr-to-type repr gen-repls))
-                           ;; Ensure that optional parameters are nillable
-                           when (and (eq param-group-idx 1) (not (et-subtype? (et Nil) type))
-                                     (not (pcase (et-type-single type)
-                                            ((cl-struct et-datatype (name 'Scoped)) t))))
-                           do (et-err nil "Optional %s is not nillable" name)
-
-                           collect (make-et-var :name name :type type)))
-         :expected-return
-         (cl-loop for (name unique constraints) in scoped
-                  collect (cons name (et-dt 'Scoped name unique constraints))
-                  into gen-repls
-                  finally return (et-repr-to-type return-repr gen-repls)))))))
+(et-declare
+ (@alias EtFuncParameters [T]
+         (Tuple ListR<T> ListR<T> ListR<T> Nil|TupleR<T>))
+ (@alias EtFuncDeclarations
+         (PList :parameters EtFuncParameters<Var>
+                :generics ListR<EtGeneric>
+                :constraints ListR<EtTypeConstraint>
+                ;; Either a function type or a custom checker
+                :definition (or Nil *et-type (fn Nil *et-type))
+                :props KVPList<Var~Any>))
+ (@symbol-property et-function-declarations EtFuncDeclarations))
 
 
 ;;;;; Parse arglist params
@@ -960,8 +787,8 @@ ARGLIST is a plain parameter list with no type annotations — just
 symbols and default-value forms. REQUIRED, OPTIONAL, KEY, and REST are
 each lists of parameter name symbols. The list REST has at most 1
 element."
-  (declare (et (arglist List<Var>)
-               (@return (Tuple List<Var> List<Var> List<Var> List<Var>))))
+  (et-declare (arglist List<Var>)
+              (@return EtFuncParameters<Var>))
 
   (let ((required nil)
         (optional nil)
@@ -971,153 +798,234 @@ element."
     (dolist (elt arglist)
       (pcase elt
         ('&optional (setq state 'optional))
-        ('&rest     (setq state 'rest))
-        ('&key      (setq state 'key))
+        ('&rest (setq state 'rest))
+        ('&key (setq state 'key))
         ((or `(,name . ,_) name)
          (pcase state
            ('required (push name required))
            ('optional (push name optional))
-           ('key      (push name key-params))
-           ('rest     (setq rest-param name))))))
+           ('key (push name key-params))
+           ('rest (if rest-param (error "Multiple rest parameters")
+                    (setq rest-param name)))))))
+
+    (let* ((all (append required optional key-params (list rest-param))))
+      (unless (eq (length all) (length (delete-dups all)))
+        (error "Duplicate parameter names")))
+
     (list (nreverse required)
           (nreverse optional)
           (nreverse key-params)
           (when rest-param (list rest-param)))))
 
 
-;;;;; Input type
+;;;;; Parsing declarations
 
-(defun et--generate-func-input (always-matcher generics constraints required optional key-params rest-params)
-  "Build an input matcher or type from parameter specs.
+(defun et--func-parse-declarations (params declares)
+  "Parse function declarations.
 
-GENERICS is a list of generic symbols, or nil.
+This assumes that the current path points to DECLARES."
+  (et-declare (params EtFuncParameters<Var>)
+              (declares ListR<Any>))
 
-REQUIRED, OPTIONAL, KEY/REST-PARAMS are alists of (SYMBOL . REPR).
+  (let* ((param-alist (et: AListR<Var~*et-repr> nil))
+         (generics (et: ListR<EtGeneric> nil))
+         (constraints (et: ListR<EtTypeConstraint> nil))
+         (props (et: KVPList<Var~Any> nil))
 
-REST-PARAMS will have at most 1 entry.
+         (return-repr (et: Nil|*et-repr nil))
+         (function-type (et: Nil|*et-type nil))
+         (checker (et: (or Nil (fn Nil *et-type)) nil))
 
-Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
-  (declare (et (always-matcher Boolean)
-               (generics ListR<EtGeneric>)
-               (constraints ListR<EtTypeConstraint>)
-               (required AList<Symbol~EtRepr|Nil>)
-               (optional AList<Symbol~EtRepr|Nil>)
-               (key-params AList<Symbol~EtRepr|Nil>)
-               (rest-params AList<Symbol~EtRepr|Nil>)))
+         (strategy (et: Nil|@return|@function|@checker nil))
+         (use-strategy
+          (lambda (strat)
+            (if (null strategy) (setq strategy strat)
+              (unless (eq strat strategy)
+                (error "Form not valid for strategy %s" strategy))))))
+
+    ;; Parse the fields of the declare block
+    (dotimes (form-idx (length declares))
+      (et-error-boundary form-idx
+        (pcase (nth form-idx declares)
+          ;; return strategy
+          (`(@generics ,(and gv (pred vectorp)))
+           (funcall use-strategy 'return)
+           (unless (eq 0 form-idx) (et-fatal 0 "@generics clauses must be first"))
+           (et-at 1
+             (setq generics (et--gen-vec-generics gv)
+                   constraints (et--gen-vec-constraints gv))))
+          (`(@generics . ,_) (et-fatal 0 "Expected (@generics [VARS...])"))
+          (`(@return ,spec)
+           (funcall use-strategy 'return)
+           (when return-repr (et-fatal 0 "Multiple @return clauses"))
+           (when checker (et-fatal 0 "Cannot have both a custom checker and function type"))
+           (et-at 1 (setq return-repr (et-parse-repr spec generics))))
+          (`(@return . ,_) (et-fatal 0 "Expected (@return TYPE)"))
+
+          ;; function strategy
+          (`(@function ,spec)
+           (funcall use-strategy 'function)
+           (when function-type (et-fatal 0 "Multiple @function clauses"))
+           (et-at 1 (setq function-type (et-parse-type spec))))
+          (`(@function . ,_) (et-fatal 0 "Expected (@function TYPE)"))
+
+          ;; checker strategy
+          ((or `(@checker ,chk)
+               (and `(@checker ,fn . ,args) (let chk `(lambda () (,fn ,@args))))
+               (and `(@expand) (let chk #'et-macroexpand-checker))
+               (and `(@progn) (let chk #'et-progn-checker))
+               (and `(@prog1) (let chk #'et-prog1-checker)))
+           (funcall use-strategy 'checker)
+           (when checker (et-fatal 0 "Multiple checkers specified"))
+           (setq checker chk))
+
+          ;; Props
+          (`(@skip)
+           (when (plist-get props :skip) (et-fatal 0 "Multiple @skip clauses"))
+           (setq props (cl-list* :skip t props)))
+          (`(@show . ,show) ; Can contain `narrows', `vars', `all'
+           (when (plist-get props :show) (et-fatal 0 "Multiple @show clauses"))
+           (setq props (cl-list* :show show props)))
+
+          ;; Parameters
+          (`(,(and name (pred symbolp)) ,spec)
+           (funcall use-strategy 'return)
+           (et-at 1 (setf (alist-get name param-alist)
+                          (et-parse-repr spec generics))))
+
+          (_ (error "Invalid format")))))
+
+    (list
+     :parameters params
+     :generics generics
+     :constraints constraints
+     :definition
+     (cond (function-type)
+           (return-repr
+            (let* ((fn (lambda (p) (or (alist-get p param-alist) (et-parse-repr 'Any generics))))
+                   (input (et--func-params-to-input generics params fn #'identity)))
+              (if (null generics) (et-dt 'Function (et-repr-to-type input) (et-repr-to-type return-repr))
+                (et-dt 'DynFunction
+                       (make-et-matcher :generics generics :constraints constraints :repr input)
+                       return-repr))))
+           (checker))
+     :props props)))
+
+
+;;;;; Construct input repr
+
+(defun et--func-params-to-input (generics params fn key-fn)
+  "Build an input repr from parameter specs.
+
+FN converts a parameter (T) to the repr that should be used for it, and"
+  (et-declare (@generics [T])
+              (generics ListR<EtGeneric>) (params EtFuncParameters<T>)
+              (fn Function<T~EtRepr>) (key-fn Function<T~Symbol>)
+              (@return EtRepr))
 
   ;; Convert an entry (VAR . REPR) to a labeled repr
-  (let* ((fn (lambda (var repr)
-               (et-copy-with (or repr (et-repr Nil))
-                             :label (list :field var))))
-         (fn1 (lambda (e) (funcall fn (car e) (cdr e))))
-         (rest-repr
-          (pcase (car rest-params)
-            (`(,var . ,repr) (funcall fn var repr))
-            ((guard key-params)
-             (cl-loop for (var . repr) in key-params
-                      nconc (list (intern (format ":%s" var)) (funcall fn var repr)) into plist-args
-                      finally return (et-repr PList ,@plist-args)))
+  (pcase-let*
+      ((`(,req-ps ,opt-ps ,key-ps ,rest-ps) params)
+       (rest-repr
+        (cond
+         (rest-ps (when key-ps (error "Cannot have both key and rest parameters"))
+                  (funcall fn (car rest-ps)))
+         (key-ps
+          (cl-loop for key-p in key-ps
+                   nconc (list (intern (format ":%s" (funcall key-fn key-p)))
+                               (funcall fn key-p))
+                   into plist-args
+                   finally return (et-parse-repr `(PList ,@plist-args) generics)))
+         ((et-parse-repr 'Nil generics)))))
 
-            ('nil (et-repr Nil))
-            (x (error "Invalid rest param: %s" x))))
-
-         (req-reprs (mapcar fn1 required))
-         (opt-reprs (mapcar fn1 optional))
-         (input-repr (et--params-to-input-repr req-reprs opt-reprs rest-repr)))
-
-    (if (or always-matcher generics)
-        (make-et-matcher
-         :generics generics
-         :constraints constraints
-         :repr input-repr)
-      (et-repr-to-type input-repr nil))))
-
-(defun et--params-to-input-repr (req opt rest)
-  (declare (et (req ListR<EtRepr>) (opt ListR<EtRepr>) (rest EtRepr)
-               (@return EtRepr)))
-  (cond
-   (req (et-repr ConsR ,(car req) ,(et--params-to-input-repr (cdr req) opt rest)))
-   (opt
-    ;; The remaining optional/rest arguments may contain generics.
-    ;; In the tail=Nil case, all of these generics should be assigned to nil.
-    ;;
-    ;; This will create some crazy looking parameter types if there
-    ;; are generics deep in the optional parameters, but it is
-    ;; required so that those generics will be correctly inferred as
-    ;; Nil rather than Never.
-    (cl-loop for repr in (append opt (list rest))
-             ;; Only if the repr is JUST a generic
-             when (pcase repr ((cl-struct et-repr (dnf `(((S:GENERIC ,_))))) t))
-             collect repr into gen-reprs
-             finally return
-             (let* ((tail (et--params-to-input-repr nil (cdr opt) rest)))
-               (et-repr or (and Nil ,@gen-reprs)
-                        (ConsR ,(car opt) ,tail)))))
-   (t rest)))
-
-(et-test
- (equal (et--generate-func-input nil nil nil '((x . (((S:DT Integer)))) (y . (((S:DT Any))))) nil nil nil)
-        (et ConsR<Integer~ConsR<Any~Nil>>))
-
- (equal (et--generate-func-input nil nil nil '((x . (((S:DT Integer)))) (y . (((S:DT String))))) nil nil
-                                 '((args . (((S:ALIAS ListR (((S:DT Any)))))))))
-        (et ConsR<Integer~ConsR<String~ListR<Any>>>))
-
- (equal (et-matcher-dnf
-         (et--generate-func-input nil '(T) nil '((x . (((S:GENERIC T))))) '((y . (((S:DT Number)))))
-                                  nil '((args . (((S:ALIAS ListR (((S:DT String))))))))))
-        (et-matcher-dnf (et-matcher [T] ConsR<T~{Nil|ConsR<Number~ListR<String>>}>)))
-
- (equal (et-matcher-dnf
-         (et--generate-func-input nil '(T) nil '((a . (((S:GENERIC T))))) nil '((scale . (((S:DT Number)))) (flag . (((S:DT Any))))) nil))
-        (et-matcher-dnf (et-matcher [T] ConsR<T~PList<:scale~Number~:flag~Any>>))))
+    (named-let loop ((req (mapcar fn req-ps)) (opt (mapcar fn opt-ps)))
+      (cond
+       (req (et-parse-repr (list 'ConsR (car req) (loop (cdr req) opt))
+                           generics (list :field (car req))))
+       (opt
+        ;; The remaining optional/rest arguments may contain generics.
+        ;; In the tail=Nil case, all of these generics should be assigned to nil.
+        ;;
+        ;; This will create some crazy looking parameter types if there
+        ;; are generics deep in the optional parameters, but it is
+        ;; required so that those generics will be correctly inferred as
+        ;; Nil rather than Never.
+        (cl-loop for repr in (append opt (list rest-repr))
+                 ;; Only if the repr is JUST a generic
+                 when (pcase repr ((cl-struct et-repr (dnf `(((S:GENERIC ,_))))) t))
+                 collect repr into gen-params
+                 finally return
+                 (let* ((tail (loop nil (cdr opt))))
+                   (et-parse-repr
+                    `(or (and Nil ,@gen-params)
+                         (ConsR ,(car opt) ,tail))
+                    generics (list :field (car opt))))))
+       (t rest-repr)))))
 
 
-;;;;; Make function type
+;;;;; Function type, scoped dts -> param types
 
-(defun et--make-function-type (generics constraints input-repr output-repr)
-  "Build a Function or DynFunction type from reprs.
+(defun et--func-param-types (params func-input-type)
+  (et-declare (params EtFuncParameters<Var>)
+              (func-input-type *et-type)
+              (@return AList<Var~*et-type>))
 
-If GENERICS is non-nil, returns a DynFunction with a matcher built from
-GENERICS, CONSTRAINTS, and INPUT-REPR, and OUTPUT-REPR as the output.
+  ;; First, we want to construct a matcher representing the parameters
+  (let* ((params-with-gens
+          (cl-loop with idx = 0
+                   for group in params
+                   collect (cl-loop for var in group
+                                    for gen = (intern (format "P%s" (cl-incf idx)))
+                                    collect (cons var gen))))
+         (param-gens-alist (apply #'append params-with-gens))
+         (param-gens (mapcar #'cdr param-gens-alist))
+         (params-repr
+          (et--func-params-to-input
+           param-gens params-with-gens
+           (lambda (p) (et-parse-repr (cdr p) param-gens))
+           #'car))
+         (params-matcher (make-et-matcher :generics param-gens :repr params-repr))
+         (match-result (et-sub-match params-matcher func-input-type))
+         (matches (if (et-match-result-success match-result) (et-match-result-value match-result)
+                    (error "Function type is not compatible with parameters"))))
+    (cl-loop for (param . _sym) in param-gens-alist
+             for type in matches
+             collect (cons param type))))
 
-If GENERICS is nil, returns a Function with INPUT-REPR and
-OUTPUT-REPR each converted to concrete types."
-  (declare (et (generics ListR<EtGeneric>)
-               (constraints ListR<EtTypeConstraint>)
-               (input-repr EtRepr)
-               (output-repr EtRepr)))
 
-  (if generics
-      (et-dt 'DynFunction
-             (make-et-matcher :generics generics
-                              :constraints constraints
-                              :repr input-repr)
-             output-repr)
-    (et-dt 'Function
-           (et-repr-to-type input-repr nil)
-           (et-repr-to-type output-repr nil))))
+;;;;; Identifiers
 
+(defun et--func-assign-decls (name decls)
+  "Assign relevant symbol properties to FUNC."
+  (declare (et (name Var) (decls *et--func-declarations) (@return Nil)))
 
-;;;;; Identify
+  (put name 'et-function-declarations decls)
 
-(et-define-identifier (defun cl-defun) (name &rest rest)
+  (pcase (plist-get decls :definition)
+    ((and type (pred et-type-p)) (put name 'et-function-type type))
+    ((and chk (pred functionp)) (put name 'et-checker chk))))
+
+(defun et--func-declares-path (expr)
+  (et-declare (expr Sexp) (@return List<Integer>))
+  (if-let* ((etd-pos (cl-position 'et-declare expr :key #'car-safe)))
+      (list etd-pos)
+    (if-let* ((decl-pos (cl-position 'declare expr :key #'car-safe))
+              (et-pos (cl-position 'et (nth decl-pos expr) :key #'car-safe)))
+        (list decl-pos et-pos)
+      nil)))
+
+(et-define-identifier (defun cl-defun defmacro) (name &rest rest)
   (list
    :declare
    (lambda ()
-     (when-let* ((sig (et-at-offset 2 (et--parse-function-signature rest))))
-       (put name 'et-function-signature sig)
-       (et--assign-function-declarations name (et-func-sig-declarations sig))))))
+     (let* ((params (et-at 2 (et--parse-arglist-params (caddr et--checker-expr)))))
+       (when-let* ((declare-path (et--func-declares-path et--checker-expr))
+                   (declares (et--traverse-tree et--checker-expr declare-path))
+                   (decls (et-at declare-path (et-at-offset 1 (et--func-parse-declarations params declares)))))
+         (et--func-assign-decls name decls))))))
 
-(et-define-identifier defmacro (name &rest rest)
-  (list
-   :declare
-   (lambda ()
-     (when-let* ((found (et-at-offset 2 (et--find-function-declarations rest)))
-                 (decls (car found)))
-       (et--assign-function-declarations name decls)))))
 
-(defun et--declare-function (name arglist declares)
+(defun et--func-declare-from-directive (name arglist declares)
   (let* ((param-groups (et-at 2 (et--parse-arglist-params arglist)))
          (decls (et-at-offset 3 (et--parse-function-declarations param-groups declares))))
     (et--assign-function-declarations name decls)))
@@ -1131,8 +1039,8 @@ OUTPUT-REPR each converted to concrete types."
      (pcase-let* ((`(@function ,name ,arglist . ,declares) form))
        (if et-defer-declarations
            (put name 'et-deferred-declare
-                (lambda () (et--declare-function name arglist declares)))
-         (et--declare-function name arglist declares))))))
+                (lambda () (et--func-declare-from-directive name arglist declares)))
+         (et--func-declare-from-directive name arglist declares))))))
 
 (defun et--identify-macro-directive (form)
   (let* ((name (cadr form)))
@@ -1152,20 +1060,58 @@ OUTPUT-REPR each converted to concrete types."
 (et-defvar et-checking-defun Nil|Var nil
   "The defun currently being checked.")
 
-(et-define-pcase-checker (defun cl-defun) `(,name . ,_)
-  (when-let* ((sig (get name 'et-function-signature))
-              ((not (plist-get (et-func-sig-props sig) :skip)))
-              (et-checking-defun name))
+(defun et--func-io-types (func-type gen-repls)
+  (et-declare (func-type *et-type)
+              ;; In practice, the gen-repls will map each generic to a scoped datatype
+              (gen-repls AListR<EtGeneric~*et-type>)
+              (@return (Cons *et-type *et-type)))
+  (pcase (et-type-single (et-expand-all-aliases func-type))
+    ((cl-struct et-datatype (name 'DynFunction) (args `(,i-matcher ,o-repr)))
+     ;; Assuming that the func-type and gen-repls came from the same
+     ;; parsed func def, this should always be true
+     (when et-debug (cl-assert (seq-set-equal-p (mapcar #'car gen-repls) (et-matcher-generics i-matcher))))
+     (cons (et-repr-to-type (et-matcher-repr i-matcher) gen-repls)
+           (et-repr-to-type o-repr gen-repls)))
+    ((cl-struct et-datatype (name 'Function) (args `(,i-type ,o-type)))
+     (cons i-type o-type))
+    (_ (error "Invalid function type: %s" func-type))))
 
-    (et--with-scoped-datatypes (et-func-sig-scoped sig)
-      (et-with-vars (et-func-sig-vars sig)
-        ;; The body runs whenever the function is called, not here
-        (et-checker-deferred
-         (let* ((actual-ret (et-checker-tail (+ 2 (et-func-sig-source-pos sig))))
-                (expected-ret (et-func-sig-expected-return sig)))
-           (or (et-subtype? actual-ret expected-ret)
-               (et-err 0 "Expected %s, found %s" expected-ret actual-ret)))))))
-  (et-literal name))
+(et-define-pcase-checker (defun cl-defun) `(,name . ,_)
+  (when-let* ((decls (get name 'et-function-declarations))
+              ((not (plist-get (plist-get decls :props) :skip)))
+              (et-checking-defun name)
+              (func-type (plist-get decls :definition))
+              ((et-type-p func-type)))
+
+    (let* (;; Create the scoped datatypes
+           (scoped (et--make-scoped-datatypes
+                    (plist-get decls :generics)
+                    (plist-get decls :constraints)))
+           ;; Generate the mapping (generic -> scoped dt)
+           (scoped-repls
+            (et--with-scoped-datatypes scoped
+              (cl-loop for gen in (plist-get decls :generics)
+                       collect (cons gen (et-parse-type gen)))))
+           ;; Infer the correct parameter types from the function type
+           (func-io (et--func-io-types func-type scoped-repls))
+           (expected-ret (cdr func-io))
+           (param-types (et--func-param-types (plist-get decls :parameters) (car func-io)))
+           (param-vars (cl-loop for (p . type) in param-types
+                                collect (make-et-var :name p :type type))))
+
+      ;; Ensure that optional parameters are nillable
+      (dolist (opt (cadr (plist-get decls :parameters)))
+        (unless (et-subtype? (et Nil) (alist-get opt param-types))
+          (et-err nil "Optional parameter %s is not nillable" opt)))
+
+      (et--with-scoped-datatypes scoped
+        (et-with-vars param-vars
+          ;; The body runs whenever the function is called, not here
+          (et-checker-deferred
+            (let* ((actual-ret (et-checker-tail 3)))
+              (or (et-subtype? actual-ret expected-ret)
+                  (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
+              (et-literal name))))))))
 
 
 ;;;; Variables
