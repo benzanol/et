@@ -527,13 +527,15 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 (defvar et--scoped-datatypes nil
   "A list of (NAME SCOPED CONSTRAINTS).")
 
-(defun et--make-scoped-datatypes (generics constraints)
-  (declare (et (generics ListR<EtGeneric>)
-               (constraints ListR<EtTypeConstraints>)
-               (@return (List (Tuple Var Var List<EtTypeConstraint>)))))
+(et-declare
+ (@alias EtScopedDatatype (Tuple Var Var List<EtTypeConstraint>)))
 
-  (cl-loop for name in generics
-           for qs = (cl-loop for q in constraints
+(defun et--make-scoped-datatypes (matcher)
+  (declare (et (matcher *et-matcher)
+               (@return List<EtScopedDatatype>)))
+
+  (cl-loop for name in (et-matcher-generics matcher)
+           for qs = (cl-loop for q in (et-matcher-constraints matcher)
                              when (eq (cadr q) name)
                              collect q)
            collect (list name (gensym (format "scoped-%s@" name)) qs)))
@@ -1227,8 +1229,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                for result = (when (eq op 'Q:LEQ)
                               (et--sub-constraints-0 matcher qtype))
                when (and result (et-match-result-success result))
-               return result
-               finally return (et--failed-match-result))))
+               return result)))
 
    (et--stop-recursion et--constraints-stack (list 'sub (et-matcher-repr matcher) type)
                        (make-et-match-result :success t :value nil)
@@ -1373,8 +1374,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                for result = (when (eq op 'Q:GEQ)
                               (et--super-constraints-0 matcher qtype))
                when (and result (et-match-result-success result))
-               return result
-               finally return (et--failed-match-result))))
+               return result)))
 
    (et--stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type)
                        (make-et-match-result :success t :value nil)
