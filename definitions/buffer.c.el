@@ -41,10 +41,14 @@
 
 (et-test
  (et-assert-resolve Buffer (current-buffer))
- (et-assert-call Buffer|Nil get-buffer BufferOrName)
- (et-assert-call Buffer get-buffer-create String)
- (et-assert-call Buffer generate-new-buffer String)
- (et-assert-call-errors get-buffer Integer))
+ (et-assert-resolve Buffer|Nil
+  (get-buffer (:type BufferOrName)))
+ (et-assert-resolve Buffer
+  (get-buffer-create (:type String)))
+ (et-assert-resolve Buffer
+  (generate-new-buffer (:type String)))
+ (et-assert-resolve-errors
+ (get-buffer (:type Integer))))
 
 
 ;;; Buffer properties
@@ -79,7 +83,8 @@
  (et-assert-resolve Buffer|Nil (buffer-base-buffer))
  (et-assert-resolve ListFresh<Buffer> (buffer-list))
  (et-assert-resolve Boolean (buffer-live-p (current-buffer)))
- (et-assert-call Boolean buffer-modified-p Buffer))
+ (et-assert-resolve Boolean
+  (buffer-modified-p (:type Buffer))))
 
 
 ;;; Current buffer and lifecycle
@@ -97,10 +102,14 @@
  (@function unbury-buffer () (@return Nil)))
 
 (et-test
- (et-assert-call Buffer set-buffer BufferOrName)
- (et-assert-call Boolean kill-buffer)
- (et-assert-call Nil bury-buffer)
- (et-assert-call Nil unbury-buffer))
+ (et-assert-resolve Buffer
+  (set-buffer (:type BufferOrName)))
+ (et-assert-resolve Boolean
+  (kill-buffer))
+ (et-assert-resolve Nil
+  (bury-buffer))
+ (et-assert-resolve Nil
+  (unbury-buffer)))
 
 
 ;;; Buffer-local variables
@@ -117,9 +126,12 @@
             (@return ListFresh<Any>)))
 
 (et-test
- (et-assert-call Any buffer-local-value Symbol Buffer)
- (et-assert-call Boolean buffer-local-boundp Symbol Buffer)
- (et-assert-call ListFresh<Any> buffer-local-variables Buffer))
+ (et-assert-resolve Any
+  (buffer-local-value (:type Symbol) (:type Buffer)))
+ (et-assert-resolve Boolean
+  (buffer-local-boundp (:type Symbol) (:type Buffer)))
+ (et-assert-resolve ListFresh<Any>
+  (buffer-local-variables (:type Buffer))))
 
 
 ;;; Modification and undo toggles
@@ -141,5 +153,7 @@
 (et-test
  (et-assert-resolve Nil (set-buffer-modified-p nil))
  (et-assert-resolve Nil (restore-buffer-modified-p 'autosaved))
- (et-assert-call Nil buffer-enable-undo Buffer)
- (et-assert-call Nil buffer-disable-undo Buffer))
+ (et-assert-resolve Nil
+  (buffer-enable-undo (:type Buffer)))
+ (et-assert-resolve Nil
+  (buffer-disable-undo (:type Buffer))))

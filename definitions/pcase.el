@@ -451,8 +451,8 @@ assertions, each emitting an error diagnostic on failure. SPEC is anything
  ;; The inner `et:' assertions fail the result if `a' is not narrowed.
  (et--test-pcase '(let* ((a (:type Integer|String)))
                     (pcase a
-                      ((pred integerp) (et: a Integer))
-                      (_ (length (et: a String)))))
+                      ((pred integerp) (et: Integer a))
+                      (_ (length (et: String a)))))
                  :resolves 'Integer)
 
  ;; --- (pred (not FUN)) ---

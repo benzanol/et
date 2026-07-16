@@ -76,7 +76,8 @@
  (et-assert-resolve Integer (pos-bol 2))
  (et-assert-resolve Integer|Nil (position-bytes 1))
  (et-assert-resolve Integer (buffer-size))
- (et-assert-call Marker goto-char Marker)
+ (et-assert-resolve Marker
+  (goto-char (:type Marker)))
  (et-assert-resolve-errors (goto-char "1")))
 
 

@@ -30,7 +30,7 @@
 (et-test
  ;; `list' freshens its argument-list spine into a fresh cons chain
  ;; (compared by equivalence: freshening yields an equal-up-to-subtype type).
- (let ((got (et-result-value (et-typecheck-call list Cons<1~2> Cons<3~4>)))
+ (let ((got (et-root-check-type '(list (:type Cons<1~2>) (:type Cons<3~4>))))
        (want (et ConsFresh<Cons<1~2>~ConsFresh<Cons<3~4>~Nil>>)))
    (and (et-subtype? got want) (et-subtype? want got)))
 
@@ -43,8 +43,10 @@
  (et-assert-no-resolve ListR<Integer> (list 1 "2" 3)))
 
 (et-test
- (et-assert-call ListFresh<Integer> make-list Integer Integer)
- (et-assert-call-errors make-list String Integer))
+ (et-assert-resolve ListFresh<Integer>
+  (make-list (:type Integer) (:type Integer)))
+ (et-assert-resolve-errors
+ (make-list (:type String) (:type Integer))))
 
 
 ;;; Strings
@@ -79,10 +81,14 @@
             (@return Vector<T>)))
 
 (et-test
- (et-assert-call Vector<1|2> vector 1 2)
- (et-assert-call Vector<Never> vector)
- (et-assert-call Vector<Number> vector Integer Number Positive)
- (et-assert-call Vector<Integer> make-vector Integer Integer))
+ (et-assert-resolve Vector<1|2>
+  (vector (:type 1) (:type 2)))
+ (et-assert-resolve Vector<Never>
+  (vector))
+ (et-assert-resolve Vector<Number>
+  (vector (:type Integer) (:type Number) (:type Positive)))
+ (et-assert-resolve Vector<Integer>
+  (make-vector (:type Integer) (:type Integer))))
 
 
 ;;; Bool vectors

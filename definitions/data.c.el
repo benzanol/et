@@ -55,42 +55,67 @@
 
 (et-test
  ;; Markers count as integers
- (et-assert-call Integer + Integer Marker)
- (et-assert-call Number + Marker 1.5)
- (et-assert-call Integer 1+ Marker)
- (et-assert-call Integer max Marker Integer)
- (et-assert-call Integer mod Marker Integer)
- (et-assert-call Integer % Marker Marker)
- (et-assert-call-errors + Marker String))
+ (et-assert-resolve Integer
+   (+ (:type Integer) (:type Marker)))
+ (et-assert-resolve Number
+   (+ (:type Marker) (:type 1.5)))
+ (et-assert-resolve Integer
+   (1+ (:type Marker)))
+ (et-assert-resolve Integer
+   (max (:type Marker) (:type Integer)))
+ (et-assert-resolve Integer
+   (mod (:type Marker) (:type Integer)))
+ (et-assert-resolve Integer
+   (% (:type Marker) (:type Marker)))
+ (et-assert-resolve-errors
+  (+ (:type Marker) (:type String))))
 
 (et-test
  ;; All-integer arguments -> Integer
- (et-assert-call Integer + Integer Integer 1 2 3)
- (et-assert-call Integer - Integer Integer)
- (et-assert-call Integer * 1 2 3)
- (et-assert-call Integer / Integer Integer)
- (et-assert-call Integer + 1)
- (et-assert-call Integer / 1)
+ (et-assert-resolve Integer
+   (+ (:type Integer) (:type Integer) (:type 1) (:type 2) (:type 3)))
+ (et-assert-resolve Integer
+   (- (:type Integer) (:type Integer)))
+ (et-assert-resolve Integer
+   (* (:type 1) (:type 2) (:type 3)))
+ (et-assert-resolve Integer
+   (/ (:type Integer) (:type Integer)))
+ (et-assert-resolve Integer
+   (+ (:type 1)))
+ (et-assert-resolve Integer
+   (/ (:type 1)))
  ;; Any non-integer number -> Number
- (et-assert-call Number + Integer 2.1 3)
- (et-assert-call Number * Number Integer)
+ (et-assert-resolve Number
+   (+ (:type Integer) (:type 2.1) (:type 3)))
+ (et-assert-resolve Number
+   (* (:type Number) (:type Integer)))
  ;; Identity element for an empty call
- (et-assert-call 0 +)
- (et-assert-call 0 -)
- (et-assert-call 1 *)
+ (et-assert-resolve 0
+   (+))
+ (et-assert-resolve 0
+   (-))
+ (et-assert-resolve 1
+   (*))
  ;; `/' requires at least one argument
- (et-assert-call-errors /)
+ (et-assert-resolve-errors
+  (/))
  ;; Non-numbers are rejected
- (et-assert-call-errors + String)
- (et-assert-call-errors + Integer String))
+ (et-assert-resolve-errors
+  (+ (:type String)))
+ (et-assert-resolve-errors
+  (+ (:type Integer) (:type String))))
 
 (et-test
  (et-assert-resolve Integer (1+ 1))
  (et-assert-resolve Number (1- 1.5))
- (et-assert-call-errors 1+ String)
- (et-assert-call Integer max Integer Integer)
- (et-assert-call Number min Integer Number)
- (et-assert-call-errors max)
+ (et-assert-resolve-errors
+  (1+ (:type String)))
+ (et-assert-resolve Integer
+   (max (:type Integer) (:type Integer)))
+ (et-assert-resolve Number
+   (min (:type Integer) (:type Number)))
+ (et-assert-resolve-errors
+  (max))
  (et-assert-resolve Integer (mod 7 3))
  (et-assert-resolve Number (mod 7.5 3)))
 
@@ -110,8 +135,10 @@
  (@function logcount (value) (value Integer) (@return Integer)))
 
 (et-test
- (et-assert-call Integer logand Integer Marker)
- (et-assert-call-errors ash Marker Integer))
+ (et-assert-resolve Integer
+   (logand (:type Integer) (:type Marker)))
+ (et-assert-resolve-errors
+  (ash (:type Marker) (:type Integer))))
 
 
 ;;; Bool vector operations
@@ -140,11 +167,16 @@
             (a BoolVector) (b Any) (i Integer) (@return Integer)))
 
 (et-test
- (et-assert-call BoolVector bool-vector-union BoolVector BoolVector)
- (et-assert-call BoolVector bool-vector-not BoolVector)
- (et-assert-call Boolean bool-vector-subsetp BoolVector BoolVector)
- (et-assert-call Integer bool-vector-count-population BoolVector)
- (et-assert-call-errors bool-vector-union BoolVector VectorR<Any>))
+ (et-assert-resolve BoolVector
+   (bool-vector-union (:type BoolVector) (:type BoolVector)))
+ (et-assert-resolve BoolVector
+   (bool-vector-not (:type BoolVector)))
+ (et-assert-resolve Boolean
+   (bool-vector-subsetp (:type BoolVector) (:type BoolVector)))
+ (et-assert-resolve Integer
+   (bool-vector-count-population (:type BoolVector)))
+ (et-assert-resolve-errors
+  (bool-vector-union (:type BoolVector) (:type VectorR<Any>))))
 
 
 ;;; Comparison / equality
@@ -171,9 +203,12 @@
  (et-assert-resolve Boolean (= 1 2))
  (et-assert-resolve-errors (< 1 "2"))
  ;; Markers compare against numbers
- (et-assert-call Boolean = Marker Integer)
- (et-assert-call Boolean = Integer Marker)
- (et-assert-call Boolean < Marker Number))
+ (et-assert-resolve Boolean
+   (= (:type Marker) (:type Integer)))
+ (et-assert-resolve Boolean
+   (= (:type Integer) (:type Marker)))
+ (et-assert-resolve Boolean
+   (< (:type Marker) (:type Number))))
 
 
 ;;; Predicates
@@ -273,11 +308,12 @@
                          (and Nil (bindsof (subtract T NumOrMarker)))))))
 
 (et-test
- (et-assert-call True&{$a::Buffer} bufferp Buffer&{::$a})
- (et-assert-call (or True&{$a::Marker} Nil&{$a::Integer})
-                 markerp {::$a}&{Marker|Integer})
- (et-assert-call (or True&{$a::Marker} Nil&{$a::String})
-                 integer-or-marker-p {::$a}&{Marker|String})
+ (et-assert-resolve True&{$a::Buffer}
+   (bufferp (:type Buffer&{::$a})))
+ (et-assert-resolve (or True&{$a::Marker} Nil&{$a::Integer})
+   (markerp (:type {::$a}&{Marker|Integer})))
+ (et-assert-resolve (or True&{$a::Marker} Nil&{$a::String})
+   (integer-or-marker-p (:type {::$a}&{Marker|String})))
  (et-assert-resolve Boolean (bool-vector-p (bool-vector t))))
 
 
@@ -319,16 +355,18 @@
             (@return (or (and True (bindsof (and T Subr))) Nil))))
 
 (et-test
- (et-assert-call True&{$a::Subr} subrp Subr&{::$a})
- (et-assert-call (or True&{$a::Closure} Nil&{$a::Subr})
-                 closurep {::$a}&{Closure|Subr})
+ (et-assert-resolve True&{$a::Subr}
+   (subrp (:type Subr&{::$a})))
+ (et-assert-resolve (or True&{$a::Closure} Nil&{$a::Subr})
+   (closurep (:type {::$a}&{Closure|Subr})))
  ;; `Closure' is the union of the two, so each half narrows out of it.
- (et-assert-call (or True&{$a::ByteCodeFunction} Nil&{$a::InterpretedFunction})
-                 byte-code-function-p {::$a}&Closure)
- (et-assert-call (or True&{$a::InterpretedFunction} Nil&{$a::ByteCodeFunction})
-                 interpreted-function-p {::$a}&Closure)
+ (et-assert-resolve (or True&{$a::ByteCodeFunction} Nil&{$a::InterpretedFunction})
+   (byte-code-function-p (:type {::$a}&Closure)))
+ (et-assert-resolve (or True&{$a::InterpretedFunction} Nil&{$a::ByteCodeFunction})
+   (interpreted-function-p (:type {::$a}&Closure)))
  ;; A false `native-comp-function-p' tells us nothing.
- (et-assert-call (or True&{$a::Subr} Nil) native-comp-function-p Subr&{::$a}))
+ (et-assert-resolve (or True&{$a::Subr} Nil)
+   (native-comp-function-p (:type Subr&{::$a}))))
 
 
 ;;; Subrs
@@ -342,9 +380,12 @@
             (subr Subr) (@return Cons<Integer~Integer|@many|@unevalled>)))
 
 (et-test
- (et-assert-call String subr-name Subr)
- (et-assert-call Cons<Integer~Integer|@many|@unevalled> subr-arity Subr)
- (et-assert-call-errors subr-name Closure))
+ (et-assert-resolve String
+   (subr-name (:type Subr)))
+ (et-assert-resolve Cons<Integer~Integer|@many|@unevalled>
+   (subr-arity (:type Subr)))
+ (et-assert-resolve-errors
+  (subr-name (:type Closure))))
 
 ;; These predicates have no exact datatype to narrow to (no Float,
 ;; natural-number, keyword, sequence, or array datatype exists), so they
@@ -358,23 +399,25 @@
  (@function char-or-string-p (object) (object Any) (@return Boolean)))
 
 (et-test
- (et-assert-call True&{$a::Cons}
-                 consp Cons&{::$a})
- (et-assert-call (or True&{$a::String} Nil&{$a::Number})
-                 stringp {::$a}&{String|Number})
+ (et-assert-resolve True&{$a::Cons}
+   (consp (:type Cons&{::$a})))
+ (et-assert-resolve (or True&{$a::String} Nil&{$a::Number})
+   (stringp (:type {::$a}&{String|Number})))
  ;; There is no defined intersection of Positive and Integer, so the
  ;; checker must approximate to a SUPERSET (never to Never).
- (not (et-subtype? (et-result-value (et-typecheck-call integerp Positive&{::$a}))
+ (not (et-subtype? (et-root-check-type '(integerp (:type Positive&{::$a})))
                    (et Nil))))
 
 (et-test
  ;; Predicates narrow a typeof-bound argument (`$a') in each branch.
- (et-assert-call True&{$a::Vector<Any>} vectorp Vector<Any>&{::$a})
- (et-assert-call (or True&{$a::Vector<Any>} Nil&{$a::Number})
-                 vectorp {::$a}&{Vector<Any>|Number})
- (et-assert-call True&{$a::Integer} atom Integer&{::$a})
- (et-assert-call (or True&{$a::Integer} Nil&{$a::Cons})
-                 atom {::$a}&{Integer|Cons}))
+ (et-assert-resolve True&{$a::Vector<Any>}
+   (vectorp (:type Vector<Any>&{::$a})))
+ (et-assert-resolve (or True&{$a::Vector<Any>} Nil&{$a::Number})
+   (vectorp (:type {::$a}&{Vector<Any>|Number})))
+ (et-assert-resolve True&{$a::Integer}
+   (atom (:type Integer&{::$a})))
+ (et-assert-resolve (or True&{$a::Integer} Nil&{$a::Cons})
+   (atom (:type {::$a}&{Integer|Cons}))))
 
 
 ;;; Cons cells
@@ -400,12 +443,12 @@
             (@return (infer O [T] ConsR<Any~T> T Nil)))
  ;; NOTE: the parameter order here is preserved verbatim from the
  ;; original `setcar' checker.
- (@function setcar (a b)
-            (@generics [A]) (a A) (b Nil|ConsW<A~Never>) (@return A))
+ (@function setcar (cell newcar)
+            (@generics [T]) (cell ConsW<T~Never>) (newcar T) (@return T))
  ;; `setcdr' mirrors `setcar' (same verbatim parameter order), writing
  ;; the cdr instead of the car.
- (@function setcdr (a b)
-            (@generics [A]) (a A) (b Nil|ConsW<Never~A>) (@return A)))
+ (@function setcdr (cell newcdr)
+            (@generics [T]) (cell ConsW<Never~T>) (newcdr T) (@return T)))
 
 (et-test
  (et-assert-resolve Integer (car (list 1 2.2 3)))
@@ -414,20 +457,32 @@
  (et-assert-resolve ListR<Integer> (car (cons (list 1) "3")))
  (et-assert-resolve Integer (car (car (cons (list 1) "3"))))
 
- (et-assert-call Never cdr Never)
- (et-assert-call Nil cdr Nil)
- (et-assert-call Nil|String cdr Nil|ConsR<Integer~String>)
- (et-assert-call-errors cdr Nil|ConsR<Integer~String>|String)
- (et-assert-call-errors cdr :any)
+ (et-assert-resolve Never
+   (cdr (:type Never)))
+ (et-assert-resolve Nil
+   (cdr (:type Nil)))
+ (et-assert-resolve Nil|String
+   (cdr (:type Nil|ConsR<Integer~String>)))
+ (et-assert-resolve-errors
+  (cdr (:type Nil|ConsR<Integer~String>|String)))
+ (et-assert-resolve-errors
+  (cdr (:type :any)))
 
- (et-assert-call Never car Never)
- (et-assert-call Nil car Nil)
- (et-assert-call Nil|Integer car Nil|ConsR<Integer~String>)
- (et-assert-call-errors car Nil|ConsR<Integer~String>|String)
- (et-assert-call-errors car Any)
+ (et-assert-resolve Never
+   (car (:type Never)))
+ (et-assert-resolve Nil
+   (car (:type Nil)))
+ (et-assert-resolve Nil|Integer
+   (car (:type Nil|ConsR<Integer~String>)))
+ (et-assert-resolve-errors
+  (car (:type Nil|ConsR<Integer~String>|String)))
+ (et-assert-resolve-errors
+  (car (:type Any)))
 
- (et-assert-call Nil|Integer car ListR<Integer>)
- (et-assert-call Nil|Integer|String car ListR<Integer>|ConsR<String~Nil>))
+ (et-assert-resolve Nil|Integer
+   (car (:type ListR<Integer>)))
+ (et-assert-resolve Nil|Integer|String
+   (car (:type ListR<Integer>|ConsR<String~Nil>))))
 
 (et-test
  (et-assert-resolve ListR<Number> (cdr (list 1 2.2 3)))
@@ -437,8 +492,8 @@
  (et-assert-resolve Boolean (cdr (cdr (cdr (list 1 2 3))))))
 
 (et-test
- (et-typecheck-call setcar Number ConsW<Number~Number>)
- (et-typecheck-call setcdr Number ConsW<Number~Number>))
+ (et-root-check-type '(setcar (:type ConsW<Number~Number>) (:type Number)))
+ (et-root-check-type '(setcdr (:type ConsW<Number~Number>) (:type Number))))
 
 
 ;;; Array access
@@ -456,14 +511,20 @@
 (et-define-type-checker aset [T] (Args VectorW<T>|{String&T=Integer} Integer T) T)
 
 (et-test
- (et-assert-call Integer aref String Integer)
- (et-assert-call Symbol|Integer aref (or VectorR<Symbol> String) Integer)
- (et-assert-call-errors aref (or VectorR<Symbol> String ListR<Any>) Integer))
+ (et-assert-resolve Integer
+   (aref (:type String) (:type Integer)))
+ (et-assert-resolve Symbol|Integer
+   (aref (:type (or VectorR<Symbol> String)) (:type Integer)))
+ (et-assert-resolve-errors
+  (aref (:type (or VectorR<Symbol> String ListR<Any>)) (:type Integer))))
 
 (et-test
- (et-assert-call Integer aset String Integer Integer)
- (et-assert-call Integer aset VectorW<Integer> Integer Integer)
- (et-assert-call-errors aset ListR<Any> Integer Integer))
+ (et-assert-resolve Integer
+   (aset (:type String) (:type Integer) (:type Integer)))
+ (et-assert-resolve Integer
+   (aset (:type VectorW<Integer>) (:type Integer) (:type Integer)))
+ (et-assert-resolve-errors
+  (aset (:type ListR<Any>) (:type Integer) (:type Integer))))
 
 
 ;;; Symbols and conversions

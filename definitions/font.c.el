@@ -30,9 +30,10 @@
                          (and Nil (bindsof (subtract T Font)))))))
 
 (et-test
- (et-assert-call True&{$a::Font} fontp Font&{::$a})
- (et-assert-call (or True&{$a::FontObject} Nil&{$a::String})
-                 fontp {::$a}&{FontObject|String}))
+ (et-assert-resolve True&{$a::Font}
+  (fontp (:type Font&{::$a})))
+ (et-assert-resolve (or True&{$a::FontObject} Nil&{$a::String})
+  (fontp (:type {::$a}&{FontObject|String}))))
 
 
 ;;; Font specs
@@ -52,9 +53,12 @@
 
 (et-test
  (et-assert-resolve FontSpec (font-spec :family "Monospace" :size 12))
- (et-assert-call Any font-get FontSpec Symbol)
- (et-assert-call String font-put FontObject Symbol String)
- (et-assert-call-errors font-get String Symbol))
+ (et-assert-resolve Any
+  (font-get (:type FontSpec) (:type Symbol)))
+ (et-assert-resolve String
+  (font-put (:type FontObject) (:type Symbol) (:type String)))
+ (et-assert-resolve-errors
+ (font-get (:type String) (:type Symbol))))
 
 
 ;;; Matching a spec against the system
@@ -75,12 +79,17 @@
             (frame Frame|Nil) (@return List<String>)))
 
 (et-test
- (et-assert-call List<FontEntity> list-fonts FontSpec)
- (et-assert-call FontEntity|Nil find-font FontSpec)
- (et-assert-call Boolean font-match-p FontSpec FontObject)
- (et-assert-call List<String> font-family-list)
+ (et-assert-resolve List<FontEntity>
+  (list-fonts (:type FontSpec)))
+ (et-assert-resolve FontEntity|Nil
+  (find-font (:type FontSpec)))
+ (et-assert-resolve Boolean
+  (font-match-p (:type FontSpec) (:type FontObject)))
+ (et-assert-resolve List<String>
+  (font-family-list))
  ;; Only a spec can be matched against; an entity is already a match.
- (et-assert-call-errors find-font FontEntity))
+ (et-assert-resolve-errors
+ (find-font (:type FontEntity))))
 
 
 ;;; Opening a font
@@ -98,13 +107,18 @@
             (@return FontObject|Nil)))
 
 (et-test
- (et-assert-call FontObject|Nil open-font FontEntity)
- (et-assert-call Nil close-font FontObject)
- (et-assert-call FontObject|Nil font-at Integer)
+ (et-assert-resolve FontObject|Nil
+  (open-font (:type FontEntity)))
+ (et-assert-resolve Nil
+  (close-font (:type FontObject)))
+ (et-assert-resolve FontObject|Nil
+  (font-at (:type Integer)))
  (et-assert-resolve FontObject|Nil (font-at (point-marker)))
  ;; Only an entity can be opened, and only an object can be closed.
- (et-assert-call-errors open-font FontSpec)
- (et-assert-call-errors close-font FontEntity))
+ (et-assert-resolve-errors
+ (open-font (:type FontSpec)))
+ (et-assert-resolve-errors
+ (close-font (:type FontEntity))))
 
 
 ;;; Names and caches
@@ -117,5 +131,6 @@
  (@function clear-font-cache () (@return Nil)))
 
 (et-test
- (et-assert-call String|Nil font-xlfd-name FontSpec)
+ (et-assert-resolve String|Nil
+  (font-xlfd-name (:type FontSpec)))
  (et-assert-resolve Nil (clear-font-cache)))

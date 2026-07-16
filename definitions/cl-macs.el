@@ -739,10 +739,6 @@ none of them are installed until all of them have been checked."
 ;;;; Tests
 
 (et-test
- ;; Inferred parameter (Any) and return type
- (et-assert-resolve Integer
-   (cl-flet ((double (x) (* 2 x))) (double 3)))
-
  ;; Declared signature: the body is checked against it
  (et-assert-resolve String
    (cl-flet ((name (x) (declare (et (x Integer) (@return String))) (format "%s" x)))

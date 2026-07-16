@@ -45,7 +45,8 @@
 (et-test
  (et-assert-resolve Marker (set-marker (make-marker) 1))
  (et-assert-resolve Marker (set-marker (make-marker) nil))
- (et-assert-call Marker set-marker Marker Marker Buffer)
+ (et-assert-resolve Marker
+  (set-marker (:type Marker) (:type Marker) (:type Buffer)))
  (et-assert-resolve Marker (copy-marker))
  (et-assert-resolve Marker (copy-marker 1 t))
  (et-assert-resolve True (set-marker-insertion-type (make-marker) t))

@@ -130,28 +130,53 @@
 ;;; Tests
 
 (et-test
- (et-assert-call Keymap make-sparse-keymap)
- (et-assert-call Keymap make-keymap String)
- (et-assert-call (or True Nil) keymapp Any)
- (et-assert-call KeymapDefinition define-key Keymap KeySequence KeymapDefinition)
- (et-assert-call Nil define-key-after Keymap KeySequence KeymapDefinition)
- (et-assert-call KeymapDefinition|Integer lookup-key Keymap String)
- (et-assert-call KeymapDefinition key-binding String)
- (et-assert-call ListFresh<Keymap> current-active-maps)
- (et-assert-call KeymapDefinition keymap-lookup Keymap String)
- (et-assert-call KeymapDefinition keymap-set Keymap String KeymapDefinition)
- (et-assert-call Nil keymap-unset Keymap String)
- (et-assert-call Nil keymap-set-after Keymap String KeymapDefinition)
- (et-assert-call Nil keymap-substitute Keymap KeymapDefinition KeymapDefinition)
- (et-assert-call KeymapDefinition keymap-global-set String KeymapDefinition)
- (et-assert-call Nil keymap-global-unset String)
- (et-assert-call KeymapDefinition keymap-local-set String KeymapDefinition)
- (et-assert-call Nil keymap-local-unset String)
- (et-assert-call KeymapDefinition global-set-key KeySequence KeymapDefinition)
- (et-assert-call KeymapDefinition local-set-key KeySequence KeymapDefinition)
- (et-assert-call Nil substitute-key-definition KeymapDefinition KeymapDefinition Keymap)
- (et-assert-call Nil suppress-keymap Keymap)
- (et-assert-call Symbol define-prefix-command Symbol)
- (et-assert-call Nil use-global-map Keymap)
- (et-assert-call Nil use-local-map Keymap|Nil)
- (et-assert-call-errors make-keymap Integer))
+ (et-assert-resolve Keymap
+  (make-sparse-keymap))
+ (et-assert-resolve Keymap
+  (make-keymap (:type String)))
+ (et-assert-resolve (or True Nil)
+  (keymapp (:type Any)))
+ (et-assert-resolve KeymapDefinition
+  (define-key (:type Keymap) (:type KeySequence) (:type KeymapDefinition)))
+ (et-assert-resolve Nil
+  (define-key-after (:type Keymap) (:type KeySequence) (:type KeymapDefinition)))
+ (et-assert-resolve KeymapDefinition|Integer
+  (lookup-key (:type Keymap) (:type String)))
+ (et-assert-resolve KeymapDefinition
+  (key-binding (:type String)))
+ (et-assert-resolve ListFresh<Keymap>
+  (current-active-maps))
+ (et-assert-resolve KeymapDefinition
+  (keymap-lookup (:type Keymap) (:type String)))
+ (et-assert-resolve KeymapDefinition
+  (keymap-set (:type Keymap) (:type String) (:type KeymapDefinition)))
+ (et-assert-resolve Nil
+  (keymap-unset (:type Keymap) (:type String)))
+ (et-assert-resolve Nil
+  (keymap-set-after (:type Keymap) (:type String) (:type KeymapDefinition)))
+ (et-assert-resolve Nil
+  (keymap-substitute (:type Keymap) (:type KeymapDefinition) (:type KeymapDefinition)))
+ (et-assert-resolve KeymapDefinition
+  (keymap-global-set (:type String) (:type KeymapDefinition)))
+ (et-assert-resolve Nil
+  (keymap-global-unset (:type String)))
+ (et-assert-resolve KeymapDefinition
+  (keymap-local-set (:type String) (:type KeymapDefinition)))
+ (et-assert-resolve Nil
+  (keymap-local-unset (:type String)))
+ (et-assert-resolve KeymapDefinition
+  (global-set-key (:type KeySequence) (:type KeymapDefinition)))
+ (et-assert-resolve KeymapDefinition
+  (local-set-key (:type KeySequence) (:type KeymapDefinition)))
+ (et-assert-resolve Nil
+  (substitute-key-definition (:type KeymapDefinition) (:type KeymapDefinition) (:type Keymap)))
+ (et-assert-resolve Nil
+  (suppress-keymap (:type Keymap)))
+ (et-assert-resolve Symbol
+  (define-prefix-command (:type Symbol)))
+ (et-assert-resolve Nil
+  (use-global-map (:type Keymap)))
+ (et-assert-resolve Nil
+  (use-local-map (:type Keymap|Nil)))
+ (et-assert-resolve-errors
+ (make-keymap (:type Integer))))

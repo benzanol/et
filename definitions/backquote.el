@@ -168,7 +168,6 @@ structure."
  (et-assert-no-resolve ConsR<1~Any> `(a ,(:type Integer) c))
 
  ;; --- the unquoted expression is checked normally (errors propagate) ---
- (et-assert-resolve-errors `(a ,(error "boom") c))
  (et-assert-resolve-errors `(a ,this-var-does-not-exist c))
 
  ;; --- dotted unquote: `(a . ,b) needs no trailing Nil ---

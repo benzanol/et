@@ -128,8 +128,10 @@
     (_ (et-err nil "Invalid argument to function: %s" inner))))
 
 (et-test
- (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
-   #'(lambda ([x Integer]) x))
+ (et-assert-resolve Function<Args<Integer>~Integer>
+   #'(lambda (x)
+       (declare (et (x Integer) (@return Integer)))
+       x))
 
  (not (et-never-p (et-result-value (et-result-boundary
                                     (et--check-result-type (et--check '#'+ nil nil))))))
@@ -238,16 +240,13 @@
      "IF:\\n%s" (et--non-nil cond-type)
      "ELSE:\\n%s" (et--supersect cond-type (et Nil)))
 
-    (et-simplify-type
-     (et-checker-sub-cond cond-type
-                          (lambda () (et-checker-sub 2))
-                          (lambda () (et-checker-tail 3))))))
+    (et-checker-sub-cond cond-type
+                         (lambda () (et-checker-sub 2))
+                         (lambda () (et-checker-tail 3)))))
 
 (et-test
- (et-subtype? (et-result-value
-               (et-typecheck
-                (let* ((a String|Number 4))
-                  (if (stringp a) a "hello!"))))
+ (et-subtype? (et-root-check-type '(let* ((a (et: String|Number 4)))
+                  (if (stringp a) a "hello!")))
               (et String)))
 
 
@@ -277,10 +276,8 @@
  ;; Body sees the bindings
  (et-assert-resolve Integer (let ((a 1) (b 2)) (+ a b)))
  ;; Value forms do NOT see earlier bindings in the same `let'
- (et-subtype? (et-result-value
-               (et-typecheck
-                (let* ((a Integer 1))
-                  (let ((a "s") (b a)) b))))
+ (et-subtype? (et-root-check-type '(let* ((a (et: Integer 1)))
+                  (let ((a "s") (b a)) b)))
               (et Integer)))
 
 
@@ -335,18 +332,14 @@
  (et-assert-resolve Nil (cond))
  ;; Positive narrowing inside a clause body, like `if': `a' is narrowed to
  ;; String, so Number cannot appear in the result.
- (et-subtype? (et-result-value
-               (et-typecheck
-                (let* ((a String|Number 4))
-                  (cond ((stringp a) a) (t "hello!")))))
+ (et-subtype? (et-root-check-type '(let* ((a (et: String|Number 4)))
+                  (cond ((stringp a) a) (t "hello!"))))
               (et String|Nil))
  ;; Negative narrowing: in the second clause, `a' is narrowed to non-String
  ;; (Number), so the result cannot include String from the second branch.
- (et-subtype? (et-result-value
-               (et-typecheck
-                (let* ((a String|Number 4))
-                  (cond ((stringp a) a) (t a)))))
-              (et Number|Nil)))
+ (et-subtype? (et-root-check-type '(let* ((a (et: String|Number 4)))
+                  (cond ((stringp a) a) (t a))))
+              (et String|Number|Nil)))
 
 
 ;;;; while
@@ -383,25 +376,25 @@
  (et-assert-resolve Nil (while nil "body"))
  ;; The body sees the test's narrows: the test runs before every iteration
  (et-assert-resolve Nil
-   (let* ((a String|Number 4))
+   (let* ((a (et: String|Number 4)))
      (while (stringp a) (:assert-subtype a String))))
  ;; A narrow from above the loop survives if the body never invalidates it
  (et-assert-resolve Nil
-   (let* ((a String|Number 4))
+   (let* ((a (et: String|Number 4)))
      (when (stringp a)
        (while t (:assert-subtype a String)))))
  ;; ...but not if the body assigns the variable: the assignment has already
  ;; happened by the time the body is re-entered
  (et-assert-resolve-errors
-  (let* ((a String|Number 4))
+  (let* ((a (et: String|Number 4)))
     (when (stringp a)
       (while t (:assert-subtype a String) (setq a 5)))))
  ;; A narrow killed by the body invalidates the narrows that were derived from
  ;; it earlier in that same body: `b' is assigned from `a' while `a' still looks
  ;; narrowed, but `a's narrow is killed further down, so `b's must go too
  (et-assert-resolve-errors
-  (let* ((a String|Integer 0)
-         (b String|Integer 0))
+  (let* ((a (et: String|Integer 0))
+         (b (et: String|Integer 0)))
     (when (and (integerp a) (integerp b))
       (while t
         (:assert-subtype b Integer)
@@ -449,19 +442,36 @@
             (@return R)))
 
 (et-test
- (et-assert-resolve Integer (funcall (lambda ([x Integer] [y Integer]) x) 1 2))
- (et-assert-resolve-errors (funcall (lambda ([x Integer] [y Integer]) x) 1 2.5))
- (et-assert-resolve-errors (funcall (lambda ([x Integer] [y Integer]) x) 1))
- (et-assert-resolve-errors (funcall (lambda ([x Integer]) x) 1 2))
+ (et-assert-resolve Integer
+   (funcall (lambda (x y) (declare (et (x Integer) (y Integer) (@return Integer))) x) 1 2))
+ (et-assert-resolve-errors
+  (funcall (lambda (x y) (declare (et (x Integer) (y Integer) (@return Integer))) x) 1 2.5))
+ (et-assert-resolve-errors
+  (funcall (lambda (x y) (declare (et (x Integer) (y Integer) (@return Integer))) x) 1))
+ (et-assert-resolve-errors
+  (funcall (lambda (x) (declare (et (x Integer) (@return Integer))) x) 1 2))
  (et-assert-resolve-errors (funcall (lambda () x) 1))
- (et-assert-resolve-errors (funcall (lambda ([x Integer]) x)))
+ (et-assert-resolve-errors
+  (funcall (lambda (x) (declare (et (x Integer) (@return Integer))) x)))
 
- (et-assert-resolve Integer (apply (lambda ([x Integer] [y Integer] [z Integer]) x) (list 1 2 3)))
- (et-assert-resolve Integer (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 2 (list 3)))
- (et-assert-resolve Integer (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 2 3 nil))
- (et-assert-resolve-errors (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 2 (list 3 4)))
- (et-assert-resolve-errors (apply (lambda ([x Integer] [y Integer] [z Integer]) x) 1 (list 3)))
- (et-assert-resolve-errors (apply (lambda ([x Integer] [y Integer] [z Integer]) x) (list 3)))
+ (et-assert-resolve Integer
+   (apply (lambda (x y z) (declare (et (x Integer) (y Integer) (z Integer) (@return Integer))) x)
+          (list 1 2 3)))
+ (et-assert-resolve Integer
+   (apply (lambda (x y z) (declare (et (x Integer) (y Integer) (z Integer) (@return Integer))) x)
+          1 2 (list 3)))
+ (et-assert-resolve Integer
+   (apply (lambda (x y z) (declare (et (x Integer) (y Integer) (z Integer) (@return Integer))) x)
+          1 2 3 nil))
+ (et-assert-resolve-errors
+  (apply (lambda (x y z) (declare (et (x Integer) (y Integer) (z Integer) (@return Integer))) x)
+         1 2 (list 3 4)))
+ (et-assert-resolve-errors
+  (apply (lambda (x y z) (declare (et (x Integer) (y Integer) (z Integer) (@return Integer))) x)
+         1 (list 3)))
+ (et-assert-resolve-errors
+  (apply (lambda (x y z) (declare (et (x Integer) (y Integer) (z Integer) (@return Integer))) x)
+         (list 3)))
 
  (et-assert-resolve Integer (apply (lambda () 0) nil))
  (et-assert-resolve-errors (apply (lambda () 0) 1 nil))

@@ -48,8 +48,10 @@
 
 (et-test
  (et-assert-resolve Nil (mark-whole-buffer))
- (et-assert-call Integer count-words IntOrMarker IntOrMarker)
- (et-assert-call Integer count-words-region IntOrMarker IntOrMarker)
+ (et-assert-resolve Integer
+  (count-words (:type IntOrMarker) (:type IntOrMarker)))
+ (et-assert-resolve Integer
+  (count-words-region (:type IntOrMarker) (:type IntOrMarker)))
  (et-assert-resolve Integer|Nil (mark))
  (et-assert-resolve Integer (line-number-at-pos))
  (et-assert-resolve String|Nil (current-word))
@@ -98,9 +100,11 @@
 (et-test
  (et-assert-resolve Nil (delete-indentation))
  (et-assert-resolve Nil (newline))
- (et-assert-call Nil open-line Integer)
+ (et-assert-resolve Nil
+  (open-line (:type Integer)))
  (et-assert-resolve Nil (split-line))
- (et-assert-call Nil quoted-insert Integer)
+ (et-assert-resolve Nil
+  (quoted-insert (:type Integer)))
  (et-assert-resolve Nil (forward-to-indentation))
  (et-assert-resolve Nil (back-to-indentation))
  (et-assert-resolve Nil (beginning-of-line))
@@ -138,11 +142,16 @@
 (et-test
  (et-assert-resolve Nil (kill-line))
  (et-assert-resolve Nil (kill-whole-line))
- (et-assert-call String current-kill Integer)
- (et-assert-call Nil kill-new String)
- (et-assert-call Nil append-to-buffer BufferOrName IntOrMarker IntOrMarker)
- (et-assert-call Nil prepend-to-buffer BufferOrName IntOrMarker IntOrMarker)
- (et-assert-call Nil copy-to-buffer BufferOrName IntOrMarker IntOrMarker))
+ (et-assert-resolve String
+  (current-kill (:type Integer)))
+ (et-assert-resolve Nil
+  (kill-new (:type String)))
+ (et-assert-resolve Nil
+  (append-to-buffer (:type BufferOrName) (:type IntOrMarker) (:type IntOrMarker)))
+ (et-assert-resolve Nil
+  (prepend-to-buffer (:type BufferOrName) (:type IntOrMarker) (:type IntOrMarker)))
+ (et-assert-resolve Nil
+  (copy-to-buffer (:type BufferOrName) (:type IntOrMarker) (:type IntOrMarker))))
 
 
 ;;; Shell helpers and modes
@@ -155,6 +164,7 @@
  (@function fundamental-mode () (@return Nil)))
 
 (et-test
- (et-assert-call String shell-command-to-string String)
+ (et-assert-resolve String
+  (shell-command-to-string (:type String)))
  (et-assert-resolve Nil (undo-auto-amalgamate))
  (et-assert-resolve Nil (fundamental-mode)))

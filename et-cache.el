@@ -969,6 +969,10 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
        (et-error-boundary nil
          (apply #'et--process-exprs (et--file-exprs file) args))))))
 
+(defun et-test-directory (dir)
+  (et-process-directory dir :eval t)
+  (et-process-directory dir :test t))
+
 
 ;;;; Process in the current buffer
 

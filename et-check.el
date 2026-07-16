@@ -239,14 +239,6 @@ determine the output type."
     (expr (et-literal expr))))
 
 
-(defmacro et-check-call (func &rest args)
-  `(let ((result (et-result-boundary
-                  (et--check-result-type
-                   (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a)))
-                              nil nil)))))
-     (or (mapcar #'caddr (et-result-diagnostics result)) (et-result-value result))))
-
-
 ;;;; Sub-checkers
 ;;;;; Series sub checkers
 
@@ -300,7 +292,7 @@ type, use `et-checker-tail'."
   (et-declare (a EtNarrows) (b EtNarrows) (@return EtNarrows))
   (cl-loop for (var . t1) in a
            for t2 = (alist-get var b)
-           when t2 collect (cons var (et--or t1 t2))))
+           when t2 collect (cons var (et-simplify-type (et--or t1 t2)))))
 
 (defun et-checker-branches (&rest branches)
   "Type check parallel code paths, one of which must execute.
@@ -327,7 +319,7 @@ the resulting `et--checker-narrows'."
 
     (setq et--checker-narrows
           (when all-narrows (cl-reduce #'et--narrows-or all-narrows)))
-    (apply #'et--or all-types)))
+    (et-simplify-type (apply #'et--or all-types))))
 
 
 ;;;;; Condition sub checker
@@ -426,19 +418,13 @@ This should be called anytime a variable is set."
               (cl-remove var et--checker-narrows :key #'car))))
 
 
-;;;; Root level functions
-
-(defmacro et-typecheck (body)
-  (et-result-boundary (et-simplify-type (et--check-result-type (et--check body nil nil)))))
-
-(defmacro et-typecheck-call (func &rest arg-types)
-  (cl-loop for type in arg-types
-           if (eq (car-safe type) :eval-type) collect type into arg-exprs
-           else collect (list :type type) into arg-exprs
-           finally return `(et-typecheck (,func ,@arg-exprs))))
-
-
 ;;;; Tests
+
+(defun et-root-check-type (expr)
+  (et-declare (expr Sexp) (@return *et-type))
+  (let* ((result (et-result-boundary (et--check-result-type (et--check expr nil nil)))))
+    (when (et-result-failed result) (error "Type-checking failed"))
+    (et-result-value result)))
 
 (defmacro et-assert-resolve (type expr &optional not)
   (declare (indent 1))
@@ -456,21 +442,6 @@ This should be called anytime a variable is set."
   `(et-result-boundary
     (or (et-result-failed (et-result-boundary (et--check-result-type (et--check ',expr nil nil))))
         (et-err 0 "Didn't fail"))))
-
-(defmacro et-assert-call (type-spec func &rest arg-types)
-  `(et-result-boundary
-    (let* ((type (et ,type-spec))
-           (params (cl-loop for a in ',arg-types collect (list :type a)))
-           (ret-type (et--check-result-type (et--check (cons ',func params) nil nil))))
-      (or (equal type ret-type)
-          (et-err 0 "Expected %s, got %s" type ret-type)))))
-
-(defmacro et-assert-call-errors (func &rest arg-types)
-  `(et-result-boundary
-    (let* ((params (cl-loop for a in ',arg-types collect (list :type a)))
-           (result (et-result-boundary (et--check-result-type (et--check (cons ',func params) nil nil)))))
-      (unless (et-result-failed result)
-        (error "Succeeded with %s" (cl-prin1-to-string (et-result-value result)))))))
 
 (et-test
  (et-assert-resolve Integer 1)

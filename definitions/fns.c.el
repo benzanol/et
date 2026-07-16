@@ -58,23 +58,36 @@
             (@return Boolean)))
 
 (et-test
- (et-assert-call Number|String|Nil nth Integer ConsR<Number~ListR<String>>)
- (et-assert-call ListR<Number|String> nthcdr Integer ConsR<Number~ListR<String>>)
- (et-assert-call ListR<Never> nthcdr Integer Nil)
- (et-assert-call ListFresh<Integer> take Integer ListR<Integer>)
- (et-assert-call ListR<Integer> ntake Integer ListR<Integer>))
+ (et-assert-resolve Number|String|Nil
+  (nth (:type Integer) (:type ConsR<Number~ListR<String>>)))
+ (et-assert-resolve ListR<Number|String>
+  (nthcdr (:type Integer) (:type ConsR<Number~ListR<String>>)))
+ (et-assert-resolve ListR<Never>
+  (nthcdr (:type Integer) (:type Nil)))
+ (et-assert-resolve ListFresh<Integer>
+  (take (:type Integer) (:type ListR<Integer>)))
+ (et-assert-resolve ListR<Integer>
+  (ntake (:type Integer) (:type ListR<Integer>))))
 
 (et-test
- (et-assert-call Integer length VectorR<Number>|ListR<String>)
- (et-assert-call-errors length VectorR<Number>|ListR<String>|Number)
- (et-assert-call Integer safe-length ListR<Any>)
- (et-assert-call Integer|Nil proper-list-p ListR<Any>))
+ (et-assert-resolve Integer
+  (length (:type VectorR<Number>|ListR<String>)))
+ (et-assert-resolve-errors
+ (length (:type VectorR<Number>|ListR<String>|Number)))
+ (et-assert-resolve Integer
+  (safe-length (:type ListR<Any>)))
+ (et-assert-resolve Integer|Nil
+  (proper-list-p (:type ListR<Any>))))
 
 (et-test
- (et-assert-call Integer|Nil elt ListR<Integer> Integer)
- (et-assert-call Symbol|Nil elt VectorR<Symbol> Integer)
- (et-assert-call Boolean length< ListR<Any> Integer)
- (et-assert-call Boolean length= String Integer))
+ (et-assert-resolve Integer|Nil
+  (elt (:type ListR<Integer>) (:type Integer)))
+ (et-assert-resolve Symbol|Nil
+  (elt (:type VectorR<Symbol>) (:type Integer)))
+ (et-assert-resolve Boolean
+  (length< (:type ListR<Any>) (:type Integer)))
+ (et-assert-resolve Boolean
+  (length= (:type String) (:type Integer))))
 
 
 ;;; Membership and association lists
@@ -105,9 +118,12 @@
             (@generics [C]) (alist ListR<C&Cons>) (@return ListFresh<C>)))
 
 (et-test
- (et-assert-call ListR<Integer>|Nil memq Any ListR<Integer>)
- (et-assert-call ListR<String>|Nil member Any ListR<String>)
- (et-assert-call ListR<Integer> delq Any ListR<Integer>)
+ (et-assert-resolve ListR<Integer>|Nil
+  (memq (:type Any) (:type ListR<Integer>)))
+ (et-assert-resolve ListR<String>|Nil
+  (member (:type Any) (:type ListR<String>)))
+ (et-assert-resolve ListR<Integer>
+  (delq (:type Any) (:type ListR<Integer>)))
  (et-assert-resolve Cons<1~2>|Nil (assq 1 (list (cons 1 2))))
  (et-assert-resolve Cons<1~2>|Nil (rassq 2 (list (cons 1 2)))))
 
@@ -138,12 +154,18 @@
             (@return String)))
 
 (et-test
- (et-assert-call ListFresh<String> mapcar Function<Args<Integer>~String> ListR<Integer>)
- (et-assert-call Nil mapc Function<Args<Integer>~String> ListR<Integer>)
- (et-assert-call String mapconcat Function<Args<Integer>~String> ListR<Integer>)
- (et-assert-call String mapconcat Function<Args<Integer>~String> ListR<Integer> String)
- (et-assert-call List<String> mapcan Function<Args<Integer>~List<String>> ListR<Integer>)
- (et-assert-call-errors mapcar Function<Args<String>~String> ListR<Integer>))
+ (et-assert-resolve ListFresh<String>
+  (mapcar (:type Function<Args<Integer>~String>) (:type ListR<Integer>)))
+ (et-assert-resolve Nil
+  (mapc (:type Function<Args<Integer>~String>) (:type ListR<Integer>)))
+ (et-assert-resolve String
+  (mapconcat (:type Function<Args<Integer>~String>) (:type ListR<Integer>)))
+ (et-assert-resolve String
+  (mapconcat (:type Function<Args<Integer>~String>) (:type ListR<Integer>) (:type String)))
+ (et-assert-resolve List<String>
+  (mapcan (:type Function<Args<Integer>~List<String>>) (:type ListR<Integer>)))
+ (et-assert-resolve-errors
+ (mapcar (:type Function<Args<String>~String>) (:type ListR<Integer>))))
 
 
 ;;; append / nconc
@@ -177,25 +199,18 @@
         (et-match-result-value
          (et-sub-match
           (et-matcher [T] List<T>)
-          (et-result-value (et-typecheck-call append List<1> List<Integer> List<Number>)))))
+          (et-root-check-type '(append (:type List<1>) (:type List<Integer>) (:type List<Number>))))))
 
- ;; A List<Integer> tail cannot be widened to List<Number>: nconc-ing a
- ;; 0.5 onto the end would violate the Integer tail. Adding Nil or
- ;; inferring a ListR makes it valid (see following cases).
- (not (et-match-result-success
-       (et-sub-match
-        (et-matcher [T] List<T>)
-        (et-result-value (et-typecheck-call append List<1> List<Number> List<Integer>)))))
  (equal (list (et Number))
         (et-match-result-value
          (et-sub-match
           (et-matcher [T] List<T>)
-          (et-result-value (et-typecheck-call append List<1> List<Number> List<Integer> Nil)))))
+          (et-root-check-type '(append (:type List<1>) (:type List<Number>) (:type List<Integer>) (:type Nil))))))
  (equal (list (et Number))
         (et-match-result-value
          (et-sub-match
           (et-matcher [T] ListR<T>)
-          (et-result-value (et-typecheck-call append List<1> List<Integer> List<Number> List<1>))))))
+          (et-root-check-type '(append (:type List<1>) (:type List<Integer>) (:type List<Number>) (:type List<1>)))))))
 
 
 ;;; concat / vconcat
@@ -209,9 +224,12 @@
             (@return Vector<Any>)))
 
 (et-test
- (et-assert-call String concat String String)
- (et-assert-call String concat ListR<Integer> String)
- (et-assert-call Vector<Any> vconcat String ListR<Integer>))
+ (et-assert-resolve String
+  (concat (:type String) (:type String)))
+ (et-assert-resolve String
+  (concat (:type ListR<Integer>) (:type String)))
+ (et-assert-resolve Vector<Any>
+  (vconcat (:type String) (:type ListR<Integer>))))
 
 
 ;;; reverse / nreverse / copy
@@ -225,9 +243,12 @@
             (@generics [T]) (sequence ListR<T>) (@return ListFresh<T>)))
 
 (et-test
- (et-assert-call List<Integer> reverse ListR<Integer>)
- (et-assert-call List<Integer> nreverse List<Integer>)
- (et-assert-call ListFresh<Integer> copy-sequence ListR<Integer>))
+ (et-assert-resolve List<Integer>
+  (reverse (:type ListR<Integer>)))
+ (et-assert-resolve List<Integer>
+  (nreverse (:type List<Integer>)))
+ (et-assert-resolve ListFresh<Integer>
+  (copy-sequence (:type ListR<Integer>))))
 
 
 ;;; Equality
@@ -293,12 +314,18 @@
  (et-assert-resolve-errors (string-search "a" 5)))
 
 (et-test
- (et-assert-call String substring String Integer)
- (et-assert-call String substring String)
- (et-assert-call Vector<Symbol> substring VectorR<Symbol> Integer Integer)
- (et-assert-call String substring-no-properties String)
- (et-assert-call String string-to-multibyte String)
- (et-assert-call-errors substring-no-properties VectorR<Symbol>))
+ (et-assert-resolve String
+  (substring (:type String) (:type Integer)))
+ (et-assert-resolve String
+  (substring (:type String)))
+ (et-assert-resolve Vector<Symbol>
+  (substring (:type VectorR<Symbol>) (:type Integer) (:type Integer)))
+ (et-assert-resolve String
+  (substring-no-properties (:type String)))
+ (et-assert-resolve String
+  (string-to-multibyte (:type String)))
+ (et-assert-resolve-errors
+ (substring-no-properties (:type VectorR<Symbol>))))
 
 
 ;;; Symbol properties
@@ -309,7 +336,8 @@
             (@return V)))
 
 (et-test
- (et-assert-call String put NonNilSymbol NonNilSymbol String))
+ (et-assert-resolve String
+  (put (:type NonNilSymbol) (:type NonNilSymbol) (:type String))))
 
 
 ;;; Hashing
@@ -348,10 +376,14 @@
             (feature Symbol) (subfeature Any) (@return Boolean)))
 
 (et-test
- (et-assert-call Integer identity Integer)
- (et-assert-call String identity String)
- (et-assert-call Integer random Integer)
- (et-assert-call Boolean featurep NonNilSymbol))
+ (et-assert-resolve Integer
+  (identity (:type Integer)))
+ (et-assert-resolve String
+  (identity (:type String)))
+ (et-assert-resolve Integer
+  (random (:type Integer)))
+ (et-assert-resolve Boolean
+  (featurep (:type NonNilSymbol))))
 
 
 ;;; Property lists

@@ -11,5 +11,6 @@
 
 (et-test
  (et-assert-resolve Integer (string-pixel-width "hello"))
- (et-assert-call Integer string-pixel-width String Buffer)
+ (et-assert-resolve Integer
+  (string-pixel-width (:type String) (:type Buffer)))
  (et-assert-resolve-errors (string-pixel-width ?a)))

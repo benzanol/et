@@ -33,8 +33,10 @@
             (@return V|Nil)))
 
 (et-test
- (et-assert-call-errors alist-get Integer ConsR<ConsR<1~2>~ConsR<3~Nil>>)
- (et-assert-call 2|Nil alist-get Integer AList<1~2>)
+ (et-assert-resolve-errors
+  (alist-get (:type Integer) (:type ConsR<ConsR<1~2>~ConsR<3~Nil>>)))
+ (et-assert-resolve 2|Nil
+   (alist-get (:type Integer) (:type AList<1~2>)))
  (et-assert-resolve 2|4|Nil (alist-get 4 (list (cons 1 2) (cons 3 4)))))
 
 
@@ -91,19 +93,28 @@
             (@return (eval et--freshen-type T))))
 
 (et-test
- (et-assert-call List<Integer> delete-dups ListR<Integer>)
- (et-assert-call ListR<Integer> last ListR<Integer>)
- (et-assert-call ListFresh<Integer> butlast ListR<Integer>)
- (et-assert-call ListFresh<Integer> flatten-tree TreeR<Integer>)
- (et-assert-call ListFresh<Integer> flatten-list TreeR<Integer>)
- (et-assert-call ListFresh<Integer|String> flatten-tree ConsFresh<Integer~ConsFresh<ConsFresh<String~Nil>~Nil>>)
- (et-assert-call ListFresh<Number> number-sequence Integer Integer)
- (et-assert-call ListFresh<Integer> remove Any ListR<Integer>)
- (et-assert-call ListR<Integer> remq Any ListR<Integer>))
+ (et-assert-resolve List<Integer>
+   (delete-dups (:type ListR<Integer>)))
+ (et-assert-resolve ListR<Integer>
+   (last (:type ListR<Integer>)))
+ (et-assert-resolve ListFresh<Integer>
+   (butlast (:type ListR<Integer>)))
+ (et-assert-resolve ListFresh<Integer>
+   (flatten-tree (:type TreeR<Integer>)))
+ (et-assert-resolve ListFresh<Integer>
+   (flatten-list (:type TreeR<Integer>)))
+ (et-assert-resolve ListFresh<Integer|String>
+   (flatten-tree (:type ConsFresh<Integer~ConsFresh<ConsFresh<String~Nil>~Nil>>)))
+ (et-assert-resolve ListFresh<Number>
+   (number-sequence (:type Integer) (:type Integer)))
+ (et-assert-resolve ListFresh<Integer>
+   (remove (:type Any) (:type ListR<Integer>)))
+ (et-assert-resolve ListR<Integer>
+   (remq (:type Any) (:type ListR<Integer>))))
 
 (et-test
  ;; copy-tree freshens deeply (compared by equivalence, not raw `equal').
- (let ((got (et-result-value (et-typecheck-call copy-tree (TupleR Cons<1~2> Cons<3~4>))))
+ (let ((got (et-root-check-type '(copy-tree (:type (TupleR Cons<1~2> Cons<3~4>)))))
        (want (et ConsFresh<ConsFresh<1~2>~ConsFresh<ConsFresh<3~4>~Nil>>)))
    (and (et-subtype? got want) (et-subtype? want got))))
 
@@ -216,9 +227,9 @@
 ;; `dolist'/`when'/`unless' are macros defined in lisp/subr.el. They
 ;; carry runtime logic (binding a loop variable, narrowing the
 ;; condition), so they are written as checkers rather than `@function'
-;; declarations. `when'/`unless' reuse the narrowing helpers
-;; `et--and-return-type'/`et--or-return-type' that live with `and'/`or'
-;; in eval.c.el.
+;; declarations. `when'/`unless' are single-sided conditionals, so they
+;; use `et-checker-sub-cond' with the skipped branch typed as nil or
+;; never depending on branch feasibility.
 
 (et-define-pcase-checker dolist
     `(,(or (and form `(,name ,elem-spec ,_lst)
@@ -231,67 +242,42 @@
   (et-with-vars (list (et-new-var name elem-type))
     (et-checker-loop-body (lambda () (et-checker-sub 2)))))
 
-(et-define-pcase-checker when `(,_cond . ,then)
+(et-define-pcase-checker when `(,_cond . ,_then)
   (let* ((cond-type (et-checker-sub 1)))
     (et-checker-hint-narrows 0 "WHEN:\\n%s" (et--non-nil cond-type))
-    ;; Special case for empty then block because (when cond) always returns nil
-    (if (null then) (et Nil)
-      (et--and-return-type cond-type (lambda () (et-checker-tail 2))))))
-
-(defun et--unless-return-type (cond-type checker)
-  ;; The body is evaluated only when the condition is nil.  When the
-  ;; condition is non-nil, `unless' returns nil, not the condition value.
-  (let* ((nil-cond (et--supersect cond-type (et Nil)))
-         (nil-binds (et--type-binds nil-cond))
-         (output-type (et-never)))
-    (et-checker-branches
-     (lambda ()
-       (cl-callf et--narrows-and et--checker-narrows nil-binds)
-       (setq output-type (funcall checker)))
-     (lambda () (et--non-nil cond-type)))
-
-    (let* ((output-non-nil (et--non-nil output-type))
-           (merged-non-nil-binds
-            (et--intersect-binds nil nil-binds (et--type-binds output-non-nil)))
-
-           (output-nil (et--supersect output-type (et Nil)))
-           (merged-nil-binds
-            (et--intersect-binds nil nil-binds (et--type-binds output-nil)))
-
-           (truthy-cond-nil
-            (et--replace-type-binds (et Nil)
-                                    (et--type-binds (et--non-nil cond-type)))))
-
-      (et--or truthy-cond-nil
-              (et--replace-type-binds output-non-nil merged-non-nil-binds)
-              (et--replace-type-binds output-nil merged-nil-binds)))))
+    (et-checker-sub-cond cond-type
+                         (lambda ()
+                           (if (et-never-p (et--non-nil cond-type))
+                               (et Never)
+                             (et-checker-tail 2)))
+                         (lambda () (et--supersect cond-type (et Nil))))))
 
 (et-define-pcase-checker unless `(,_cond . ,_else)
   (let* ((cond-type (et-checker-sub 1)))
     (et-checker-hint-narrows 0 "UNLESS:\\n%s" (et--supersect cond-type (et Nil)))
-    ;; Special case for empty body because (unless cond) always returns nil
-    (if (null _else) (et Nil)
-      (et--unless-return-type cond-type (lambda () (et-checker-tail 2))))))
+    (et-checker-sub-cond cond-type
+                         (lambda ()
+                           (if (et-never-p (et--non-nil cond-type))
+                               (et Never)
+                             (et Nil)))
+                         (lambda ()
+                           (if (et-never-p (et--supersect cond-type (et Nil)))
+                               (et Never)
+                             (et-checker-tail 2))))))
 
 (et-test
- (equal (et String|Nil)
-        (et--remove-type-binds
-         (et-result-value
-          (et-typecheck
-           (let* ((a String|Number 4))
-             (when (stringp a) a))))))
+ (et-subtype? (et--remove-type-binds
+               (et-root-check-type '(let* ((a (et: String|Number 4)))
+                                      (when (stringp a) a))))
+              (et String|Nil))
  (let ((got (et--remove-type-binds
-             (et-result-value
-              (et-typecheck
-               (let* ((a String|Nil "s"))
-                 (unless a 1))))))
+             (et-root-check-type '(let* ((a (et: String|Nil "s")))
+                                    (unless a 1)))))
        (want (et Integer|Nil)))
-   (and (et-subtype? got want) (et-subtype? want got)))
+   (et-subtype? got want))
  (let ((got (et--remove-type-binds
-             (et-result-value
-              (et-typecheck
-               (let* ((a String|Number|Nil 4))
-                 (unless (stringp a) a))))))
+             (et-root-check-type '(let* ((a (et: String|Number|Nil 4)))
+                                    (unless (stringp a) a)))))
        (want (et Number|Nil)))
    (and (et-subtype? got want) (et-subtype? want got))))
 
@@ -381,28 +367,22 @@ path, the caller must scope those narrows to that path (via
  ;; Each binding is narrowed to its non-nil part inside THEN
  (et-assert-resolve Integer|Nil
    (if-let* ((a (car (list 1 2)))) a))
- (et-subtype? (et-result-value
-               (et-typecheck
-                (let* ((a String|Nil "s"))
-                  (if-let* ((b a)) b "fallback"))))
+ (et-subtype? (et-root-check-type '(let* ((a (et: String|Nil "s")))
+                                     (if-let* ((b a)) b "fallback")))
               (et String))
  ;; A later binding sees the earlier ones, already non-nil
- (et-subtype? (et-result-value
-               (et-typecheck
-                (let* ((a String|Nil "s"))
-                  (if-let* ((b a)
-                            (c (concat b "!")))
-                      c
-                    "fallback"))))
+ (et-subtype? (et-root-check-type '(let* ((a (et: String|Nil "s")))
+                                     (if-let* ((b a)
+                                               (c (concat b "!")))
+                                         c
+                                       "fallback")))
               (et String))
  ;; Bindings are not in scope in the ELSE branch
  (et-assert-resolve-errors
   (if-let* ((a 1)) a a))
  ;; The condition narrows outer variables in THEN
- (et-subtype? (et-result-value
-               (et-typecheck
-                (let* ((a String|Number 4))
-                  (if-let* ((b (stringp a))) a "fallback"))))
+ (et-subtype? (et-root-check-type '(let* ((a (et: String|Number 4)))
+                                     (if-let* ((b (stringp a))) a "fallback")))
               (et String)))
 
 (et-test
@@ -411,19 +391,19 @@ path, the caller must scope those narrows to that path (via
      (:assert-subtype a Integer)))
  ;; A later binding sees the earlier ones, already non-nil.
  (et-assert-resolve Nil
-   (let* ((a String|Nil "s"))
+   (let* ((a (et: String|Nil "s")))
      (while-let ((b a)
                  (c (concat b "!")))
        (:assert-subtype c String))))
  ;; The condition narrows outer variables in the loop body.
  (et-assert-resolve Nil
-   (let* ((a String|Number 4))
+   (let* ((a (et: String|Number 4)))
      (while-let ((b (stringp a)))
        (:assert-subtype a String))))
  ;; Like `while', narrows from above the loop do not survive assignment in
  ;; the body on the next iteration.
  (et-assert-resolve-errors
-  (let* ((a String|Number 4))
+  (let* ((a (et: String|Number 4)))
     (when (stringp a)
       (while-let ((b t))
         (:assert-subtype a String)
@@ -499,6 +479,10 @@ path, the caller must scope those narrows to that path (via
 (et-define-pcase-checker with-output-to-string _body
   (et-checker-remaining 1)
   (et String))
+
+(et-declare
+ (@function princ (object &optional printcharfun)
+            (@generics [T]) (object T) (printcharfun Any) (@return T)))
 
 ;; `with-memoization' returns PLACE when it is already non-nil, and
 ;; otherwise the value of CODE (which it stores in PLACE), so CODE only

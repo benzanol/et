@@ -66,9 +66,12 @@
  (et-assert-resolve Integer (expt 2 3))
  (et-assert-resolve Integer (abs -1))
  (et-assert-resolve Number (abs -1.5))
- (et-assert-call Number expt Integer Negative)
- (et-assert-call Number expt Number Integer)
- (et-assert-call-errors expt String Integer)
+ (et-assert-resolve Number
+  (expt (:type Integer) (:type Negative)))
+ (et-assert-resolve Number
+  (expt (:type Number) (:type Integer)))
+ (et-assert-resolve-errors
+ (expt (:type String) (:type Integer)))
  (et-assert-resolve Number (float 1))
  (et-assert-resolve Integer (logb 10.0))
  (et-assert-resolve Boolean (isnan 0.0))
