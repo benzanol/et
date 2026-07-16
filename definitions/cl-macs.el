@@ -800,45 +800,55 @@ BINDING is either (NAME EXPR), whose type is the type of EXPR, or
   (pcase binding
     (`(,_name ,_expr) (et-checker-sub (list rel 1)))
     (`(,_name ,(pred listp) . ,_body)
-     (if-let* ((sig (et-at rel (et-at-offset 1 (et--parse-function-signature (cdr binding))))))
-         (et--flet-declared-type sig rel)
-       (et--flet-inferred-type (cdr binding) rel)))
+     (if-let* ((declare-path (et--func-declares-path (cddr binding))))
+         (et--flet-declared-type binding rel declare-path)
+       (et--flet-inferred-type binding rel)))
     (_ (et-fatal rel "Expected (NAME ARGLIST BODY...) or (NAME EXPR)"))))
 
-(defun et--flet-declared-type (sig rel)
-  "Check the body of the flet binding at REL against its signature SIG.
+(defun et--flet-declared-type (binding rel declare-path)
+  "Check the body of the flet BINDING at REL against its declaration.
 Returns the declared function type."
-  (et--with-scoped-datatypes (et-func-sig-scoped sig)
-    (et-with-vars (et-func-sig-vars sig)
-      ;; The body runs whenever the local function is called, not here
+  (let* ((arglist (cadr binding))
+         (body (cddr binding))
+         (params (et-at (list rel 1) (et--parse-arglist-params arglist)))
+         (declares (cdr (et--traverse-tree body declare-path)))
+         (decls (et-at rel
+                  (et-at-offset 2
+                    (et-at declare-path
+                      (et-at-offset 1
+                        (et--func-parse-declarations params declares))))))
+         (func-type (plist-get decls :definition))
+         (body-path (append rel (list (+ 2 (1+ (car declare-path)))))))
+    (if (et-type-p func-type)
+        (progn
+          (et--func-check-body func-type params body-path)
+          func-type)
+      (et-err rel "A declared local function must have an `@return' or `@function' type")
       (et-checker-deferred
-        (let* ((actual-ret (et-checker-tail rel (1+ (et-func-sig-source-pos sig))))
-               (expected-ret (et-func-sig-expected-return sig)))
-          (or (et-subtype? actual-ret expected-ret)
-              (et-err rel "Expected %s, found %s" expected-ret actual-ret))))))
-  (et-func-sig-func-type sig))
+        (et-with-vars (cl-loop for p in (apply #'append params)
+                               collect (et-new-var p (et-never)))
+          (et-checker-tail body-path)))
+      (et-never))))
 
-(defun et--flet-inferred-type (args-and-body rel)
+(defun et--flet-inferred-type (binding rel)
   "Infer the function type of the flet binding at REL from its body.
 
-ARGS-AND-BODY is (ARGLIST . BODY), the cdr of the binding. It declares no
-`@return', so parameters keep their declared reprs (Any when undeclared)
-and the return type is the type of the body."
-  (pcase-let* ((`(,decls . ,source-pos)
-                (or (et-at rel (et-at-offset 1 (et--find-function-declarations args-and-body)))
-                    (cons (et--parse-function-declarations
-                           (et--parse-arglist-params (car args-and-body)) nil)
-                          1)))
-               (input (et--func-decls-to-input decls))
-               (vars (cl-loop for group in (et--func-declarations-param-reprs decls)
-                              nconc (cl-loop for (name . repr) in group
-                                             collect (et-new-var name (et-repr-to-type repr nil)))))
+BINDING is (NAME ARGLIST . BODY), and has no function declaration."
+  (pcase-let* ((`(,_name ,arglist . ,_body) binding)
+               (params (et-at (list rel 1) (et--parse-arglist-params arglist)))
+               (fn (lambda (p)
+                     (if (memq p (nth 3 params))
+                         (et-parse-repr 'ListR<Any> nil)
+                       (et-parse-repr 'Any nil))))
+               (input-repr (et--func-params-to-input nil params fn #'identity))
+               (input-type (et-repr-to-type input-repr))
+               (param-types (et--func-param-types params input-type))
+               (vars (cl-loop for (name . type) in param-types
+                              collect (et-new-var name type)))
                ;; The body runs whenever the local function is called, not here
                (return-type (et-checker-deferred
-                              (et-with-vars vars (et-checker-tail rel (1+ source-pos))))))
-    (unless (et-type-p input)
-      (et-fatal rel "A generic function must declare an `@return' type"))
-    (et-dt 'Function input return-type)))
+                              (et-with-vars vars (et-checker-tail rel 2)))))
+    (et-dt 'Function input-type return-type)))
 
 
 ;;;; Checker

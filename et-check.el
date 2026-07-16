@@ -825,8 +825,8 @@ element."
   "Build a Function or DynFunction type from reprs."
   (et-declare (generics ListR<EtGeneric>)
               (constraints ListR<EtTypeConstraint>)
-              (input-repr EtBR)
-              (output-repr EtTR))
+              (input-repr EtRepr)
+              (output-repr EtRepr))
 
   (if generics
       (et-dt 'DynFunction
@@ -1013,7 +1013,7 @@ FN converts a parameter (T) to the repr that should be used for it, and"
 
 (defun et--func-assign-decls (name decls)
   "Assign relevant symbol properties to FUNC."
-  (declare (et (name Var) (decls EtFuncDeclarations) (@return Nil)))
+  (et-declare (name Var) (decls EtFuncDeclarations) (@return Nil))
 
   (put name 'et-function-props (plist-get decls :props))
   (put name 'et-function-parameters (plist-get decls :parameters))
@@ -1104,8 +1104,7 @@ FN converts a parameter (T) to the repr that should be used for it, and"
   (pcase-let* ((`(,scoped ,input-type ,expected-ret) (et--func-destructure func-type)))
     (et--with-scoped-datatypes scoped
       (let* ((param-types (et--func-param-types params input-type))
-             (param-vars (cl-loop for (p . type) in param-types
-                                  collect (make-et-var :name p :type type))))
+             (param-vars (cl-loop for (p . type) in param-types collect (et-new-var p type))))
 
         ;; Ensure that optional parameters are nillable
         (dolist (opt (cadr params))
@@ -1125,6 +1124,36 @@ FN converts a parameter (T) to the repr that should be used for it, and"
               (et-checking-defun name))
     (et--func-check-body func-type (get name 'et-function-parameters) 3))
   (et-literal name))
+
+
+;;;;; Check lambda
+
+(et-define-pcase-checker lambda `(,arglist . ,body)
+  (let* ((params (et-at 1 (et--parse-arglist-params arglist))))
+    (or
+     ;; Parse from declare
+     (when-let* ((declare-path (et--func-declares-path body)))
+       (let* ((declares (cdr (et--traverse-tree body declare-path)))
+              (decls (et-at-offset 2
+                       (et-at declare-path
+                         (et-at-offset 1
+                           (et--func-parse-declarations params declares)))))
+              (func-type (plist-get decls :definition)))
+         (if (not (et-type-p func-type)) (et-err 0 "Declare should have either @return or @function")
+           (et--func-check-body func-type params 2) func-type)))
+
+     ;; Parse from recommendation
+     (when et--checker-recommendation
+       (et--func-check-body et--checker-recommendation params 2)
+       et--checker-recommendation)
+
+     ;; Parse from nothing
+     (et-with-vars (cl-loop for name in (apply #'append params)
+                            collect (et-new-var name (et Any)))
+       (et-checker-deferred
+         (et-dt 'Function
+                (et-repr-to-type (et--func-params-to-input nil params (lambda (_) (et Any)) #'identity))
+                (et-checker-tail 2)))))))
 
 
 ;;;; Variables
@@ -1421,6 +1450,7 @@ Returns a plist with :declare to set the symbol type."
 ;; `declare' forms carry no runtime value; type them as Nil so they are
 ;; ignored wherever they appear.
 (et-define-checker declare (et Nil))
+(et-define-checker et-declare (et Nil))
 
 (et-define-pcase-checker et: `(,type-spec ,_expr)
   (let* ((declared (et-parse-type type-spec))

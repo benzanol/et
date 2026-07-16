@@ -688,8 +688,8 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 ;;
 ;; An `et-defun-fingerprint' records everything whose change should
 ;; invalidate that result:
-;;   SOURCE    - hash of the defun's own source (from its `et-func-sig')
-;;   SIGNATURE - hash of the defun's own function type
+;;   SOURCE    - hash of the defun's own source expression
+;;   SIGNATURE - hash of the defun's function type, params, and props
 ;;   TYPES     - alist of (SPEC . HASH) for every type spec the body
 ;;               parsed, so an alias changing under an unchanged body
 ;;               is caught by re-parsing
@@ -740,36 +740,39 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 
 ;;;; Fingerprint computation
 
-(defun et--hash-name-func-type (name)
-  "Hash NAME's function type, or nil if it has none."
+(defun et--hash-name-func-signature (name)
+  "Hash NAME's function signature, or nil if it has none."
   (when-let* ((ft (et-function-type name)))
-    (et-hash-value (et-hash-items (list ft)))))
+    (et-hash-value
+     (et-hash-items
+      (list ft
+            (get name 'et-function-parameters)
+            (get name 'et-function-props))))))
 
 (defun et--hash-type-spec (spec)
   "Hash the type SPEC parses to, or nil if it does not resolve."
   (ignore-errors (et-hash-value (et-hash-items (list (et-parse-type spec))))))
 
-(defun et--hash-defun-source (name)
-  "Hash the source of the defun NAME, or nil if it has no signature."
-  (when-let* ((sig (get name 'et-function-signature)))
-    (secure-hash 'md5 (let ((print-level nil) (print-length nil))
-                        (prin1-to-string (et-func-sig-source sig))))))
+(defun et--hash-defun-source (expr)
+  "Hash the source expression EXPR."
+  (secure-hash 'md5 (let ((print-level nil) (print-length nil))
+                      (prin1-to-string expr))))
 
-(defun et--compute-defun-fingerprint (name specs funcs)
-  "Build an `et-defun-fingerprint' for NAME from its captured deps."
+(defun et--compute-defun-fingerprint (name expr specs funcs)
+  "Build an `et-defun-fingerprint' for NAME and EXPR from captured deps."
   (make-et-defun-fingerprint
-   :source (et--hash-defun-source name)
-   :signature (et--hash-name-func-type name)
+   :source (et--hash-defun-source expr)
+   :signature (et--hash-name-func-signature name)
    :types (mapcar (lambda (s) (cons s (et--hash-type-spec s))) specs)
-   :functions (mapcar (lambda (f) (cons f (et--hash-name-func-type f))) funcs)))
+   :functions (mapcar (lambda (f) (cons f (et--hash-name-func-signature f))) funcs)))
 
-(defun et--defun-fingerprint-current-p (name fp)
+(defun et--defun-fingerprint-current-p (name expr fp)
   "Return non-nil if FP still matches the current state for NAME."
-  (and (equal (et-defun-fingerprint-source fp) (et--hash-defun-source name))
-       (equal (et-defun-fingerprint-signature fp) (et--hash-name-func-type name))
+  (and (equal (et-defun-fingerprint-source fp) (et--hash-defun-source expr))
+       (equal (et-defun-fingerprint-signature fp) (et--hash-name-func-signature name))
        (cl-every (lambda (c) (equal (cdr c) (et--hash-type-spec (car c))))
                  (et-defun-fingerprint-types fp))
-       (cl-every (lambda (c) (equal (cdr c) (et--hash-name-func-type (car c))))
+       (cl-every (lambda (c) (equal (cdr c) (et--hash-name-func-signature (car c))))
                  (et-defun-fingerprint-functions fp))))
 
 
@@ -785,7 +788,7 @@ pass straight through to ORIG."
   (if (not (and et--current-cache et-cache-defuns
                 (memq (car-safe expr) '(defun cl-defun))
                 (symbolp (cadr expr))
-                (get (cadr expr) 'et-function-signature)))
+                (et-function-type (cadr expr))))
       (apply orig expr check-args)
 
     ;; Guarded lookup: a fresh, fingerprint-valid entry is wrapped in a
@@ -798,7 +801,7 @@ pass straight through to ORIG."
                          (cached (gethash name table)))
                     (when (and cached
                                (et--defun-fingerprint-current-p
-                                name (et--cached-defun-fingerprint cached)))
+                                name expr (et--cached-defun-fingerprint cached)))
                       (list (et--cached-defun-value cached)))))))
       (pcase hit
         ;; Hit: replay the cached diagnostics into the current context
@@ -822,7 +825,7 @@ pass straight through to ORIG."
              (puthash name
                       (make-et--cached-defun
                        :fingerprint (et--compute-defun-fingerprint
-                                     name et--fp-specs et--fp-funcs)
+                                     name expr et--fp-specs et--fp-funcs)
                        :value result)
                       (et-cache-defun-cache et--current-cache)))
            (et-propagate-result result)
