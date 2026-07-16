@@ -112,6 +112,43 @@
  (et-assert-resolve ListR<Integer>
    (remq (:type Any) (:type ListR<Integer>))))
 
+(et-define-pcase-checker add-to-list `(,list-var ,_elt . ,_rest)
+  (let* ((var (pcase list-var
+                (`(quote ,(and sym (pred symbolp))) sym)
+                (_ (et-err 1 "Expected quoted list variable")))))
+    (et-checker-remaining 3)
+    (if (not var)
+        (et-never)
+      (let* ((list-type (et-get-symbol-type var))
+             (elem-type (and list-type
+                             (et-checker-infer list-type [T] List<T> T)))
+             (elt-type (et-checker-sub 2)))
+        (cond
+         ((not list-type)
+          (et-err 1 "No type for list variable `%s'" var))
+         ((not elem-type)
+          (et-err 1 "Expected quoted list variable, found %s of type %s" var list-type))
+         ((not (et-subtype? elt-type elem-type))
+          (et-err 2 "Expected %s, found %s" elem-type elt-type))
+         (t
+          (when-let* ((var-obj (et-get-symbol-var var)))
+            (et-checker-on-set-var var-obj list-type))))
+        list-type))))
+
+(et-test
+ (et-assert-resolve List<Integer>
+   (let* ((l (et: List<Integer> (list 1))))
+     (add-to-list 'l 2)))
+ (et-assert-resolve-errors
+  (let* ((l (et: List<Integer> (list 1))))
+    (add-to-list l 2)))
+ (et-assert-resolve-errors
+  (let* ((l (et: List<Integer> (list 1))))
+    (add-to-list 'l "s")))
+ (et-assert-resolve-errors
+  (let* ((n (et: Integer 1)))
+    (add-to-list 'n 2))))
+
 (et-test
  ;; copy-tree freshens deeply (compared by equivalence, not raw `equal').
  (let ((got (et-root-check-type '(copy-tree (:type (TupleR Cons<1~2> Cons<3~4>)))))

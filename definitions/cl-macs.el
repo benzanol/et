@@ -1,6 +1,10 @@
 ;;;; Function declarations
 
 (et-declare
+ (@function cl-assert (assertion &optional show-args string &rest args)
+            (assertion Any) (show-args Any) (string String|Nil) (args ListR<Any>)
+            (@return Nil))
+
  (@function cl-position (item sequence &key test test-not key start end from-end)
             (@generics [E K])
             (item Any)
@@ -639,6 +643,139 @@ implicit accumulator combined with any body `return' values."
  ;; ---- for VAR downfrom EXPR to EXPR by EXPR ----
  (et-assert-resolve ListFresh<Integer>
    (cl-loop for i downfrom 10 to 0 by 2 collect i)))
+
+
+;;; cl-destructuring-bind
+
+(defvar et--destructuring-bind-generic-counter 0)
+
+(defun et--destructuring-bind-generic ()
+  (intern (format "D%s" (cl-incf et--destructuring-bind-generic-counter))))
+
+(defun et--destructuring-bind-generic-repr (generic)
+  (make-et-repr :target 'BOTH :dnf (list (list (list 'S:GENERIC generic)))))
+
+(defun et--destructuring-bind-pattern (pattern)
+  "Return (VARS GENERICS REPR) for a destructuring PATTERN.
+VARS is an alist of variable names to generated generic names."
+  (cond
+   ((null pattern)
+    (list nil nil (et-repr Nil)))
+   ((symbolp pattern)
+    (let ((generic (et--destructuring-bind-generic)))
+      (list (list (cons pattern generic))
+            (list generic)
+            (et--destructuring-bind-generic-repr generic))))
+   ((consp pattern)
+    (pcase-let ((`(,vars ,generics ,repr)
+                 (et--destructuring-bind-arglist-repr pattern)))
+      (list vars generics repr)))
+   (t (et-fatal nil "Invalid destructuring pattern: %s" pattern))))
+
+(defun et--destructuring-bind-param (spec state)
+  "Return (KEY VARS GENERICS REPR) for a destructuring lambda-list SPEC.
+KEY is non-nil only for `&key' parameters."
+  (pcase-let* ((key nil)
+               (pattern
+                (pcase state
+                  ('required spec)
+                  ('rest spec)
+                  ((or 'optional 'key)
+                   (let ((head (if (consp spec) (car spec) spec)))
+                     (pcase head
+                       (`(,(and keyword (pred keywordp)) ,var)
+                        (setq key keyword)
+                        var)
+                       (_ head))))))
+               (`(,vars ,generics ,repr)
+                (et--destructuring-bind-pattern pattern)))
+    (list key vars generics repr)))
+
+(defun et--destructuring-bind-key-rest-repr (key-params)
+  (if key-params
+      (cl-loop for (key _vars _generics repr) in key-params
+               nconc (list key repr) into plist-args
+               finally return (et-repr PList ,@plist-args))
+    (et-repr Nil)))
+
+(defun et--destructuring-bind-arglist-repr (arglist)
+  "Return (VARS GENERICS REPR) for destructuring lambda list ARGLIST."
+  (let ((required nil)
+        (optional nil)
+        (key-params nil)
+        (rest-param nil)
+        (vars nil)
+        (generics nil)
+        (state 'required))
+    (dolist (elt arglist)
+      (pcase elt
+        ('&optional (setq state 'optional))
+        ((or '&rest '&body) (setq state 'rest))
+        ('&key (setq state 'key))
+        ('&allow-other-keys nil)
+        ('&aux (setq state 'aux))
+        (_
+         (pcase state
+           ('aux nil)
+           (_
+            (pcase-let ((`(,key ,param-vars ,param-generics ,repr)
+                         (et--destructuring-bind-param elt state)))
+              (setq vars (append vars param-vars)
+                    generics (append generics param-generics))
+              (pcase state
+                ('required (push repr required))
+                ('optional (push repr optional))
+                ('key (push (list (or key (intern (format ":%s" elt)))
+                                  param-vars param-generics repr)
+                            key-params))
+                ('rest (setq rest-param repr)))))))))
+    (let* ((rest-repr (or rest-param
+                          (et--destructuring-bind-key-rest-repr (nreverse key-params))))
+           (repr (et--params-to-input-repr (nreverse required)
+                                           (nreverse optional)
+                                           rest-repr)))
+      (list vars generics repr))))
+
+(defun et--destructuring-bind-vars (vars generics types)
+  (cl-loop for (name . generic) in vars
+           for type = (or (alist-get generic (cl-mapcar #'cons generics types))
+                          (et-never))
+           collect (et-new-var name type)))
+
+(et-define-pcase-checker cl-destructuring-bind
+    `(,(and arglist (pred listp)) ,_value . ,_body)
+  (pcase-let* ((value-type (et-checker-sub 2))
+               (`(,vars ,generics ,repr)
+                (et--destructuring-bind-arglist-repr arglist))
+               (matcher (make-et-matcher :generics generics :repr repr))
+               (match (et-sub-match matcher value-type)))
+    (if (et-match-result-success match)
+        (et-with-vars (et--destructuring-bind-vars
+                       vars generics (et-match-result-value match))
+          (et-checker-tail 3))
+      (et-err 2 "Value type %s does not match destructuring arglist %s"
+              value-type arglist)
+      (et-with-vars (mapcar (lambda (binding)
+                              (et-new-var (car binding) (et-never)))
+                            vars)
+        (et-checker-tail 3))
+      (et-never))))
+
+(et-test
+ (et-assert-resolve Integer
+   (cl-destructuring-bind (a b) (list 1 "x") a))
+ (et-assert-resolve String
+   (cl-destructuring-bind (a b) (list 1 "x") b))
+ (et-assert-resolve String
+   (cl-destructuring-bind ((a b) c) (list (list 1 "x") t) b))
+ (et-assert-resolve ListR<String>
+   (cl-destructuring-bind (a &rest rest) (list 1 "x" "y") rest))
+ (et-assert-resolve Nil
+   (cl-destructuring-bind (a &optional b) (list 1) b))
+ (et-assert-resolve Integer
+   (cl-destructuring-bind (&key name age) '(:name "Ada" :age 5) age))
+ (et-assert-resolve-errors
+  (cl-destructuring-bind (a b) (list 1) b)))
 
 
 ;;; cl-flet
