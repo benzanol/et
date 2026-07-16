@@ -771,7 +771,7 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 
 ;;;; Cached check
 
-(defun et--check-cached (orig expr &optional recommendation)
+(defun et--check-cached (orig expr &rest check-args)
   "Around advice on `et--check' implementing the defun cache.
 
 For a root defun with a parsed signature, return its cached result when
@@ -779,10 +779,10 @@ the fingerprint still holds; otherwise run ORIG once, fingerprint the
 dependencies it touched, and store the result. All other expressions
 pass straight through to ORIG."
   (if (not (and et--current-cache et-cache-defuns
-                (eq (car-safe expr) 'defun)
+                (memq (car-safe expr) '(defun cl-defun))
                 (symbolp (cadr expr))
                 (get (cadr expr) 'et-function-signature)))
-      (funcall orig expr recommendation)
+      (apply orig expr check-args)
 
     ;; Guarded lookup: a fresh, fingerprint-valid entry is wrapped in a
     ;; list so a hit (any value, even nil) is distinguishable from a miss
@@ -810,7 +810,10 @@ pass straight through to ORIG."
          (let* ((et--fp-active t)
                 (et--fp-specs nil)
                 (et--fp-funcs nil)
-                (result (et-result-boundary (funcall orig expr recommendation))))
+                (result (et-result-boundary
+                         (et-copy-with
+                          (apply orig expr check-args)
+                          :narrows nil))))
            (et--cache-try
              (puthash name
                       (make-et--cached-defun

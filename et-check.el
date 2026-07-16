@@ -52,41 +52,6 @@
      ,@body))
 
 
-;;;; Narrowed bindings
-
-(defvar et--narrow-binds nil
-  "Stack of (`et-var'|nil . `et-type').
-
-If the car of an entry is nil, that means that entry has been
-invalidated.")
-
-(defun et-current-var-type (variable)
-  (or (alist-get variable et--narrow-binds)
-      (et-var-type variable)))
-
-(defun et-get-symbol-type (sym)
-  (cl-assert (symbolp sym))
-  (when-let* ((var (et-get-symbol-var sym)))
-    (et-current-var-type var)))
-
-(defmacro et-with-narrow-binds (binds &rest body)
-  (declare (indent 1))
-  `(let ((et--narrow-binds (append ,binds et--narrow-binds)))
-     ,@body))
-
-(defun et-invalidate-var-narrows (var newtype)
-  "Remove now-invalid narrows from VAR.
-
-This should be run if VAR is set to NEWTYPE. For each existing narrow of
-VAR, that narrow is now invalid if and only if NEWTYPE is a subtype of
-the narrowed type."
-  (cl-loop for bind in et--narrow-binds
-           for (bvar . btype) = bind
-           when (and (eq var bvar)
-                     (not (et-subtype? newtype btype)))
-           do (setcar bind nil)))
-
-
 ;;;; Printing narrows
 
 (defun et-pp-narrows (narrows &optional sep)
@@ -109,7 +74,13 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
 ;;; ============================================================
 ;;; Checking
-;;;; Check
+;;;; The checking context
+
+(et-declare
+ (@alias EtNarrows AList<*et-var~*et-type>))
+
+;; The checking context provides 3 things: an expr, a recommendation,
+;; and an alist of narrows.
 
 (defvar et--checker-expr nil)
 
@@ -128,7 +99,40 @@ at the function type. It should not be used in any other checkers.
 
 This variable should only be modified by `et--check'.")
 
-(defun et--check (expr &optional recommendation)
+(et-defvar et--checker-narrows EtNarrows nil
+  "A list of narrows in the current `et--check' environment.
+
+This should ONLY be modified by `et--check', the existing sub-checker
+functions, and the existing narrows modification functions. It should
+only be read by functions in this file.")
+
+(defun et-kill-all-narrows ()
+  (setq et--checker-narrows nil))
+
+(defun et-current-var-type (var)
+  "Get the current narrowed type of a variable."
+  (et-declare (var *et-var) (@return *et-type))
+  (or (alist-get var et--checker-narrows)
+      (et-var-type var)))
+
+(defun et-get-symbol-type (sym)
+  (et-declare (sym Var) (@return Nil|*et-type))
+  (cl-assert (symbolp sym))
+  (when-let* ((var (et-get-symbol-var sym)))
+    (et-current-var-type var)))
+
+
+;;;; Check
+
+(cl-defstruct et--check-result
+  (type nil :et *et-type)
+  (narrows nil :et AList<*et-var~*et-type>))
+
+(defun et--var-in-scope? (var)
+  (or (eq var (get (et-var-name var) 'et-variable-var))
+      (rassq var et--binds)))
+
+(defun et--check (expr narrows recommendation)
   "Generates an `et-result' resulting from typechecking EXPR.
 
 If EXPR is self quoting (a number, string, etc.), the resulting type
@@ -152,15 +156,26 @@ If FUNC is a symbol with the `et-function-type' property set to an
 `et-type', then the arguments to the function will first be checked
 individually, and then will be passed to `et-funcall' as a list to
 determine the output type."
+  (declare (et (expr Sexp) (narrows EtNarrows) (recommendation Nil|*et-type)
+               (@return *et--check-result)))
+
   (let* ((et--checker-expr expr)
+         (et--checker-narrows narrows)
          (et--checker-recommendation recommendation))
-    (et-failed-boundary
-     (or (et-error-boundary nil
-           (or (et--check-1)
-               (unless et--result-failed (et-err nil "Type checking failed mysteriously"))))
-         (et-never)))))
+    (make-et--check-result
+     :type
+     (et-failed-boundary
+      (or (et-error-boundary nil
+            (or (et--check-1)
+                (unless et--result-failed (et-err nil "Type checking failed mysteriously"))))
+          (et-never)))
+     ;; Remove any narrows for variables no longer in scope
+     :narrows (seq-filter (lambda (narrow) (et--var-in-scope? (car narrow)))
+                          et--checker-narrows))))
 
 (defun et--check-1 ()
+  (declare (et (@return *et-type)))
+
   (pcase et--checker-expr
     (`(,func . ,_args)
      ;; If this function is lazily declared, and hasn't been declared yet, do it now
@@ -226,14 +241,195 @@ determine the output type."
 
 (defmacro et-check-call (func &rest args)
   `(let ((result (et-result-boundary
-                  (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a)))))))
+                  (et--check-result-type
+                   (et--check '(,func ,@(cl-loop for a in args collect `(:type ,a)))
+                              nil nil)))))
      (or (mapcar #'caddr (et-result-diagnostics result)) (et-result-value result))))
+
+
+;;;; Sub-checkers
+;;;;; Series sub checkers
+
+(defun et--traverse-tree (tree path)
+  (if (null path) tree
+    (when (>= (car path) (length tree))
+      (error "Index out of bounds: %s %s" (car path) tree))
+    (et--traverse-tree (nth (car path) tree) (cdr path))))
+
+(cl-defun et-checker-sub (path &key recommendation)
+  "Type check the sub expression at PATH, returning the type or never.
+
+This assumes that the child will ALWAYS run, and thus that the resulting
+narrows should ALWAYS be applied."
+  (et-declare (path TreeR<Integer>) (recommendation Nil|*et-type)
+              (@return *et-type))
+
+  (let* ((flat (flatten-tree path))
+         (expr (et--traverse-tree et--checker-expr flat))
+         (checked (et-at flat (et--check expr et--checker-narrows recommendation))))
+    (setq et--checker-narrows (et--check-result-narrows checked))
+    (et--check-result-type checked)))
+
+(defun et-checker-remaining (&rest first-path)
+  "Check a sequence of expressions, returning all of their types.
+
+This is useful for functions like `list'. If you only need the last
+type, use `et-checker-tail'."
+  (et-declare (first-path TreeR<Integer>) (@return List<*et-type>))
+
+  (cl-assert et--checker-expr)
+  (cl-assert first-path)
+  (setq first-path (flatten-tree first-path))
+
+  (let* ((parent-path (butlast first-path))
+         (parent-expr (et--traverse-tree et--checker-expr parent-path))
+         (start (car (last first-path))))
+
+    (cl-loop for idx upfrom start below (length parent-expr)
+             collect (et-checker-sub (append parent-path (list idx))))))
+
+(defun et-checker-tail (&rest first-path)
+  "Check a sequence of expressions, returning the type of the last one."
+  (et-declare (first-path TreeR<Integer>) (@return *et-type))
+  (or (car (last (et-checker-remaining first-path))) (et Nil)))
+
+
+;;;;; Parallel sub checker
+
+(defun et--narrows-or (a b)
+  (et-declare (a EtNarrows) (b EtNarrows) (@return EtNarrows))
+  (cl-loop for (var . t1) in a
+           for t2 = (alist-get var b)
+           when t2 collect (cons var (et--or t1 t2))))
+
+(defun et-checker-branches (&rest branches)
+  "Type check parallel code paths, one of which must execute.
+
+In order to ensure the correctness of this function, on every execution
+of the parent function, one or more of the branches must execute. For
+example, for a non-exaustive pcase, a case MUST be added which just
+returns nil. This is to ensure the correctness of the resulting type AND
+the resulting `et--checker-narrows'."
+  (et-declare (branches (ListR fn<Nil~*et-type>)) (@return *et-type))
+
+  (let* ((all-types (et: List<*et-type> nil))
+         (all-narrows (et: List<EtNarrows> nil)))
+
+    (dolist (fn branches)
+      ;; Temporarily bind et--checker-narrows to itself so that modifications
+      ;; are scoped to this block
+      (let* ((et--checker-narrows et--checker-narrows)
+             (type (funcall fn)))
+        ;; If the case returns never, assume that it will never exit
+        (unless (et-never-p type)
+          (push type all-types)
+          (push et--checker-narrows all-narrows))))
+
+    (setq et--checker-narrows
+          (when all-narrows (cl-reduce #'et--narrows-or all-narrows)))
+    (apply #'et--or all-types)))
+
+
+;;;;; Condition sub checker
+
+(defun et--narrows-and (a b)
+  (et-declare (a EtNarrows) (b EtNarrows) (@return EtNarrows))
+  (cl-loop for var in (seq-uniq (mapcar #'car (append a b)) #'eq)
+           for t1 = (alist-get var a) for t2 = (alist-get var b)
+           collect (cons var (if t1 (if t2 (et--supersect t1 t2) t1) t2))))
+
+(defun et-checker-sub-cond (cond-type then else)
+  (et-declare (cond-type *et-type) (then fn) (else fn)
+              (@return *et-type))
+  (et-checker-branches
+   (lambda ()
+     (cl-callf et--narrows-and et--checker-narrows
+       (et--type-binds (et--non-nil cond-type)))
+     (funcall then))
+   (lambda ()
+     (cl-callf et--narrows-and et--checker-narrows
+       (et--type-binds (et--supersect cond-type (et Nil))))
+     (funcall else))))
+
+
+;;;;; Loop sub checker
+
+(defun et--narrows-changed-vars (before after)
+  "Vars whose narrow entry differs between BEFORE and AFTER."
+  (cl-loop for var in (seq-uniq (mapcar #'car (append before after)) #'eq)
+           unless (equal (alist-get var before) (alist-get var after))
+           collect var))
+
+(defun et-checker-loop-body (body-fn)
+  "Check BODY-FN, a block that may execute zero or more times.
+
+Pass 1 (diagnostics discarded via `et-result-boundary') discovers the
+vars the body can change. Pass 2 checks the body for real, with those
+vars' narrows dropped, so iteration N never trusts a narrow iteration
+N-1 may have broken. Afterward `et--checker-narrows' holds the join of
+the zero-iteration path and the after-an-iteration path.
+
+Returns the body's type (from the real pass)."
+  (let* ((entry et--checker-narrows)
+         (dirty (let ((et--checker-narrows entry))
+                  (et-result-boundary (funcall body-fn))
+                  (et--narrows-changed-vars entry et--checker-narrows))))
+    (setq et--checker-narrows
+          (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
+    (prog1 (funcall body-fn)
+      ;; Exit: 0 iterations (entry) OR >=1 iterations (current narrows).
+      (setq et--checker-narrows (et--narrows-or entry et--checker-narrows)))))
+
+
+;;;;; Escapable sub checker
+
+(defun et-checker-escapable (body-fn)
+  "Check BODY-FN, a block that may be exited nonlocally at any point.
+
+Code after the enclosing form (e.g. `catch', `with-local-quit') runs
+whether BODY-FN completed or aborted partway through, so the only narrows
+that survive are the entry narrows on vars the body never touches: a
+narrow the body created (or an entry narrow on a var the body assigns)
+cannot be trusted, since the exit may have happened before or after the
+change.
+
+Returns the body's type."
+  (let* ((entry et--checker-narrows)
+         (type (funcall body-fn))
+         (dirty (et--narrows-changed-vars entry et--checker-narrows)))
+    (setq et--checker-narrows
+          (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
+    type))
+
+
+;;;;; Deferred checking
+
+(defmacro et-checker-deferred (&rest body)
+  "Check BODY as code that runs at some later, unknown time.
+
+It sees none of the current flow's narrows, and the narrows it produces
+do not escape into the current flow."
+  (declare (indent 0))
+  `(let ((et--checker-narrows nil)) ,@body))
+
+
+;;;; Narrows modifiers
+
+(defun et-checker-on-set-var (var type)
+  "Should be called whenever VAR is assigned to TYPE.
+
+This should be called anytime a variable is set."
+  (et-declare (var *et-var) (type *et-type) (@return Nil))
+
+  (setq et--checker-narrows
+        (cons (cons var type)
+              (cl-remove var et--checker-narrows :key #'car))))
 
 
 ;;;; Root level functions
 
 (defmacro et-typecheck (body)
-  (et-result-boundary (et-simplify-type (et--check body))))
+  (et-result-boundary (et-simplify-type (et--check-result-type (et--check body nil nil)))))
 
 (defmacro et-typecheck-call (func &rest arg-types)
   (cl-loop for type in arg-types
@@ -248,9 +444,9 @@ determine the output type."
   (declare (indent 1))
   `(et-result-boundary
     (let* ((t-type (et-at 1 (et ,type)))
-           (r-type (et-at 2 (et--check ',expr))))
+           (r-type (et-at 2 (et--check-result-type (et--check ',expr nil nil)))))
       (or (,(if not #'not #'identity) (et-subtype? r-type t-type))
-          (et-err 0 "Expected %s, got %s" t-type (et-result-type result))))))
+          (et-err 0 "Expected %s, got %s" t-type r-type)))))
 
 (defmacro et-assert-no-resolve (type expr)
   (declare (indent 1))
@@ -258,23 +454,23 @@ determine the output type."
 
 (defmacro et-assert-resolve-errors (expr)
   `(et-result-boundary
-    (or (et-result-failed (et-result-boundary (et--check ',expr)))
+    (or (et-result-failed (et-result-boundary (et--check-result-type (et--check ',expr nil nil))))
         (et-err 0 "Didn't fail"))))
 
 (defmacro et-assert-call (type-spec func &rest arg-types)
   `(et-result-boundary
     (let* ((type (et ,type-spec))
            (params (cl-loop for a in ',arg-types collect (list :type a)))
-           (ret-type (et--check (cons ',func params))))
+           (ret-type (et--check-result-type (et--check (cons ',func params) nil nil))))
       (or (equal type ret-type)
           (et-err 0 "Expected %s, got %s" type ret-type)))))
 
 (defmacro et-assert-call-errors (func &rest arg-types)
   `(et-result-boundary
     (let* ((params (cl-loop for a in ',arg-types collect (list :type a)))
-           (result (et-result-boundary (et--check (cons ',func params)))))
+           (result (et-result-boundary (et--check-result-type (et--check (cons ',func params) nil nil)))))
       (unless (et-result-failed result)
-        (error "Succeeded with %s" (cl-prin1-to-string (et-result-type result)))))))
+        (error "Succeeded with %s" (cl-prin1-to-string (et-result-value result)))))))
 
 (et-test
  (et-assert-resolve Integer 1)
@@ -392,43 +588,7 @@ RETURN is a parsable expression for the return type.
 
 
 ;;; ============================================================
-;;; Checker helpers
-;;;; Check subexprs
-
-(defun et--traverse-tree (tree path)
-  (if (null path) tree
-    (when (>= (car path) (length tree))
-      (error "Index out of bounds: %s %s" (car path) tree))
-    (et--traverse-tree (nth (car path) tree) (cdr path))))
-
-(defun et-checker-sub (&rest path)
-  "Type check the sub expression at PATH, returning the type or never."
-  (let* ((flat (flatten-tree path))
-         (expr (et--traverse-tree et--checker-expr flat)))
-    (et-at flat (et--check expr))))
-
-(defun et-checker-sub-with-recommendation (recommendation &rest path)
-  "Like `et-checker-sub', but with a recommended type."
-  (let* ((flat (flatten-tree path))
-         (expr (et--traverse-tree et--checker-expr flat)))
-    (et-at flat (et--check expr recommendation))))
-
-(defun et-checker-remaining (&rest first-path)
-  (cl-assert et--checker-expr)
-  (cl-assert first-path)
-  (setq first-path (flatten-tree first-path))
-
-  (let* ((parent-path (butlast first-path))
-         (parent-expr (et--traverse-tree et--checker-expr parent-path))
-         (start (car (last first-path))))
-
-    (cl-loop for idx upfrom start below (length parent-expr)
-             collect (et-checker-sub (append parent-path (list idx))))))
-
-(defun et-checker-tail (&rest first-path)
-  (or (car (last (et-checker-remaining first-path))) (et-literal nil)))
-
-
+;;; Useful helpers
 ;;;; Resolve
 
 (defun et-checker-resolve (type &rest path)
@@ -594,7 +754,7 @@ rare event that the identifier is declaring some custom type."
                do
                (let* ((et--processing-phase :check)
                       (et--processing-expr expr))
-                 (et-error-boundary pos (et--check expr)))))
+                 (et-error-boundary pos (et--check expr nil nil)))))
 
     ;; Run tests
     (when test
@@ -1028,10 +1188,12 @@ OUTPUT-REPR each converted to concrete types."
 
     (et--with-scoped-datatypes (et-func-sig-scoped sig)
       (et-with-vars (et-func-sig-vars sig)
-        (let* ((actual-ret (et-checker-tail (+ 2 (et-func-sig-source-pos sig))))
-               (expected-ret (et-func-sig-expected-return sig)))
-          (or (et-subtype? actual-ret expected-ret)
-              (et-err 0 "Expected %s, found %s" expected-ret actual-ret))))))
+        ;; The body runs whenever the function is called, not here
+        (et-checker-deferred
+          (let* ((actual-ret (et-checker-tail (+ 2 (et-func-sig-source-pos sig))))
+                 (expected-ret (et-func-sig-expected-return sig)))
+            (or (et-subtype? actual-ret expected-ret)
+                (et-err 0 "Expected %s, found %s" expected-ret actual-ret)))))))
   (et-literal name))
 
 
@@ -1314,7 +1476,7 @@ Returns a plist with :declare to set the symbol type."
     type))
 
 (et-define-pcase-checker :narrows `()
-  (cl-loop for (var . type) in (reverse et--narrow-binds)
+  (cl-loop for (var . type) in (reverse et--checker-narrows)
            collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
            finally do
            (et-hint nil (string-join strs "\\n")))
@@ -1335,7 +1497,7 @@ Returns a plist with :declare to set the symbol type."
 
 (et-define-pcase-checker et: `(,type-spec ,_expr)
   (let* ((declared (et-parse-type type-spec))
-         (actual (et-checker-sub-with-recommendation declared 2)))
+         (actual (et-checker-sub 2 :recommendation declared)))
     (unless (et-subtype? actual declared)
       (et-err 0 "Expected %s, found %s" declared actual))
     declared))
@@ -1344,7 +1506,7 @@ Returns a plist with :declare to set the symbol type."
   (pcase (length args)
     (1 (et-checker-sub 1) (et Never))
     (2 (let* ((declared (et-parse-type (car args))))
-         (et-checker-sub-with-recommendation declared 2)
+         (et-checker-sub 2 :recommendation declared)
          declared))
     (n (et-fatal 0 "Wrong number of arguments: %s" n))))
 
@@ -1444,15 +1606,15 @@ heuristic is by searching (using `equal') for each nested call to
              unless (eq path 'NO) return (cons idx path)
              finally return 'NO)))
 
-(defun et--macroexpand-check-advice (func expr &optional rec)
+(defun et--macroexpand-check-advice (func &rest args)
   (if (or (null et--macroexpand-expr)
           (null et--sticky-path))
-      (funcall func expr rec)
+      (apply func args)
 
-    (let* ((path (et--path-in-tree expr et--macroexpand-expr)))
-      (if (eq path 'NO) (funcall func expr rec)
+    (let* ((path (et--path-in-tree (car args) et--macroexpand-expr)))
+      (if (eq path 'NO) (apply func args)
         (let* ((et--sticky-path nil))
-          (et-at path (funcall func expr rec)))))))
+          (et-at path (apply func args)))))))
 
 (advice-add #'et--check :around #'et--macroexpand-check-advice)
 
@@ -1465,9 +1627,12 @@ probably exist somewhere inside of EXPANSION, and should be mapped back
 onto the original expression."
   (let* (;; Only the very root macroexpand expr exists in the actual code.
          ;; If we get another expansion inside an expansion, keep the original root-level expr
-         (et--macroexpand-expr (or et--macroexpand-expr et--checker-expr)))
-    (et-with-sticky-path
-     (et--check expanded recommendation))))
+         (et--macroexpand-expr (or et--macroexpand-expr et--checker-expr))
+         (result
+          (et-with-sticky-path
+           (et--check expanded et--checker-narrows recommendation))))
+    (setq et--checker-narrows (et--check-result-narrows result))
+    (et--check-result-type result)))
 
 (defun et-macroexpand-checker ()
   "Type checker which expands a macro and type-checks the expansion."
