@@ -423,10 +423,10 @@
 ;;; Cons cells
 
 (et-declare
- (@alias MatchCar [T] :matcher-only t
+ (@alias MatchCar [T]
          (or (and Nil (set T Nil))
              (ConsR T Any)))
- (@alias MatchCdr [T] :matcher-only t
+ (@alias MatchCdr [T]
          (or (and Nil (set T Nil))
              (ConsR Any T))))
 

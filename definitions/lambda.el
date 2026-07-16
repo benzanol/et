@@ -41,8 +41,7 @@ types of ARGLIST's required, optional, keyword, and rest parameters."
                   (cl-loop for param in params
                            for generic in generics
                            collect (cons param
-                                         (make-et-repr :target 'BOTH
-                                                       :dnf (list (list (list 'S:GENERIC generic)))))))
+                                         (make-et-repr :dnf (list (list (list 'S:GENERIC generic)))))))
                  (take-group
                   (lambda (group)
                     (cl-loop for param in group collect (assq param param-reprs))))

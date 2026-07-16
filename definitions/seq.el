@@ -42,7 +42,7 @@
 
 (et-declare
  (@alias Sequence [E] (or String ListR<E> VectorR<E>))
- (@alias SequenceR [E] :matcher-only t
+ (@alias SequenceR [E]
          (or (and String (set E Integer))
              ListR<E>
              VectorR<E>)))

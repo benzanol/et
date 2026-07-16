@@ -653,7 +653,7 @@ implicit accumulator combined with any body `return' values."
   (intern (format "D%s" (cl-incf et--destructuring-bind-generic-counter))))
 
 (defun et--destructuring-bind-generic-repr (generic)
-  (make-et-repr :target 'BOTH :dnf (list (list (list 'S:GENERIC generic)))))
+  (make-et-repr :dnf (list (list (list 'S:GENERIC generic)))))
 
 (defun et--destructuring-bind-pattern (pattern)
   "Return (VARS GENERICS REPR) for a destructuring PATTERN.

@@ -297,7 +297,6 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
 ;;;; Reprs
 
 (defun et--hash-repr (state repr alias-stack)
-  (et--hash-push state (et-repr-target repr))
   (et--hash-push state (et-repr-label repr))
   (let ((cases (et-repr-dnf repr)))
     (et--hash-push state (length cases))
@@ -319,8 +318,13 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
     (`(S:SET ,matcher-repr ,type)
      (et--hash-repr state matcher-repr alias-stack)
      (et--hash-type state type alias-stack))
-    ;; S:NOINFER wraps a single type-target repr.
-    (`(S:NOINFER ,tr) (et--hash-repr state tr alias-stack))
+    ;; S:NOINFER wraps a repr along with its generic environment.
+    (`(S:NOINFER ,tr ,env)
+     (et--hash-repr state tr alias-stack)
+     (et--hash-push state (length env))
+     (pcase-dolist (`(,gen . ,repr) env)
+       (et--hash-push state gen)
+       (et--hash-repr state repr alias-stack)))
     (`(S:OP ,op-name . ,args) (et--hash-op state op-name args alias-stack))
     (_ (error "Invalid repr factor: %s" factor))))
 

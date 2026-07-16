@@ -550,7 +550,7 @@ RETURN is a parsable expression for the return type.
   (let* ((func-type
           (if gen-vec
               (let* ((matcher (et-parse-matcher arglist-spec gen-vec))
-                     (output-repr (et-parse-repr return-spec (et-matcher-generics matcher) 'TYPE)))
+                     (output-repr (et-parse-repr return-spec (et-matcher-generics matcher))))
                 (et-dt 'DynFunction matcher output-repr))
             (et-dt 'Function (et-parse-type arglist-spec) (et-parse-type return-spec)))))
     (dolist (func (if (symbolp funcs) (list funcs) funcs))
@@ -587,9 +587,9 @@ PATH is the path to the subexpression."
           (et-infer (make-et-matcher
                      :generics gens
                      :constraints constraints
-                     :repr (et-parse-repr matcher-spec gens 'MATCHER))
+                     :repr (et-parse-repr matcher-spec gens))
                     type
-                    (et-parse-repr output-spec gens 'TYPE))))
+                    (et-parse-repr output-spec gens))))
     (when (et-match-result-success result)
       (et-match-result-value result))))
 
@@ -822,7 +822,7 @@ rare event that the identifier is declaring some custom type."
           (`(@return ,spec)
            (when return-repr (et-fatal 0 "Multiple @return clauses"))
            (et-at 1
-             (setq return-repr (et-parse-repr spec generics 'TYPE))))
+             (setq return-repr (et-parse-repr spec generics))))
           (`(@return . ,_) (et-fatal 0 "Expected (@return TYPE)"))
 
           (`(@generics ,(and gv (pred vectorp)))
@@ -866,7 +866,7 @@ rare event that the identifier is declaring some custom type."
                                   finally do (et-fatal 0 "Not a parameter: %s" name))))
              (et-at 1
                (setq any-params t)
-               (setcdr entry (et-parse-repr spec generics 'BOTH)))))
+               (setcdr entry (et-parse-repr spec generics)))))
 
           (_ (error "Invalid format")))))
 
@@ -1000,10 +1000,10 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
   (declare (et (always-matcher Boolean)
                (generics ListR<EtGeneric>)
                (constraints ListR<EtTypeConstraint>)
-               (required AList<Symbol~EtBR|Nil>)
-               (optional AList<Symbol~EtBR|Nil>)
-               (key-params AList<Symbol~EtBR|Nil>)
-               (rest-params AList<Symbol~EtBR|Nil>)))
+               (required AList<Symbol~EtRepr|Nil>)
+               (optional AList<Symbol~EtRepr|Nil>)
+               (key-params AList<Symbol~EtRepr|Nil>)
+               (rest-params AList<Symbol~EtRepr|Nil>)))
 
   ;; Convert an entry (VAR . REPR) to a labeled repr
   (let* ((fn (lambda (var repr)
@@ -1033,8 +1033,8 @@ Returns an `et-matcher' if GENERICS is non-nil, or an `et-type' if not."
       (et-repr-to-type input-repr nil))))
 
 (defun et--params-to-input-repr (req opt rest)
-  (declare (et (req ListR<EtBR>) (opt ListR<EtBR>) (rest EtBR)
-               (@return EtBR)))
+  (declare (et (req ListR<EtRepr>) (opt ListR<EtRepr>) (rest EtRepr)
+               (@return EtRepr)))
   (cond
    (req (et-repr ConsR ,(car req) ,(et--params-to-input-repr (cdr req) opt rest)))
    (opt
@@ -1085,8 +1085,8 @@ If GENERICS is nil, returns a Function with INPUT-REPR and
 OUTPUT-REPR each converted to concrete types."
   (declare (et (generics ListR<EtGeneric>)
                (constraints ListR<EtTypeConstraint>)
-               (input-repr EtBR)
-               (output-repr EtTR)))
+               (input-repr EtRepr)
+               (output-repr EtRepr)))
 
   (if generics
       (et-dt 'DynFunction
@@ -1271,14 +1271,12 @@ Returns a plist with :declare to set the variable type."
        (let* ((plist (or (get name 'et-struct)
                          (et-fatal 0 "Struct `%s' not defined" name)))
               (constraints (plist-get plist :constraints))
-              ;; The target for input reprs: a matcher when generic, else a plain type
-              (input-target (if generics 'BOTH 'TYPE))
               ;; Repr helpers shared across all generated functions
               ;; STRUCT-REPR is the struct's own type, e.g. *Name<T1 T2>
-              (struct-repr (et-parse-repr (et-q (Struct ,name ,@generics)) generics 'BOTH))
+              (struct-repr (et-parse-repr (et-q (Struct ,name ,@generics)) generics))
               ;; ARGLIST-REPR is the single-argument arglist (STRUCT), used by
               ;; accessors and the copier
-              (arglist-repr (et-parse-repr (et-q (ConsR ,struct-repr Nil)) generics 'BOTH)))
+              (arglist-repr (et-parse-repr (et-q (ConsR ,struct-repr Nil)) generics)))
 
          ;; --- Predicate ---
          (when predicate
@@ -1287,7 +1285,7 @@ Returns a plist with :declare to set the variable type."
                    (et-parse-repr
                     (et-q (or (and True (bindsof (and T (Struct ,name ,@never-args))))
                               (and Nil (bindsof (subtract T (Struct ,name ,@never-args))))))
-                    '(T) 'TYPE)))
+                    '(T))))
              (put predicate 'et-function-type
                   (et-dt 'DynFunction (et-parse-matcher '(Args T) [T]) output-repr))))
 
@@ -1299,7 +1297,7 @@ Returns a plist with :declare to set the variable type."
              (et-error-boundary rel
                (let* ((slot-repr (if type-info
                                      (et-at (car type-info)
-                                       (et-parse-repr (cdr type-info) generics 'TYPE))
+                                       (et-parse-repr (cdr type-info) generics))
                                    (et-repr Any))))
                  (put accessor 'et-function-type
                       (et--make-function-type generics constraints
@@ -1312,10 +1310,10 @@ Returns a plist with :declare to set the variable type."
                             for slot-repr = (if type-info
                                                 (et-error-boundary rel
                                                   (et-at (car type-info)
-                                                    (et-parse-repr (cdr type-info) generics input-target)))
+                                                    (et-parse-repr (cdr type-info) generics)))
                                               (et-repr Any))
                             nconc (list (intern (format ":%s" slot-name)) slot-repr) into args
-                            finally return (et-parse-repr (if args `(PList ,@args) 'Nil) nil 'TYPE))))
+                            finally return (et-parse-repr (if args `(PList ,@args) 'Nil) nil))))
              (put constructor 'et-function-type
                   (et--make-function-type generics constraints
                                           input-repr struct-repr))))
@@ -1367,10 +1365,9 @@ Returns a plist with :constrain and :populate functions."
          (let* ((props (or (get name 'et-alias)
                            (et-fatal nil "Alias `%s' not declared" name)))
                 (spec (plist-get props :spec))
-                (generics (plist-get props :generics))
-                (target (plist-get props :target)))
+                (generics (plist-get props :generics)))
            (plist-put props :repr
-                      (et-parse-repr spec generics (or target 'BOTH)))))))))
+                      (et-parse-repr spec generics))))))))
 
 
 ;;;; Identify checker directive
