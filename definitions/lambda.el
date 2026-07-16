@@ -64,10 +64,12 @@ types of ARGLIST's required, optional, keyword, and rest parameters."
   (if-let* ((sig (et-at 1 (et--parse-function-signature args-and-body))))
       (et--with-scoped-datatypes (et-func-sig-scoped sig)
         (et-with-vars (et-func-sig-vars sig)
-          (let* ((actual-return (et-checker-tail (1+ (et-func-sig-source-pos sig))))
-                 (expected-return (et-func-sig-expected-return sig)))
-            (or (et-subtype? actual-return expected-return)
-                (et-err 0 "Expected %s, found %s" expected-return actual-return)))
+          ;; The body runs whenever the lambda is called, not here
+          (et-checker-deferred
+            (let* ((actual-return (et-checker-tail (1+ (et-func-sig-source-pos sig))))
+                   (expected-return (et-func-sig-expected-return sig)))
+              (or (et-subtype? actual-return expected-return)
+                  (et-err 0 "Expected %s, found %s" expected-return actual-return))))
           (et-func-sig-func-type sig)))
     ;; A declaration without @return still owns the parameter types.  Its
     ;; return type is inferred, just as an unannotated cl-flet binding is.
@@ -81,31 +83,36 @@ types of ARGLIST's required, optional, keyword, and rest parameters."
       (if (et-matcher-p input)
           (progn
             (et-err 0 "A generic lambda must declare an `@return' type")
-            (et-with-vars (mapcar (lambda (var) (et-new-var (et-var-name var) (et-never))) vars)
-              (et-checker-tail (1+ source-pos)))
+            (et-checker-deferred
+              (et-with-vars (mapcar (lambda (var) (et-new-var (et-var-name var) (et-never))) vars)
+                (et-checker-tail (1+ source-pos))))
             (et-never))
         (et-dt 'Function input
-               (et-with-vars vars (et-checker-tail (1+ source-pos))))))))
+               (et-checker-deferred
+                 (et-with-vars vars (et-checker-tail (1+ source-pos)))))))))
 
 (defun et--lambda-check-recommended (arglist recommendation)
   "Check an undeclared lambda using its recommended FUNCTION type."
   (if-let* ((parts (et--lambda-function-parts recommendation)))
       (if-let* ((vars (et--lambda-parameter-types recommendation arglist)))
-          (let* ((actual-return (et-with-vars vars (et-checker-tail 2)))
+          (let* ((actual-return (et-checker-deferred
+                                  (et-with-vars vars (et-checker-tail 2))))
                  (expected-return (cdr parts)))
             (or (et-subtype? actual-return expected-return)
                 (et-err 0 "Expected %s, found %s" expected-return actual-return))
             recommendation)
         (et-err 0 "Lambda argument list %s is incompatible with recommended input type %s"
                 arglist (car parts))
-        (et-with-vars (mapcar (lambda (param) (et-new-var param (et-never)))
-                              (apply #'append (et--parse-arglist-params arglist)))
-          (et-checker-tail 2))
+        (et-checker-deferred
+          (et-with-vars (mapcar (lambda (param) (et-new-var param (et-never)))
+                                (apply #'append (et--parse-arglist-params arglist)))
+            (et-checker-tail 2)))
         (et-never))
     (et-err 0 "Expected a concrete Function type recommendation")
-    (et-with-vars (mapcar (lambda (param) (et-new-var param (et-never)))
-                          (apply #'append (et--parse-arglist-params arglist)))
-      (et-checker-tail 2))
+    (et-checker-deferred
+      (et-with-vars (mapcar (lambda (param) (et-new-var param (et-never)))
+                            (apply #'append (et--parse-arglist-params arglist)))
+        (et-checker-tail 2)))
     (et-never)))
 
 (defun et--lambda-inferred-type (arglist)
@@ -130,7 +137,8 @@ is `ListR<Any>'."
                (vars
                 (append (mapcar (lambda (param) (et-new-var param (et-any))) ordinary-params)
                         (mapcar (lambda (param) (et-new-var param (et-alias 'ListR (et-any)))) rest))))
-    (et-dt 'Function input (et-with-vars vars (et-checker-tail 2)))))
+    (et-dt 'Function input (et-checker-deferred
+                             (et-with-vars vars (et-checker-tail 2))))))
 
 (et-define-pcase-checker lambda `(,(and arglist (pred listp)) . ,body)
   (let* ((args-and-body (cons arglist body)))

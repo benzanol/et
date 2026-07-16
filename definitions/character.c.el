@@ -15,9 +15,10 @@
 
 (et-test
  (et-assert-resolve Boolean (characterp ?a))
- (et-subtype? (et-typecheck
-               (let* ((c String|Integer 4))
-                 (if (characterp c) c 0)))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((c String|Integer 4))
+                  (if (characterp c) c 0))))
               (et Integer)))
 
 

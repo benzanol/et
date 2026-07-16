@@ -17,6 +17,19 @@ above."
    (t t)))
 
 
+;;;; Checking unquoted expressions
+
+(defun et--backquote-check-expr (expr path)
+  "Type check EXPR, an unquoted form addressed at buffer path PATH.
+
+Like `et-checker-sub', but takes the expression directly: the buffer
+paths used here (through quotes and dotted tails) do not follow plain
+tree indexing, so the expression cannot be recovered from the path."
+  (let ((checked (et-at path (et--check expr et--checker-narrows nil))))
+    (setq et--checker-narrows (et--check-result-narrows checked))
+    (et--check-result-type checked)))
+
+
 ;;;; Main dispatch
 
 (defun et--backquote-check (form path)
@@ -29,7 +42,7 @@ bracketed (cons/vector) structure to recurse into."
    ;; `(a . ,b)) just checks EXPR -- there is nothing for a dotted `,@'
    ;; to splice onto, so it degenerates to a plain unquote too.
    ((and (consp form) (memq (car form) '(\, \,@)))
-    (et-at (append path '(1)) (et--check (cadr form))))
+    (et--backquote-check-expr (cadr form) (append path '(1))))
    ;; No active unquote anywhere below: the whole subtree is just data.
    ((et--backquote-constant-p form) (et-literal form))
    ((vectorp form) (et--backquote-check-vector form path))
@@ -52,7 +65,7 @@ fresh cons cell out of the (recursively checked) car and cdr."
          (qcdr (cdr form)))
     (if (and (consp qcar) (eq (car qcar) '\,@))
         (let* ((elem-path (append here '(1)))
-               (elems-type (et-at elem-path (et--check (cadr qcar))))
+               (elems-type (et--backquote-check-expr (cadr qcar) elem-path))
                (rest-type (et--backquote-check-tail qcdr prefix (1+ index))))
           (et--backquote-splice elems-type rest-type elem-path))
       (et-dt 'ConsFresh
@@ -118,7 +131,7 @@ element type of SPLICE, since splicing a list into a vector still yields
 one flat (homogeneous) vector rather than nested structure."
   (if (and (consp elem) (eq (car elem) '\,@))
       (let* ((elem-path (append path '(1)))
-             (list-type (et-at elem-path (et--check (cadr elem)))))
+             (list-type (et--backquote-check-expr (cadr elem) elem-path)))
         (or (et-checker-infer list-type [E] ListR<E> E)
             (et-err elem-path "Expected a list to splice, found %s" list-type)))
     (et--backquote-check elem path)))
@@ -138,7 +151,7 @@ not merely a subtype of it -- used to confirm the constant-collapse
 optimization actually fires instead of building unnecessary `ConsFresh'
 structure."
   (et-result-boundary
-   (let ((got (et-at 1 (et--check expr))))
+   (let ((got (et--check-result-type (et-at 1 (et--check expr nil nil)))))
      (or (equal got (et-literal expected))
          (et-err 0 "Expected exact literal %s, found %s" (et-literal expected) got)))))
 

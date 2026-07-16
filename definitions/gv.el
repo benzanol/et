@@ -48,7 +48,9 @@ Returns nil after reporting an error if the expression is not a valid place."
            (if (not write-type)
                (et-err nil "Assignment to free variable")
              (et--check-place-assignment assign-type write-type)
-             (when var (et-invalidate-var-narrows var assign-type))
+             ;; Record the assignment in the flow: the variable now has
+             ;; exactly the assigned type.
+             (when var (et-checker-on-set-var var assign-type))
              write-type)))
         (`(,(and head (pred symbolp)) . ,_)
          (if-let* ((checker (get head 'et-place-checker)))

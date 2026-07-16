@@ -132,7 +132,7 @@ POS is the clause index of the form, for error reporting."
 ;; loop-global, so they are dynamically scoped and mutated in place;
 ;; lexical recursion is reserved for the things that are actually
 ;; lexically scoped: variable bindings (`et--binds') and conditional
-;; narrowing (`et--narrow-binds').
+;; narrowing (`et--checker-narrows').
 
 (defvar et--loop-clauses nil "Clause list of the cl-loop being checked.")
 (defvar et--loop-len 0 "Length of `et--loop-clauses'.")
@@ -369,11 +369,18 @@ side sees its nil narrowing (swapped for `unless')."
          (neg-binds (et--type-binds (et--supersect cond-type (et Nil))))
          (then-binds (if (eq kw 'unless) neg-binds pos-binds))
          (else-binds (if (eq kw 'unless) pos-binds neg-binds)))
-    (et-with-narrow-binds then-binds
-      (et--loop-cond-clauses))
-    (when (et--loop-eat 'else)
-      (et-with-narrow-binds else-binds
-        (et--loop-cond-clauses)))
+    ;; The THEN and ELSE sides are parallel paths; the branch machinery
+    ;; scopes each side's narrows while the cursor advances through both.
+    (et-checker-branches
+     (lambda ()
+       (cl-callf et--narrows-and et--checker-narrows then-binds)
+       (et--loop-cond-clauses)
+       (et Nil))
+     (lambda ()
+       (when (et--loop-eat 'else)
+         (cl-callf et--narrows-and et--checker-narrows else-binds)
+         (et--loop-cond-clauses))
+       (et Nil)))
     (et--loop-eat 'end)))
 
 (defun et--loop-cond-clauses ()
@@ -471,21 +478,29 @@ implicit accumulator combined with any body `return' values."
 ;;;; Checker
 
 (et-define-checker cl-loop
-  (let* ((et--loop-clauses (cdr et--checker-expr))
-         (et--loop-len (length et--loop-clauses))
-         (et--loop-pos 0)
-         ;; Loop variables are pushed onto a private copy of `et--binds'
-         (et--binds et--binds)
-         (et--loop-bare (make-et--loop-acc))
-         (et--loop-into nil)
-         (et--loop-returns nil)
-         (et--loop-thereis nil)
-         (et--loop-bool nil)
-         (et--loop-finally nil))
-    (et--loop-walk)
-    ;; Return the raw type; the framework (`et-typecheck') simplifies
-    ;; downstream, as it does for every other checker.
-    (et--loop-result-type)))
+  ;; The clauses run repeatedly, so the whole walk happens inside
+  ;; `et-checker-loop-body' -- its discovery pass finds the vars the loop
+  ;; can change and drops their narrows before the real pass. The walker
+  ;; state lives inside the body function so each pass starts fresh.
+  (let* ((result-type nil))
+    (et-checker-loop-body
+     (lambda ()
+       (let* ((et--loop-clauses (cdr et--checker-expr))
+              (et--loop-len (length et--loop-clauses))
+              (et--loop-pos 0)
+              ;; Loop variables are pushed onto a private copy of `et--binds'
+              (et--binds et--binds)
+              (et--loop-bare (make-et--loop-acc))
+              (et--loop-into nil)
+              (et--loop-returns nil)
+              (et--loop-thereis nil)
+              (et--loop-bool nil)
+              (et--loop-finally nil))
+         (et--loop-walk)
+         ;; Return the raw type; the framework (`et-typecheck') simplifies
+         ;; downstream, as it does for every other checker.
+         (setq result-type (et--loop-result-type)))))
+    result-type))
 
 
 ;;;; Tests
@@ -645,7 +660,7 @@ implicit accumulator combined with any body `return' values."
 BINDING is either (NAME EXPR), whose type is the type of EXPR, or
 \(NAME ARGLIST . BODY), whose body is checked here."
   (pcase binding
-    (`(,_name ,_expr) (et-checker-sub rel 1))
+    (`(,_name ,_expr) (et-checker-sub (list rel 1)))
     (`(,_name ,(pred listp) . ,_body)
      (if-let* ((sig (et-at rel (et-at-offset 1 (et--parse-function-signature (cdr binding))))))
          (et--flet-declared-type sig rel)
@@ -657,10 +672,12 @@ BINDING is either (NAME EXPR), whose type is the type of EXPR, or
 Returns the declared function type."
   (et--with-scoped-datatypes (et-func-sig-scoped sig)
     (et-with-vars (et-func-sig-vars sig)
-      (let* ((actual-ret (et-checker-tail rel (1+ (et-func-sig-source-pos sig))))
-             (expected-ret (et-func-sig-expected-return sig)))
-        (or (et-subtype? actual-ret expected-ret)
-            (et-err rel "Expected %s, found %s" expected-ret actual-ret)))))
+      ;; The body runs whenever the local function is called, not here
+      (et-checker-deferred
+        (let* ((actual-ret (et-checker-tail rel (1+ (et-func-sig-source-pos sig))))
+               (expected-ret (et-func-sig-expected-return sig)))
+          (or (et-subtype? actual-ret expected-ret)
+              (et-err rel "Expected %s, found %s" expected-ret actual-ret))))))
   (et-func-sig-func-type sig))
 
 (defun et--flet-inferred-type (args-and-body rel)
@@ -678,7 +695,9 @@ and the return type is the type of the body."
                (vars (cl-loop for group in (et--func-declarations-param-reprs decls)
                               nconc (cl-loop for (name . repr) in group
                                              collect (et-new-var name (et-repr-to-type repr nil)))))
-               (return-type (et-with-vars vars (et-checker-tail rel (1+ source-pos)))))
+               ;; The body runs whenever the local function is called, not here
+               (return-type (et-checker-deferred
+                              (et-with-vars vars (et-checker-tail rel (1+ source-pos))))))
     (unless (et-type-p input)
       (et-fatal rel "A generic function must declare an `@return' type"))
     (et-dt 'Function input return-type)))

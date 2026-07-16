@@ -131,8 +131,10 @@
  (et-assert-resolve Function<ConsR<Integer~Nil>~Integer>
    #'(lambda ([x Integer]) x))
 
- (not (et-never-p (et-result-type (et--check '#'+))))
- (et-never-p (et-result-type (et--check '#'function))))
+ (not (et-never-p (et-result-value (et-result-boundary
+                                    (et--check-result-type (et--check '#'+ nil nil))))))
+ (et-never-p (et-result-value (et-result-boundary
+                               (et--check-result-type (et--check '#'function nil nil))))))
 
 
 ;;; Control flow
@@ -144,7 +146,7 @@
               (or
                ;; Derive type
                (and `(,name ,_val)
-                    (let type (et-with-vars vars (et-checker-sub 1 (length vars) 1))))
+                    (let type (et-with-vars vars (et-checker-sub (list 1 (length vars) 1)))))
                ;; No value (nil variable)
                (and name (pred symbolp)
                     (let type (et Nil))))
@@ -169,38 +171,50 @@
 ;;;; and/or
 
 (defun et--and-return-type (cond-type checker)
-  ;; The next case will only get evaluated if all previous were non-nil
+  ;; CHECKER only runs when the accumulated condition was non-nil, so it
+  ;; is checked in a branch against "the `and' already exited with nil".
+  ;; When the condition cannot be nil, the exited branch is Never and the
+  ;; branch machinery treats CHECKER as always running.
   (let* ((non-nil-binds (et--type-binds (et--non-nil cond-type)))
-         (output-type (et-with-narrow-binds non-nil-binds (funcall checker)))
+         (output-type (et-never)))
+    (et-checker-branches
+     (lambda ()
+       (cl-callf et--narrows-and et--checker-narrows non-nil-binds)
+       (setq output-type (funcall checker)))
+     (lambda () (et--supersect cond-type (et Nil))))
 
-         (output-non-nil (et--non-nil output-type))
-         ;; If `and' returns non-nil, then both non-nil binds will be true (intersect them)
-         (merged-non-nil-binds
-          (et--intersect-binds nil non-nil-binds (et--type-binds output-non-nil))))
-
-    (et--or (et--replace-type-binds output-non-nil merged-non-nil-binds)
-            ;; If `and' returns nil, it could be from either `cond-type' OR `output-type' being nil
-            (et--supersect cond-type (et Nil))
-            (et--supersect output-type (et Nil)))))
+    (let* ((output-non-nil (et--non-nil output-type))
+           ;; If `and' returns non-nil, then both non-nil binds will be true (intersect them)
+           (merged-non-nil-binds
+            (et--intersect-binds nil non-nil-binds (et--type-binds output-non-nil))))
+      (et--or (et--replace-type-binds output-non-nil merged-non-nil-binds)
+              ;; If `and' returns nil, it could be from either `cond-type' OR `output-type' being nil
+              (et--supersect cond-type (et Nil))
+              (et--supersect output-type (et Nil))))))
 
 (et-test
  (equal (et $a::2&True)
         (et--and-return-type (et $a::{1|2}&True) (lambda () (et $a::{2|3}&True)))))
 
 (defun et--or-return-type (cond-type checker)
-  ;; The next case will only get evaluated if all previous were nil
+  ;; CHECKER only runs when the accumulated condition was nil, so it is
+  ;; checked in a branch against "the `or' already exited non-nil".
   (let* ((nil-binds (et--type-binds (et--supersect cond-type (et Nil))))
-         (output-type (et-with-narrow-binds nil-binds (funcall checker)))
+         (output-type (et-never)))
+    (et-checker-branches
+     (lambda ()
+       (cl-callf et--narrows-and et--checker-narrows nil-binds)
+       (setq output-type (funcall checker)))
+     (lambda () (et--non-nil cond-type)))
 
-         (output-nil (et--supersect output-type (et Nil)))
-         ;; If `or' returns nil, then both nil binds will be true (intersect them)
-         (merged-nil-binds
-          (et--intersect-binds nil nil-binds (et--type-binds output-nil))))
-
-    (et--or (et--replace-type-binds output-nil merged-nil-binds)
-            ;; If `or' returns non-nil, it could be from either `cond-type' OR `output-type'
-            (et--non-nil cond-type)
-            (et--non-nil output-type))))
+    (let* ((output-nil (et--supersect output-type (et Nil)))
+           ;; If `or' returns nil, then both nil binds will be true (intersect them)
+           (merged-nil-binds
+            (et--intersect-binds nil nil-binds (et--type-binds output-nil))))
+      (et--or (et--replace-type-binds output-nil merged-nil-binds)
+              ;; If `or' returns non-nil, it could be from either `cond-type' OR `output-type'
+              (et--non-nil cond-type)
+              (et--non-nil output-type)))))
 
 (et-define-pcase-checker and args
   (cl-loop with acc-type = (et-literal t)
@@ -218,31 +232,22 @@
 ;;;; if
 
 (et-define-pcase-checker if `(,_cond ,_then . ,_else)
-  (let* ((cond-type (et-checker-sub 1))
-
-         ;; Then branch: cond was non-nil
-         (non-nil-cond (et--non-nil cond-type))
-         (non-nil-binds (et--type-binds non-nil-cond))
-         (then-type (et-with-narrow-binds non-nil-binds
-                      (et-checker-sub 2)))
-
-         ;; Else branch: cond was nil
-         (nil-cond (et--supersect cond-type (et Nil)))
-         (nil-binds (et--type-binds nil-cond))
-         (else-type (et-with-narrow-binds nil-binds
-                      (et-checker-tail 3))))
-
+  (let* ((cond-type (et-checker-sub 1)))
     (et-checker-hint-narrows
      0
-     "IF:\\n%s" non-nil-cond
-     "ELSE:\\n%s" nil-cond)
+     "IF:\\n%s" (et--non-nil cond-type)
+     "ELSE:\\n%s" (et--supersect cond-type (et Nil)))
 
-    (et-simplify-type (et--or then-type else-type))))
+    (et-simplify-type
+     (et-checker-sub-cond cond-type
+                          (lambda () (et-checker-sub 2))
+                          (lambda () (et-checker-tail 3))))))
 
 (et-test
- (et-subtype? (et-typecheck
-               (let* ((a String|Number 4))
-                 (if (stringp a) a "hello!")))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((a String|Number 4))
+                  (if (stringp a) a "hello!"))))
               (et String)))
 
 
@@ -257,7 +262,7 @@
               (or
                ;; Derive type (evaluated outside the binding scope)
                (and `(,name ,_val)
-                    (let type (et-checker-sub 1 (length vars) 1)))
+                    (let type (et-checker-sub (list 1 (length vars) 1))))
                ;; No value (nil variable)
                (and name (pred symbolp)
                     (let type (et Nil))))
@@ -272,9 +277,10 @@
  ;; Body sees the bindings
  (et-assert-resolve Integer (let ((a 1) (b 2)) (+ a b)))
  ;; Value forms do NOT see earlier bindings in the same `let'
- (et-subtype? (et-typecheck
-               (let* ((a Integer 1))
-                 (let ((a "s") (b a)) b)))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((a Integer 1))
+                  (let ((a "s") (b a)) b))))
               (et Integer)))
 
 
@@ -299,46 +305,29 @@
 ;; clause's result (the last BODY form, or CONDITION itself when there is
 ;; no body), plus nil for the case where no clause succeeds.
 ;;
-;; Narrowing is done in two directions:
+;; A cond is checked exactly as its nested-if equivalent:
 ;;
-;;  - Positive narrowing: inside a clause's body, CONDITION is narrowed to
-;;    its non-nil part (same as `if').
+;;   (cond (c1 b1) (c2 b2))  ==  (if c1 b1 (if c2 b2 nil))
 ;;
-;;  - Negative narrowing: each clause's condition and body are checked under
-;;    the accumulated knowledge that all *previous* conditions evaluated to
-;;    nil.  For example, if clause 1 is (numberp n), then clause 2's
-;;    condition and body both know n is not a number.
-;;
-;; acc-neg-binds accumulates the nil-binds from every preceding condition.
-;; Because we check each condition *under* acc-neg-binds, the resulting
-;; cond-type already reflects that narrowing via the typeof mechanism, so
-;; non-nil-binds extracted from it is already precise.  We still prepend
-;; acc-neg-binds for the body so that variables not mentioned by the
-;; condition also see the accumulated narrowing.
+;; So each clause's body sees its condition's non-nil narrowing, and each
+;; subsequent condition (and body) is checked inside the previous
+;; condition's nil branch -- the accumulated negative narrowing falls out
+;; of the recursion.
+(defun et--cond-clauses-type (clauses idx)
+  "Return the type of the remaining cond CLAUSES, starting at path IDX."
+  (pcase clauses
+    ('nil (et Nil))
+    (`(,clause . ,rest)
+     (let* ((cond-type (et-checker-sub (list idx 0))))
+       (et-checker-sub-cond cond-type
+                            (lambda ()
+                              (if (cdr clause) (et-checker-tail idx 1)
+                                ;; No body: returns the non-nil part of the condition
+                                (et--non-nil cond-type)))
+                            (lambda () (et--cond-clauses-type rest (1+ idx))))))))
+
 (et-define-pcase-checker cond clauses
-  (cl-loop
-   with acc-neg-binds = nil
-   for clause in clauses
-   for idx upfrom 1
-   ;; Check condition knowing all previous conditions were nil
-   for cond-type = (et-with-narrow-binds acc-neg-binds
-                     (et-checker-sub idx 0))
-   for non-nil-binds = (et--type-binds (et--non-nil cond-type))
-   for branch-type =
-   (if (cdr clause)
-       ;; Has body: narrow by non-nil condition + accumulated negation
-       (et-with-narrow-binds (append non-nil-binds acc-neg-binds)
-         (et-checker-tail idx 1))
-     ;; No body: returns the non-nil part of the condition
-     (et--non-nil cond-type))
-   collect branch-type into branch-types
-   ;; Accumulate nil-binds from this condition for subsequent clauses
-   do (setq acc-neg-binds
-            (et--intersect-binds nil
-                                 acc-neg-binds
-                                 (et--type-binds (et--supersect cond-type (et Nil)))))
-   finally return (et-simplify-type
-                   (apply #'et--or (et Nil) branch-types))))
+  (et-simplify-type (et--cond-clauses-type clauses 1)))
 
 (et-test
  (et-assert-resolve Integer|String|Nil (cond (1 1) (2 "x")))
@@ -346,15 +335,17 @@
  (et-assert-resolve Nil (cond))
  ;; Positive narrowing inside a clause body, like `if': `a' is narrowed to
  ;; String, so Number cannot appear in the result.
- (et-subtype? (et-typecheck
-               (let* ((a String|Number 4))
-                 (cond ((stringp a) a) (t "hello!"))))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((a String|Number 4))
+                  (cond ((stringp a) a) (t "hello!")))))
               (et String|Nil))
  ;; Negative narrowing: in the second clause, `a' is narrowed to non-String
  ;; (Number), so the result cannot include String from the second branch.
- (et-subtype? (et-typecheck
-               (let* ((a String|Number 4))
-                 (cond ((stringp a) a) (t a))))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((a String|Number 4))
+                  (cond ((stringp a) a) (t a)))))
               (et Number|Nil)))
 
 
@@ -362,46 +353,29 @@
 
 ;; A `while' form always evaluates to nil; test and body are still checked.
 ;;
-;; The test is re-evaluated before every iteration, so its narrows hold at the
-;; top of every pass through the body, exactly like `when'. Narrows established
-;; *above* the loop are different: they only survive until the body assigns the
-;; variable, which invalidates them for every subsequent iteration.
+;; The test and the body may run any number of times, so both are checked
+;; inside `et-checker-loop-body': its discovery pass finds the vars the
+;; loop can change and drops their narrows, so iteration N never trusts a
+;; narrow iteration N-1 may have broken (including a narrow on a variable
+;; assigned from another variable whose own narrow dies later in the
+;; body). The test is checked inside the loop -- it re-runs before every
+;; iteration -- and its non-nil narrowing holds at the top of the body.
 ;;
-;; So the body is first checked for that invalidation alone: running it makes
-;; each `setq'/`setf' inside kill the outer narrows it invalidates, and those
-;; kills persist afterwards. Such a pass runs without the test's narrows -- the
-;; test hasn't been checked yet, and it couldn't be, since checking it before
-;; the kills would derive the test type from narrows the body destroys. Its
-;; diagnostics are therefore unreliable, so it is wrapped in a result boundary
-;; and discarded.
-;;
-;; One such pass is not enough, because a kill can depend on a narrow that a
-;; later kill destroys:
-;;
-;;     (while ...
-;;       (setq prev node)              ; `node' still narrowed here, so `prev'
-;;                                     ; keeps its narrow...
-;;       (setq node (node-next node)))  ; ...but this kills `node's narrow, so on
-;;                                     ; the next iteration `prev' inherits a
-;;                                     ; value that `node's narrow excluded
-;;
-;; So the pass is repeated until it stops killing anything. Narrows are only
-;; ever invalidated, never added, so the count of live ones decreases
-;; monotonically and this terminates -- and for the common body that assigns
-;; nothing, the first pass kills nothing and it stops immediately.
-;;
-;; Only once the narrows have settled are the test and the real body checked.
+;; On exit, the final test evaluated to nil, so its nil narrowing is
+;; applied after the loop.
 (et-define-pcase-checker while `(,_test . ,_body)
-  (cl-loop with prev-live = nil
-           for live = (cl-count-if #'car et--narrow-binds)
-           until (eql live prev-live)
-           do (setq prev-live live)
-           do (et-result-boundary (et-checker-remaining 2)))
+  (let* ((last-test (et Any)))
+    (et-checker-loop-body
+     (lambda ()
+       (setq last-test (et-checker-sub 1))
+       (et-checker-hint-narrows 0 "WHILE:\\n%s" (et--non-nil last-test))
+       (cl-callf et--narrows-and et--checker-narrows
+         (et--type-binds (et--non-nil last-test)))
+       (et-checker-remaining 2)))
 
-  (let* ((non-nil-test (et--non-nil (et-checker-sub 1))))
-    (et-checker-hint-narrows 0 "WHILE:\\n%s" non-nil-test)
-    (et-with-narrow-binds (et--type-binds non-nil-test)
-      (et-checker-remaining 2)))
+    ;; The loop only exits once the test is nil
+    (cl-callf et--narrows-and et--checker-narrows
+      (et--type-binds (et--supersect last-test (et Nil)))))
 
   (et Nil))
 
@@ -443,7 +417,9 @@
 ;; `Any'.  The tag and body are still checked.
 (et-define-pcase-checker catch `(,_tag . ,_body)
   (et-checker-sub 1)
-  (et-checker-remaining 2)
+  ;; A `throw' can exit the body at any point, so no narrow the body
+  ;; establishes is guaranteed afterwards.
+  (et-checker-escapable (lambda () (et-checker-remaining 2)))
   (et Any))
 
 ;; `throw' performs a nonlocal exit and never returns normally.

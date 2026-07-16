@@ -226,10 +226,10 @@
                 (let _1 (setcdr form (cddr form)))
                 (let _2 (et-checker-resolve (et-alias 'ListR elem-type) 1 1)))
            (and `(,name ,_lst)
-                (let elem-type (et-checker-infer (et-checker-sub 1 1) [T] ListR<T> T))))
+                (let elem-type (et-checker-infer (et-checker-sub '(1 1)) [T] ListR<T> T))))
       . ,_body)
   (et-with-vars (list (et-new-var name elem-type))
-    (et-checker-sub 2)))
+    (et-checker-loop-body (lambda () (et-checker-sub 2)))))
 
 (et-define-pcase-checker when `(,_cond . ,then)
   (let* ((cond-type (et-checker-sub 1)))
@@ -243,23 +243,28 @@
   ;; condition is non-nil, `unless' returns nil, not the condition value.
   (let* ((nil-cond (et--supersect cond-type (et Nil)))
          (nil-binds (et--type-binds nil-cond))
-         (output-type (et-with-narrow-binds nil-binds (funcall checker)))
+         (output-type (et-never)))
+    (et-checker-branches
+     (lambda ()
+       (cl-callf et--narrows-and et--checker-narrows nil-binds)
+       (setq output-type (funcall checker)))
+     (lambda () (et--non-nil cond-type)))
 
-         (output-non-nil (et--non-nil output-type))
-         (merged-non-nil-binds
-          (et--intersect-binds nil nil-binds (et--type-binds output-non-nil)))
+    (let* ((output-non-nil (et--non-nil output-type))
+           (merged-non-nil-binds
+            (et--intersect-binds nil nil-binds (et--type-binds output-non-nil)))
 
-         (output-nil (et--supersect output-type (et Nil)))
-         (merged-nil-binds
-          (et--intersect-binds nil nil-binds (et--type-binds output-nil)))
+           (output-nil (et--supersect output-type (et Nil)))
+           (merged-nil-binds
+            (et--intersect-binds nil nil-binds (et--type-binds output-nil)))
 
-         (truthy-cond-nil
-          (et--replace-type-binds (et Nil)
-                                  (et--type-binds (et--non-nil cond-type)))))
+           (truthy-cond-nil
+            (et--replace-type-binds (et Nil)
+                                    (et--type-binds (et--non-nil cond-type)))))
 
-    (et--or truthy-cond-nil
-            (et--replace-type-binds output-non-nil merged-non-nil-binds)
-            (et--replace-type-binds output-nil merged-nil-binds))))
+      (et--or truthy-cond-nil
+              (et--replace-type-binds output-non-nil merged-non-nil-binds)
+              (et--replace-type-binds output-nil merged-nil-binds)))))
 
 (et-define-pcase-checker unless `(,_cond . ,_else)
   (let* ((cond-type (et-checker-sub 1)))
@@ -271,19 +276,22 @@
 (et-test
  (equal (et String|Nil)
         (et--remove-type-binds
-         (et-typecheck
-          (let* ((a String|Number 4))
-            (when (stringp a) a)))))
+         (et-result-value
+          (et-typecheck
+           (let* ((a String|Number 4))
+             (when (stringp a) a))))))
  (let ((got (et--remove-type-binds
-             (et-typecheck
-              (let* ((a String|Nil "s"))
-                (unless a 1)))))
+             (et-result-value
+              (et-typecheck
+               (let* ((a String|Nil "s"))
+                 (unless a 1))))))
        (want (et Integer|Nil)))
    (and (et-subtype? got want) (et-subtype? want got)))
  (let ((got (et--remove-type-binds
-             (et-typecheck
-              (let* ((a String|Number|Nil 4))
-                (unless (stringp a) a)))))
+             (et-result-value
+              (et-typecheck
+               (let* ((a String|Number|Nil 4))
+                 (unless (stringp a) a))))))
        (want (et Number|Nil)))
    (and (et-subtype? got want) (et-subtype? want got))))
 
@@ -293,7 +301,13 @@
 (defun et--check-let-condition-bindings (bindings bindings-path)
   "Check conditional let BINDINGS and return (VARS . NARROWS).
 
-BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'."
+BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'.
+
+Each binding's value is checked knowing all previous bindings were
+non-nil: their non-nil narrows are merged into `et--checker-narrows' as
+the bindings are walked. Since the bindings only all run on the success
+path, the caller must scope those narrows to that path (via
+`et-checker-branches' or `et-checker-loop-body')."
   (cl-loop
    with vars = nil
    with narrows = nil
@@ -308,10 +322,11 @@ BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'."
      (_ (et-fatal (append bindings-path (list idx))
                   "Expected (NAME VALUE), (VALUE), or SYMBOL")))
 
-   for value-type = (et-with-vars vars
-                      (et-with-narrow-binds narrows (et-checker-sub rel)))
+   for value-type = (et-with-vars vars (et-checker-sub rel))
    for non-nil = (et--non-nil value-type)
-   do (setq narrows (append (et--type-binds non-nil) narrows))
+   for binds = (et--type-binds non-nil)
+   do (setq narrows (append binds narrows))
+   do (cl-callf et--narrows-and et--checker-narrows binds)
    when name do (push (et-new-var name (et--unfreshen-type non-nil)) vars)
    finally return (cons vars narrows)))
 
@@ -333,35 +348,32 @@ BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'."
 
 (et-define-pcase-checker if-let*
     `(,(and bindings (pred listp)) ,_then . ,_else)
-  (pcase-let ((`(,vars . ,narrows)
-               (et--check-let-condition-bindings bindings '(1))))
-    (let* ((then-type (et-with-vars vars
-                        (et-with-narrow-binds narrows (et-checker-sub 2))))
-           (else-type (et-checker-tail 3)))
-      (et-simplify-type (et--or then-type else-type)))))
+  ;; The bindings and THEN only run on the all-non-nil path, so they form
+  ;; one branch; ELSE (where some binding was nil, narrowing nothing) is
+  ;; the other.
+  (et-simplify-type
+   (et-checker-branches
+    (lambda ()
+      (pcase-let ((`(,vars . ,_narrows)
+                   (et--check-let-condition-bindings bindings '(1))))
+        (et-with-vars vars (et-checker-sub 2))))
+    (lambda () (et-checker-tail 3)))))
 
 (et-define-pcase-checker while-let
     `(,(and bindings (pred listp)) . ,_body)
-  (cl-loop with prev-live = nil
-           for live = (cl-count-if #'car et--narrow-binds)
-           until (eql live prev-live)
-           do (setq prev-live live)
-           do (et-result-boundary
-                (pcase-let ((`(,vars . ,narrows)
-                             (et--check-let-condition-bindings bindings '(1))))
-                  (et-with-vars vars
-                    (et-with-narrow-binds narrows
-                      (et-checker-remaining 2))))))
-
-  (pcase-let ((`(,vars . ,narrows)
-               (et--check-let-condition-bindings bindings '(1))))
-    (et-checker-hint-narrows 0 "WHILE-LET:\\n%s"
-                             (if narrows
-                                 (apply #'et--supersect (mapcar #'cdr narrows))
-                               (et True)))
-    (et-with-vars vars
-      (et-with-narrow-binds narrows
-        (et-checker-remaining 2))))
+  ;; The bindings re-run before every iteration, so they are checked
+  ;; inside the loop body: `et-checker-loop-body' drops the narrows the
+  ;; loop can invalidate before the real pass, exactly like `while'.
+  (et-checker-loop-body
+   (lambda ()
+     (pcase-let ((`(,vars . ,narrows)
+                  (et--check-let-condition-bindings bindings '(1))))
+       (et-checker-hint-narrows 0 "WHILE-LET:\\n%s"
+                                (if narrows
+                                    (apply #'et--supersect (mapcar #'cdr narrows))
+                                  (et True)))
+       (et-with-vars vars
+         (et-checker-remaining 2)))))
 
   (et Nil))
 
@@ -369,25 +381,28 @@ BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'."
  ;; Each binding is narrowed to its non-nil part inside THEN
  (et-assert-resolve Integer|Nil
    (if-let* ((a (car (list 1 2)))) a))
- (et-subtype? (et-typecheck
-               (let* ((a String|Nil "s"))
-                 (if-let* ((b a)) b "fallback")))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((a String|Nil "s"))
+                  (if-let* ((b a)) b "fallback"))))
               (et String))
  ;; A later binding sees the earlier ones, already non-nil
- (et-subtype? (et-typecheck
-               (let* ((a String|Nil "s"))
-                 (if-let* ((b a)
-                           (c (concat b "!")))
-                     c
-                   "fallback")))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((a String|Nil "s"))
+                  (if-let* ((b a)
+                            (c (concat b "!")))
+                      c
+                    "fallback"))))
               (et String))
  ;; Bindings are not in scope in the ELSE branch
  (et-assert-resolve-errors
   (if-let* ((a 1)) a a))
  ;; The condition narrows outer variables in THEN
- (et-subtype? (et-typecheck
-               (let* ((a String|Number 4))
-                 (if-let* ((b (stringp a))) a "fallback")))
+ (et-subtype? (et-result-value
+               (et-typecheck
+                (let* ((a String|Number 4))
+                  (if-let* ((b (stringp a))) a "fallback"))))
               (et String)))
 
 (et-test
@@ -461,12 +476,15 @@ BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'."
 ;; `with-demoted-errors' returns nil when the body signals an error, so
 ;; nil is always a possible value on top of the body's own type.
 
+;; Both bodies can be aborted at any point (by a quit or an error), so no
+;; narrow they establish is guaranteed afterwards.
+
 (et-define-pcase-checker with-local-quit _body
-  (et--or (et-checker-tail 1) (et Nil)))
+  (et--or (et-checker-escapable (lambda () (et-checker-tail 1))) (et Nil)))
 
 (et-define-pcase-checker with-demoted-errors `(,_format . ,_body)
   (et-checker-sub 1)
-  (et--or (et-checker-tail 2) (et Nil)))
+  (et--or (et-checker-escapable (lambda () (et-checker-tail 2))) (et Nil)))
 
 (et-test
  (et-assert-resolve String|Nil (with-local-quit "done"))
@@ -483,9 +501,13 @@ BINDINGS-PATH is the path to BINDINGS in `et--checker-expr'."
   (et String))
 
 ;; `with-memoization' returns PLACE when it is already non-nil, and
-;; otherwise the value of CODE (which it stores in PLACE).
+;; otherwise the value of CODE (which it stores in PLACE), so CODE only
+;; runs on the nil branch.
 (et-define-pcase-checker with-memoization `(,_place . ,_code)
-  (et--or (et--non-nil (et-checker-sub 1)) (et-checker-tail 2)))
+  (let* ((place-type (et-checker-sub 1)))
+    (et-checker-branches
+     (lambda () (et--non-nil place-type))
+     (lambda () (et-checker-tail 2)))))
 
 (et-test
  (et-assert-resolve String (with-output-to-string (princ "x")))

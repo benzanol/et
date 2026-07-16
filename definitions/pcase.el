@@ -211,9 +211,15 @@ partial applications) are not analysed and yield Any."
   ;; (guard BOOLEXP): matches when BOOLEXP is non-nil. The scrutinee value
   ;; is not narrowed, but BOOLEXP may narrow other variables (e.g.
   ;; (guard (integerp x))); those narrowings are folded into matched-type.
+  ;; BOOLEXP only runs while this pattern is being tried, so it is checked
+  ;; under the pattern's narrows without those flowing back out.
   (let* ((bool-type (et-with-vars bound-vars
-                      (et-with-narrow-binds (et--type-binds type)
-                        (et-at (append path '(1)) (et--check (car args))))))
+                      (et--check-result-type
+                       (et-at (append path '(1))
+                         (et--check (car args)
+                                    (et--narrows-and et--checker-narrows
+                                                     (et--type-binds type))
+                                    nil)))))
          (non-nil-binds (et--type-binds (et--non-nil bool-type))))
     (make-et-pcase-result
      :matched-type (et--pcase-attach-binds type non-nil-binds)
@@ -358,7 +364,7 @@ the fallthrough `Nil' arm is omitted from the result type."
          (cases (cddr et--checker-expr))
          ;; The scrutinee type, narrowed by each failed pattern in turn.
          (cur scrut)
-         (body-types nil))
+         (branches nil))
     (cl-loop for case in cases
              for ci upfrom 2
              do (let* ((res (et--pcase-check (car case) cur nil (list ci 0)))
@@ -366,9 +372,7 @@ the fallthrough `Nil' arm is omitted from the result type."
                   (cond
                    ;; Only reachable cases contribute and get their body checked.
                    ((not (et-never-p matched))
-                    (et-with-vars (et-pcase-result-vars res)
-                      (et-with-narrow-binds (et--type-binds matched)
-                        (push (et-checker-tail ci 1) body-types))))
+                    (push (apply-partially #'et--pcase-case-branch res ci) branches))
                    ;; The pattern matched nothing, yet values still reached it:
                    ;; it can never match (e.g. too many slots for the scrutinee).
                    ;; When CUR is already Never the case is merely redundant
@@ -378,10 +382,21 @@ the fallthrough `Nil' arm is omitted from the result type."
                     (et-warn (list ci 0) "Pattern can never match a value of %s" cur)))
                   (setq cur (et-pcase-result-residual-type res))))
     ;; If some value can fall through every pattern, `pcase' returns nil --
-    ;; but `pcase-exhaustive' signals an error, so it contributes nothing.
-    (when (and (not exhaustive) (not (et-never-p cur)))
-      (push (et Nil) body-types))
-    (et-simplify-type (apply #'et--or (or (nreverse body-types) (list (et Nil)))))))
+    ;; but `pcase-exhaustive' signals an error, so it contributes nothing
+    ;; (a Never branch, which the branch machinery excludes).
+    (unless (et-never-p cur)
+      (push (if exhaustive #'et-never (apply-partially #'identity (et Nil)))
+            branches))
+    (et-simplify-type
+     (if branches (apply #'et-checker-branches (nreverse branches))
+       (et Nil)))))
+
+(defun et--pcase-case-branch (res ci)
+  "Check the body of the pcase case at index CI whose pattern produced RES."
+  (cl-callf et--narrows-and et--checker-narrows
+    (et--type-binds (et-pcase-result-matched-type res)))
+  (et-with-vars (et-pcase-result-vars res)
+    (et-checker-tail ci 1)))
 
 (et-define-checker pcase
   (et--pcase-check-form nil))
@@ -409,7 +424,7 @@ assertions, each emitting an error diagnostic on failure. SPEC is anything
   :resolves SPEC      the type of EXPR must be a subtype of SPEC
   :not-resolves SPEC  the type of EXPR must not be a subtype of SPEC"
   (et-result-boundary
-   (let ((type (et-at 1 (et--check expr))))
+   (let ((type (et--check-result-type (et-at 1 (et--check expr nil nil)))))
      (cl-loop for (kw spec) on props by #'cddr
               for want = (et-parse-type spec)
               do (pcase kw
@@ -501,16 +516,17 @@ checked with the variables bound by earlier bindings in scope (as in
                        ;; A binding may omit its value form, binding to nil.
                        (val-type (cond ((null (cdr binding)) (et Nil))
                                        (sequential
-                                        (et-with-vars vars (et-checker-sub 1 bi 1)))
-                                       (t (et-checker-sub 1 bi 1))))
+                                        (et-with-vars vars (et-checker-sub (list 1 bi 1))))
+                                       (t (et-checker-sub (list 1 bi 1)))))
                        (res (et--pcase-check pat val-type (and sequential vars)
                                              (list 1 bi 0))))
                   (setq vars (append vars (et-pcase-result-vars res)))
                   (setq binds (append binds (et--type-binds
                                              (et-pcase-result-matched-type res))))))
+    ;; The patterns are assumed to match, so their narrows hold in the body
+    (cl-callf et--narrows-and et--checker-narrows binds)
     (et-with-vars vars
-      (et-with-narrow-binds binds
-        (et-checker-tail 2)))))
+      (et-checker-tail 2))))
 
 (et-define-checker pcase-let*
   (et--pcase-let-check t))
@@ -526,12 +542,15 @@ checked with the variables bound by earlier bindings in scope (as in
 (et-define-checker pcase-dolist
   (let* ((spec (nth 1 et--checker-expr))
          (pat (car spec))
-         (elem-type (or (et-checker-infer (et-checker-sub 1 1) [T] ListR<T> T)
+         (elem-type (or (et-checker-infer (et-checker-sub '(1 1)) [T] ListR<T> T)
                         (et-any)))
          (res (et--pcase-check pat elem-type nil (list 1 0))))
     (et-with-vars (et-pcase-result-vars res)
-      (et-with-narrow-binds (et--type-binds (et-pcase-result-matched-type res))
-        (et-checker-tail 2)))
+      (et-checker-loop-body
+       (lambda ()
+         (cl-callf et--narrows-and et--checker-narrows
+           (et--type-binds (et-pcase-result-matched-type res)))
+         (et-checker-tail 2))))
     (et Nil)))
 
 
