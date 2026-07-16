@@ -675,7 +675,7 @@ rare event that the identifier is declaring some custom type."
           (unless (member library et--processed-requires)
             (push library et--processed-requires)
             ;; Process the buffer without propagating diagnostics
-            (et--process-exprs (et--file-exprs library) :eval t)))
+            (et--process-exprs (et--file-exprs library))))
         nil)
 
        ;; Process a root declaration block
@@ -1190,10 +1190,10 @@ OUTPUT-REPR each converted to concrete types."
       (et-with-vars (et-func-sig-vars sig)
         ;; The body runs whenever the function is called, not here
         (et-checker-deferred
-          (let* ((actual-ret (et-checker-tail (+ 2 (et-func-sig-source-pos sig))))
-                 (expected-ret (et-func-sig-expected-return sig)))
-            (or (et-subtype? actual-ret expected-ret)
-                (et-err 0 "Expected %s, found %s" expected-ret actual-ret)))))))
+         (let* ((actual-ret (et-checker-tail (+ 2 (et-func-sig-source-pos sig))))
+                (expected-ret (et-func-sig-expected-return sig)))
+           (or (et-subtype? actual-ret expected-ret)
+               (et-err 0 "Expected %s, found %s" expected-ret actual-ret)))))))
   (et-literal name))
 
 
