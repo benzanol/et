@@ -1298,7 +1298,7 @@ Returns a plist with :declare to set the variable type."
                (let* ((slot-repr (if type-info
                                      (et-at (car type-info)
                                        (et-parse-repr (cdr type-info) generics))
-                                   (et-repr Any))))
+                                   (et-parse-repr 'Any generics))))
                  (put accessor 'et-function-type
                       (et--make-function-type generics constraints
                                               arglist-repr slot-repr))))))

@@ -812,16 +812,18 @@ MK-SUPER argument of `et--cons-is-plist' when matching against types."
   (et-alias 'ConsR (or car (et-any))
             (if rest-plist (apply #'et-dt 'PList rest-plist) (et-any))))
 
-(defun et--cons-plist-super-matcher (car rest-plist)
+(defun et--cons-plist-super-matcher (car rest-plist scope)
   "Build the matcher repr `ConsR<CAR~tail>', tail being `PList<REST-PLIST>' or Any.
-CAR is the matched value repr, or nil for any value.  Used as the
-MK-SUPER argument of `et--cons-is-plist' when matching against matchers."
-  (let ((any-mr (make-et-repr :dnf (et-q (((S:DT Any)))))))
+CAR is the matched value repr, or nil for any value.  SCOPE is the
+generic scope of the enclosing matcher.  Used as the MK-SUPER argument
+of `et--cons-is-plist' when matching against matchers."
+  (let ((any-mr (make-et-repr :generics scope :dnf (et-q (((S:DT Any)))))))
     (make-et-repr
+     :generics scope
      :dnf (et-q (((S:ALIAS ConsR
                            ,(or car any-mr)
                            ,(if rest-plist
-                                (make-et-repr :dnf (et-q (((S:DT PList ,@rest-plist)))))
+                                (make-et-repr :generics scope :dnf (et-q (((S:DT PList ,@rest-plist)))))
                               any-mr))))))))
 
 
@@ -973,11 +975,15 @@ FUNC is called with one argument, the current argument"
            into new-cases
            finally return (make-et-type :cases new-cases)))
 
-(defun et--alias-call (name args output)
-  "Expand the alias with name NAME, passing arguments ARGS."
+(defun et--alias-call (name args output &optional scope)
+  "Expand the alias with name NAME, passing arguments ARGS.
+
+SCOPE is the generic scope of the caller, which the expansion is
+produced into. It is only relevant when OUTPUT is `MATCHER'."
   (declare (et (name EtAliasName)
                (args (ListR (or *et-type EtRepr)))
                (output (or @TYPE @MATCHER))
+               (scope List<EtGeneric>)
                (@return (or *et-type EtRepr))
                (@skip)))
 
@@ -989,7 +995,7 @@ FUNC is called with one argument, the current argument"
      (custom
       ;; ARGS are reprs or types, both of which are valid specs
       (let* ((spec (apply custom args))
-             (repr (et-parse-repr spec nil)))
+             (repr (et-parse-repr spec scope)))
         (if (eq output 'MATCHER) repr
           (et-repr-to-type repr nil))))
 
@@ -1008,7 +1014,7 @@ FUNC is called with one argument, the current argument"
         ;; Replace S:GENERIC with the specified arg
         (if (eq output 'MATCHER)
             (if (null generics) repr
-              (et--repr-substitute-generics repr gen-repls))
+              (et--repr-substitute-generics repr gen-repls scope))
           (et-repr-to-type repr gen-repls)))))))
 
 
@@ -1075,6 +1081,10 @@ DNF is the struct representing the matcher."
       (dolist (generic generics)
         (or (symbolp generic) (error "Generics must be a list of symbols")))
 
+      (unless (cl-subsetp (et-repr-generics (et-matcher-repr matcher)) generics)
+        (error "Matcher repr generics %s exceed matcher generics %s"
+               (et-repr-generics (et-matcher-repr matcher)) generics))
+
       (cl-loop for q in (et-matcher-constraints matcher)
                do (pcase q
                     (`(,(or 'Q:EQ 'Q:LEQ 'Q:GEQ)
@@ -1113,12 +1123,14 @@ DNF is the struct representing the matcher."
 (defun et--matcher-expand-aliases (matcher)
   (declare (et (matcher *et-matcher) (@return *et-matcher)))
 
-  (make-et-matcher :repr (et--repr-expand-aliases (et-matcher-repr matcher))
+  (make-et-matcher :repr (et--repr-expand-aliases (et-matcher-repr matcher)
+                                                  (et-matcher-generics matcher))
                    :generics (et-matcher-generics matcher)
                    :constraints (et-matcher-constraints matcher)))
 
-(defun et--repr-expand-aliases (repr)
+(defun et--repr-expand-aliases (repr scope)
   (declare (et (repr EtRepr)
+               (scope List<EtGeneric>)
                (@return EtRepr)))
 
   (cl-loop for case in (et-repr-dnf repr)
@@ -1128,12 +1140,12 @@ DNF is the struct representing the matcher."
                     (pcase factor
                       (`(S:ALIAS ,name . ,args)
                        (et-repr-dnf
-                        (et--repr-expand-aliases (et--alias-call name args 'MATCHER))))
+                        (et--repr-expand-aliases (et--alias-call name args 'MATCHER scope) scope)))
                       (other (list (list other))))
                     into and-terms
                     finally return (apply #'et--dnf-and and-terms))
            into new-cases
-           finally return (make-et-repr :dnf new-cases :label (et-repr-label repr))))
+           finally return (make-et-repr :dnf new-cases :generics scope :label (et-repr-label repr))))
 
 
 ;;;; Iso match
@@ -1288,14 +1300,14 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
               (make-et-matcher :repr mr :generics generics) type))
     (`(,(or 'S:NOINFER 'S:OP) . ,_)
      (let* ((req (list (if is-super 'R:LEQ 'R:GEQ)
-                       (make-et-repr :dnf (list (list match-factor)))
+                       (make-et-repr :generics generics :dnf (list (list match-factor)))
                        (et-type case))))
        (make-et-match-result :success t :value (list req))))
     (`(S:DT ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
        ((and alias (pred et-alias-p))
         (if (not is-super) (et--failed-match-result)
-          (et--super-constraints-0 (make-et-matcher :generics generics :repr (make-et-repr :dnf (list (list match-factor))))
+          (et--super-constraints-0 (make-et-matcher :generics generics :repr (make-et-repr :generics generics :dnf (list (list match-factor))))
                                    (et-alias-expand alias))))
        ((and dt (pred et-datatype-p))
         (et--sub-or-super-constraints-4
@@ -1320,7 +1332,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          (lambda (type ms) (et--iso-constraints (make-matcher ms) type))
          (lambda (literal ms) (et--sub-constraints-0 (make-matcher ms) (et-literal literal)))
          ;; The synthesized super (PList side, m-args) is a matcher repr
-         #'et--cons-plist-super-matcher
+         (lambda (car rest-plist) (et--cons-plist-super-matcher car rest-plist generics))
          ;; A DynFunction type against a Function matcher factor can only
          ;; be resolved once the matcher's generics are known, so record
          ;; an R:FN constraint for constraint satisfaction.
@@ -1336,7 +1348,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
        (lambda (ms type) (et--sub-constraints-0 (make-matcher ms) type))
        (lambda (ms type) (et--iso-constraints (make-matcher ms) type))
        (lambda (literal type)
-         (let ((literal-m (make-matcher (make-et-repr :dnf (et-q (((S:DT Literal ,literal))))))))
+         (let ((literal-m (make-matcher (make-et-repr :generics generics :dnf (et-q (((S:DT Literal ,literal))))))))
            (et--super-constraints-0 literal-m type)))
        ;; The synthesized super (PList side, t-args) is a type
        #'et--cons-plist-super-type
@@ -1406,8 +1418,12 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 ;;;; Types
 
 (cl-defstruct et-repr
-  "A general representation for both types and matchers."
+  "A general representation for both types and matchers.
+
+GENERICS is the generic scope this repr was constructed under. It must
+never be read for any purpose other than assertions."
   (dnf nil :et EtReprDnf)
+  (generics nil :et List<EtGeneric>)
   (label nil :et EtLabel))
 
 (et-declare
@@ -1506,13 +1522,16 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   ;; Parse a built-in spec segment
   (if-let* ((handler (get name 'et-spec-parse)))
       (if (eq :full (car handler))
-          (make-et-repr :dnf (apply (cdr handler) args))
+          (make-et-repr :generics et--parsing-generics
+                        :dnf (apply (cdr handler) args))
         ;; Base case: wrap a factor in a list of lists
-        (make-et-repr :dnf (list (list (cons (car handler) (apply (cdr handler) args))))))
+        (make-et-repr :generics et--parsing-generics
+                      :dnf (list (list (cons (car handler) (apply (cdr handler) args))))))
 
     ;; Parse a generic
     (if (memq name et--parsing-generics)
-        (make-et-repr :dnf (list (list (list 'S:GENERIC name))))
+        (make-et-repr :generics et--parsing-generics
+                      :dnf (list (list (list 'S:GENERIC name))))
 
       ;; Parse a datatype
       (if (et--datatype-name? name)
@@ -1556,7 +1575,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                     finally return (apply #'et--dnf-and and-parts))
            into or-parts
            finally return
-           (make-et-repr :dnf (apply #'nconc or-parts))))
+           (make-et-repr :generics et--parsing-generics
+                         :dnf (apply #'nconc or-parts))))
 
 (defun et--parse-atom (s)
   "Parse a single type atom into an `et-type'."
@@ -1677,18 +1697,24 @@ in GEN-REPLS, if it exists."
                (gen-repls (ListR (ConsR EtGeneric *et-type)))
                (@return *et-type)))
 
+  (when et-debug
+    (unless (seq-set-equal-p (mapcar #'car gen-repls) (et-repr-generics repr) #'eq)
+      (error "Converting with %s, but repr has generics %s"
+             (mapcar #'car gen-repls) (et-repr-generics repr))))
+
   (let* ((et--totype-gen-repls gen-repls))
     (et--totype-sub repr)))
 
 
 ;;;; Replacement for matchers
 
-(defun et--repr-factor-substitute-generics (factor gen-repls)
+(defun et--repr-factor-substitute-generics (factor gen-repls generics)
   (declare (et (factor EtReprFactor)
                (gen-repls AList<EtGeneric~EtRepr>)
+               (generics List<EtGeneric>)
                (@return EtReprDnf)))
 
-  (let* ((sub (lambda (r) (et--repr-substitute-generics r gen-repls))))
+  (let* ((sub (lambda (r) (et--repr-substitute-generics r gen-repls generics))))
     (pcase factor
       (`(S:GENERIC ,var)
        ;; Don't use alist-get, because the value of the replacement can be nil
@@ -1707,13 +1733,21 @@ in GEN-REPLS, if it exists."
        (et-q (((S:NOINFER ,tr ,(cl-loop for (g . r) in env
                                         collect (cons g (funcall sub r))))))))
       (`(S:OP . ,_)
-       (et-q (((S:NOINFER ,(make-et-repr :dnf (list (list factor))) ,gen-repls)))))
+       (et-q (((S:NOINFER ,(make-et-repr :generics (mapcar #'car gen-repls)
+                                         :dnf (list (list factor)))
+                          ,gen-repls)))))
       (_ (error "Invalid matcher repr factor: %s" factor)))))
 
-(defun et--repr-substitute-generics (repr gen-repls)
+(defun et--repr-substitute-generics (repr gen-repls generics)
   (declare (et (repr EtRepr)
                (gen-repls AList<EtGeneric~EtRepr>)
+               (generics List<EtGeneric>)
                (@return EtRepr)))
+
+  (when et-debug
+    (unless (seq-set-equal-p (mapcar #'car gen-repls) (et-repr-generics repr) #'eq)
+      (error "Substituting %s, but repr has generics %s"
+             (mapcar #'car gen-repls) (et-repr-generics repr))))
 
   (pcase (et-repr-dnf repr)
     (`(((S:GENERIC ,var)))
@@ -1726,11 +1760,11 @@ in GEN-REPLS, if it exists."
               nconc
               (cl-loop for factor in case
                        collect
-                       (et--repr-factor-substitute-generics factor gen-repls)
+                       (et--repr-factor-substitute-generics factor gen-repls generics)
                        into and-structs
                        finally return (apply #'et--dnf-and and-structs))
               into new-dnf
-              finally return (et-copy-with repr :dnf new-dnf)))))
+              finally return (et-copy-with repr :dnf new-dnf :generics generics)))))
 
 
 ;;;; To string
