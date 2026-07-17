@@ -30,6 +30,9 @@
 (defvar et-debug nil
   "Perform extra debug checks.")
 
+(defmacro et (&rest args)
+  `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
+
 
 ;;; ============================================================
 ;;; Results
@@ -586,7 +589,7 @@ covariant, contravariant, or isovariant."
   "Return whether datatypes A and B might overlap.
 
 This function assumes that neither A nor B is a subtype of the other.
-This is what is meant by 'nontrivial'."
+This is what is meant by \"nontrivial\"."
   (let* ((a (et-datatype-name a-dt))
          (b (et-datatype-name b-dt)))
 
@@ -1153,6 +1156,12 @@ DNF is the struct representing the matcher."
 
 ;;;; Iso match
 
+(defvar et--constraints-stack nil
+  "Stack of calls to `et--sub/super-constraints' for preventing loops.
+
+Used by `et--stop-recursion', with ELEM=(`sub'|`super' M-REPR TYPE).
+Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
+
 (defun et-iso-constraints (matcher type)
   "Entrypoint for calculating constraints."
   (declare (et (matcher *et-matcher) (type *et-type)
@@ -1179,12 +1188,6 @@ DNF is the struct representing the matcher."
 
 (defvar et-cache-constraints nil
   "Cache calls to `et--sub/super-constraints'.")
-
-(defvar et--constraints-stack nil
-  "Stack of calls to `et--sub/super-constraints' for preventing loops.
-
-Used by `et--stop-recursion', with ELEM=(`sub'|`super' M-REPR TYPE).
-Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (et-declare
  (@alias EtMatchResult *et-match-result<List<EtMatchConstraint>>))
@@ -2159,9 +2162,6 @@ in GEN-REPLS, if it exists."
 
   (et-repr-to-type (et-parse-repr spec nil)))
 
-(defmacro et (&rest args)
-  `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
-
 (defun et-pp-type (type)
   (or (ignore-errors (et-repr-to-string (et-type-to-repr type)))
       (format "%s" type)))
@@ -2343,8 +2343,16 @@ same as [T (<= T Number)]."
 
   (if (equal sub super) t ; Not strictly necessary, but improves efficiency
 
-    (et--stop-recursion et--subtype-stack (cons sub super) t
-      (et--subtype?-1 sub super))))
+    (pcase (list (et-type-single sub) (et-type-single super))
+      (`(,(cl-struct et-datatype (name 'Scoped) (args `(,_ ,_ ,qs))) ,_)
+       (cl-loop for (op _ qtype) in qs
+                thereis (and (eq op 'Q:LEQ) (et--subtype?-0 qtype super))))
+      (`(,_ ,(cl-struct et-datatype (name 'Scoped) (args `(,_ ,_ ,qs))))
+       (cl-loop for (op _ qtype) in qs
+                thereis (and (eq op 'Q:GEQ) (et--subtype?-0 sub qtype))))
+      (_
+       (et--stop-recursion et--subtype-stack (cons sub super) t
+         (et--subtype?-1 sub super))))))
 
 (defun et--subtype?-1 (sub super)
   (setq sub (et-expand-all-aliases sub))
@@ -3077,7 +3085,7 @@ Return ARGS itself when nothing changed."
              ((cl-struct et-alias name args)
               (or (memq name names)
                   (cl-some (lambda (a) (et--type-mentions-alias? a names)) args)))
-             ((cl-struct et-datatype name args)
+             ((cl-struct et-datatype args)
               (cl-some (lambda (a) (and (et-type-p a) (et--type-mentions-alias? a names)))
                        args)))))
 
