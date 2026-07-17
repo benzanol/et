@@ -1005,9 +1005,14 @@ FN converts a parameter (T) to the repr that should be used for it, and"
         (_ rest-repr)))))
 
 
-;;;;; Function type, scoped dts -> param types
+;;;;; Determine param types
 
 (defun et--func-param-types (params func-input-type)
+  "Determine the parameter types for a particular function.
+
+If the function has generics, then this MUST be called with the
+polymorphic types defined, as those polymorphic types probably appear in
+FUNC-INPUT-TYPE."
   (et-declare (params EtFuncParameters<Var>)
               (func-input-type *et-type)
               (@return AList<Var~*et-type>))
@@ -1047,7 +1052,7 @@ FN converts a parameter (T) to the repr that should be used for it, and"
     ((and type (pred et-type-p)) (put name 'et-function-type type))
     ((and chk (pred functionp)) (put name 'et-checker chk))))
 
-(et-define-identifier (defun cl-defun defmacro) (name arglist &rest rest)
+(defun et--identify-defun (name arglist &rest rest)
   (list
    :declare
    (lambda ()
@@ -1055,6 +1060,10 @@ FN converts a parameter (T) to the repr that should be used for it, and"
        (when-let* ((decls (et-at-offset 3 (et--func-find-and-parse-decls params rest))))
          (et--func-assign-decls name decls))))))
 
+(et-define-identifier (defun cl-defun defmacro) (name arglist &rest rest)
+  (apply #'et--identify-defun name arglist rest))
+(et-define-identifier et-defun (&rest rest)
+  (apply #'et--identify-defun (cdr (macroexpand-1 (cons #'et-defun rest)))))
 
 (defun et--func-declare-from-directive (name arglist declares)
   (let* ((param-groups (et-at 2 (et--func-parse-params arglist)))
@@ -1093,16 +1102,16 @@ FN converts a parameter (T) to the repr that should be used for it, and"
 
 (defun et--func-destructure (func-type)
   (et-declare (func-type *et-type)
-              (@return (Tuple List<EtScopedDatatype> *et-type *et-type)))
+              (@return (Tuple List<EtGeneric> *et-type *et-type)))
 
   (pcase (et-type-single (et-expand-all-aliases func-type))
     ((cl-struct et-datatype (name 'DynFunction) (args `(,i-matcher ,o-repr)))
-     (let* ((scoped (et--make-scoped-datatypes i-matcher)))
-       (et--with-scoped-datatypes scoped
+     (let* ((polys (et--make-polymorphic-types i-matcher)))
+       (et--with-polymorphic-types polys
          (cl-loop for gen in (et-matcher-generics i-matcher)
                   collect (cons gen (et-parse-type gen)) into gen-repls
                   finally return
-                  (list scoped
+                  (list polys
                         (et-repr-to-type (et-matcher-repr i-matcher) gen-repls)
                         (et-repr-to-type o-repr gen-repls))))))
     ((cl-struct et-datatype (name 'Function) (args `(,i-type ,o-type)))
@@ -1116,8 +1125,8 @@ Returns the type of the last expression in the body."
   (et-declare (func-type *et-type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
               (@return *et-type))
 
-  (pcase-let* ((`(,scoped ,input-type ,expected-ret) (et--func-destructure func-type)))
-    (et--with-scoped-datatypes scoped
+  (pcase-let* ((`(,polys ,input-type ,expected-ret) (et--func-destructure func-type)))
+    (et--with-polymorphic-types polys
       (let* ((param-types (et--func-param-types params input-type))
              (param-vars (cl-loop for (p . type) in param-types collect (et-new-var p type))))
 
@@ -1142,6 +1151,13 @@ Returns the type of the last expression in the body."
               ((not (plist-get (get name 'et-function-props) :skip)))
               (et-checking-defun name))
     (et--func-check-body (get name 'et-function-parameters) func-type 3))
+  (et-literal name))
+
+(et-define-pcase-checker et-defun `(,name . ,_)
+  (when-let* ((func-type (et-function-type name))
+              ((not (plist-get (get name 'et-function-props) :skip)))
+              (et-checking-defun name))
+    (et--func-check-body (get name 'et-function-parameters) func-type 4))
   (et-literal name))
 
 
@@ -1472,6 +1488,8 @@ Returns a plist with :declare to set the symbol type."
          (et-checker-sub 2 :recommendation declared)
          declared))
     (n (et-fatal 0 "Wrong number of arguments: %s" n))))
+
+(put 'et-defun 'checker #'et-macroexpand-checker)
 
 
 ;;;; Pcase et-*
