@@ -1112,6 +1112,7 @@ DNF is the struct representing the matcher."
               (`(S:ALIAS ,(pred symbolp) . ,args)
                (dolist (arg args) (make-et-matcher :generics generics :repr arg)))
               (`(S:GENERIC ,(pred genericp)))
+              (`(S:POLY ,(pred symbolp)))
               (`(S:SET ,_ ,(pred et-type-p)))
               (`(S:NOINFER ,(pred et-repr-p) ,_))
               (`(S:OP . ,_))
@@ -1291,7 +1292,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
     (`(S:SET ,mr ,type)
      (funcall (if is-super #'et--super-constraints-0 #'et--sub-constraints-0)
               (make-et-matcher :repr mr :generics generics) type))
-    (`(,(or 'S:NOINFER 'S:OP) . ,_)
+    (`(,(or 'S:NOINFER 'S:OP 'S:POLY) . ,_)
      (let* ((req (list (if is-super 'R:LEQ 'R:GEQ)
                        (make-et-repr :generics generics :dnf (list (list match-factor)))
                        (et-type case))))
@@ -1431,6 +1432,7 @@ never be read for any purpose other than assertions."
          (or (TupleStar @S:DT EtDatatypeName List<Any>)
              (TupleStar @S:ALIAS EtAliasName List<*et-type>)
              (Tuple @S:GENERIC EtGeneric)
+             (Tuple @S:POLY EtGeneric)
              (Tuple @S:NOINFER EtRepr AList<EtGeneric~EtRepr>)
              (TupleStar @S:OP Var List<Any>)
              (Tuple @S:SET EtRepr *et-type)))
@@ -1455,6 +1457,7 @@ never be read for any purpose other than assertions."
 ;; \(`S:NOINFER' REPR ENV) - Convert REPR to a type without using it for
 ;;   inference. REPR defines its own generic scope: ENV maps each of its
 ;;   generics to a repr in the surrounding scope.
+;; \(`S:POLY' NAME) - A scoped polymorphic datatype
 ;; \(`S:OP' OP ARGS...) - Apply a custom operation to the arguments. In
 ;;   matchers, this is deferred by wrapping it in an `S:NOINFER'.
 ;; \(`S:SET' MATCHER TYPE) - Match a custom MATCHER against TYPE. As a
@@ -1523,7 +1526,8 @@ never be read for any purpose other than assertions."
 
    ;; Parse a polymorphic type
    (when (assq name et--polymorphic-types)
-     (et--parse-spec-factor 'poly (list name)))
+     (make-et-repr :generics et--parsing-generics
+                   :dnf (list (list (list 'S:POLY name)))))
 
    ;; Parse a custom op
    (when-let* ((op (get name 'et-op)))
@@ -1710,8 +1714,7 @@ in GEN-REPLS, if it exists."
        (et-q (((S:DT ,name . ,(et--datatype-map-type-args name args sub))))))
       (`(S:ALIAS ,name . ,args)
        (et-q (((S:ALIAS ,name . ,(mapcar sub args))))))
-      ;; Maybe at some point this should also be called on type?
-      ;; But that means every type matcher needs a substitution function
+      (`(S:POLY ,_name) factor)
       (`(S:SET ,matcher ,type)
        (et-q (((S:SET ,(funcall sub matcher) ,type)))))
       (`(S:NOINFER ,tr ,env)
@@ -1911,6 +1914,15 @@ in GEN-REPLS, if it exists."
     (list (make-et-type-case :value (make-et-alias :name name :args new-args))))
   :print (et--repr-named-to-string name args))
 
+(et--define-repr-segment S:POLY poly (name)
+  :parse (progn (et--polymorphic-type-constraints name) (list name))
+  :to-type
+  (let* ((constrs (cl-remove 'Q:LEQ (et--polymorphic-type-constraints name)
+                             :key #'car :test-not #'eq)))
+    (cl-loop for case in (et-type-cases (apply #'et--supersect (mapcar #'caddr constrs)))
+             collect (et-copy-with case :polymorphs (cons name (et-type-case-polymorphs case)))))
+  :print (format "^%s" name))
+
 (et--define-repr-segment S:GENERIC generic (var)
   :parse (if (memq var et--parsing-generics) (list var) (error "Generic %s not defined" var))
   :to-type (or (alist-get var et--totype-gen-repls) (error "Generic %s not defined" var))
@@ -2038,14 +2050,6 @@ in GEN-REPLS, if it exists."
 
 ;;;; Op definitions
 
-(et-define-op poly ([name :const])
-  ;; Use a caret to indicate a polymorphic type
-  :to-string (format "^%s" name)
-  (let* ((constrs (cl-remove 'Q:LEQ (et--polymorphic-type-constraints name)
-                             :key #'car :test-not #'eq)))
-    (cl-loop for case in (et-type-cases (apply #'et--supersect (mapcar #'caddr constrs)))
-             collect (et-copy-with case :polymorphs (cons name (et-type-case-polymorphs case))))))
-
 (et-define-op subtract (a b)
   :to-string (format "{%s - %s}" (et-repr-to-string a) (et-repr-to-string b))
   (et--subtract a b))
@@ -2130,7 +2134,7 @@ in GEN-REPLS, if it exists."
 
             (nconc
              (cl-loop for name in (et-type-case-polymorphs case)
-                      collect (et-ql S:OP poly ,name))
+                      collect (et-ql S:POLY ,name))
              (cl-loop for (var . type) in (et-type-case-binds case)
                       collect (et-ql S:OP bind ,var ,(et-type-to-repr type)))
              (cl-loop for var in (et-type-case-typeofs case)
@@ -2309,7 +2313,12 @@ same as [T (<= T Number)]."
   (et-declare (sub *et-type-case) (super *et-type-case) (@return Boolean))
 
   (and (cl-subsetp (et-type-case-typeofs super) (et-type-case-typeofs sub))
-       (cl-subsetp (et-type-case-polymorphs super) (et-type-case-polymorphs sub))
+       (cl-loop for poly in (et-type-case-polymorphs super)
+                always
+                (or (memq poly (et-type-case-polymorphs sub))
+                    (cl-loop for (op _ lower-bound) in (et--polymorphic-type-constraints poly)
+                             thereis (and (eq op 'Q:GEQ)
+                                          (et--subtype?-1 (et-type sub) lower-bound)))))
        ;; Macro expansion in `et--subtype?-0' means that the value should always be a datatype
        (et-datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
        (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))
