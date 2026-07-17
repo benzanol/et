@@ -2056,6 +2056,18 @@ in GEN-REPLS, if it exists."
 
 ;;;; Op definitions
 
+(defmacro et-capture-indeterminates (&rest body)
+  `(let* ((val-and-indes
+           (let* ((et--totype-indeterminates nil))
+             (cons (progn ,@body) et--totype-indeterminates))))
+     (cl-callf append et--totype-indeterminates (cdr val-and-indes))
+     val-and-indes))
+
+(defmacro et-indeterminate-if (cond yes no)
+  `(pcase-let* ((answer-and-indes (et-capture-indeterminates ,cond)))
+     (if (cdr answer-and-indes) (et--or ,yes ,no)
+       (if (car answer-and-indes) ,yes ,no))))
+
 (et-define-op subtract (a b)
   :to-string (format "{%s - %s}" (et-repr-to-string a) (et-repr-to-string b))
   (et--subtract a b))
@@ -2099,19 +2111,19 @@ in GEN-REPLS, if it exists."
   :to-string (format "{if %s extends %s then %s else %s}"
                      (et-repr-to-string sub) (et-repr-to-string super)
                      (et-repr-to-string yes) (et-repr-to-string no))
-  (if (et-subtype? sub super) (et--totype-sub yes) (et--totype-sub no)))
+  (et-indeterminate-if (et-subtype? sub super) (et--totype-sub yes) (et--totype-sub no)))
 
 (et-define-op if? (type [yes :repr] [no :repr])
   :to-string (format "{if %s then %s else %s}"
                      (et-repr-to-string type) (et-repr-to-string yes) (et-repr-to-string no))
   ;; (TYPE is always true) <=> (Nil is not a subtype of TYPE)
-  (if (et-subtype? (et Nil) type) (et--totype-sub no) (et--totype-sub yes)))
+  (et-indeterminate-if (et-subtype? (et Nil) type) (et--totype-sub no) (et--totype-sub yes)))
 
 (et-define-op if-nil? (type [yes :repr] [no :repr])
   :to-string (format "{if %s is nil then %s else %s}"
                      (et-repr-to-string type) (et-repr-to-string yes) (et-repr-to-string no))
   ;; (TYPE is always nil) <=> (TYPE is a subtype of Nil)
-  (if (et-subtype? type (et Nil)) (et--totype-sub yes) (et--totype-sub no)))
+  (et-indeterminate-if (et-subtype? type (et Nil)) (et--totype-sub yes) (et--totype-sub no)))
 
 (et-define-op eval ([func :const] &rest args)
   :to-string (format "{eval %s on %s}" func (mapconcat #'et-repr-to-string args ", "))
@@ -2293,6 +2305,16 @@ same as [T (<= T Number)]."
  (@alias EtIndeterminate (Tuple (or @I:LEQ @I:GEQ EtGeneric *et-type)))
  (@alias EtSubtypeResult *et-match-result<List<EtIndeterminate>>))
 
+(defun et--subtype-result-or (or-results)
+  (et-declare (or-results ListR<EtSubtypeResult>) (@return EtSubtypeResult))
+  (setq or-results (cl-remove-if-not #'et-match-result-success or-results))
+  (if (null or-results) (et--failed-match-result)
+    ;; If there is any unconditionally true result (no indeterminates), return it.
+    ;; Otherwise, add together all of the indeterminates, as to not discriminate.
+    (or (cl-find-if-not #'et-match-result-value or-results)
+        (et--success-match-result
+         (apply #'append (mapcar #'et-match-result-value or-results))))))
+
 (defun et-datatype-subtype? (sub super)
   (et-declare (sub *et-datatype) (super *et-datatype) (@return Boolean))
   (et-match-result-success (et--datatype-subtype? sub super)))
@@ -2303,10 +2325,10 @@ same as [T (<= T Number)]."
   (et--datatype-constraints
    (et-datatype-name sub) (et-datatype-args sub)
    (et-datatype-name super) (et-datatype-args super)
-   (lambda (a b) (valid-if (et--subtype?-0 a b)))
-   (lambda (a b) (valid-if (et--subtype?-0 b a)))
-   (lambda (a b) (valid-if (and (et--subtype?-0 a b) (et--subtype?-0 b a))))
-   (lambda (literal b) (valid-if (and (et--subtype?-0 (et-literal literal) b))))
+   (lambda (a b) (et--subtype?-0 a b))
+   (lambda (a b) (et--subtype?-0 b a))
+   (lambda (a b) (et--merge-match-results (et--subtype?-0 a b) (et--subtype?-0 b a)))
+   (lambda (literal b) (et--merge-match-results (et--subtype?-0 (et-literal literal) b)))
    #'et--cons-plist-super-type
    nil))
 
@@ -2324,24 +2346,38 @@ same as [T (<= T Number)]."
 (defun et--case-subtype? (sub super)
   (et-declare (sub *et-type-case) (super *et-type-case) (@return EtSubtypeResult))
 
-  (et--merge-match-results
-   (if (cl-subsetp (et-type-case-typeofs super) (et-type-case-typeofs sub))
-       (et--success-match-result nil) (et--failed-match-result))
+  (let* ((result
+          (et--merge-match-results
+           (if (cl-subsetp (et-type-case-typeofs super) (et-type-case-typeofs sub))
+               (et--success-match-result nil) (et--failed-match-result))
 
-   (cl-loop for poly in (et-type-case-polymorphs super)
-            collect
-            (if (or (memq poly (et-type-case-polymorphs sub))
-                    (cl-loop for (op _ lower-bound) in (et--polymorphic-type-constraints poly)
-                             thereis (and (eq op 'Q:GEQ)
-                                          (et--subtype?-1 (et-type sub) lower-bound))))
-                (et--success-match-result nil)
-              (et--success-match-result (list (list 'I:GEQ poly (et-type sub)))))
-            into results
-            finally return (apply #'et--merge-match-results results))
+           (cl-loop for poly in (et-type-case-polymorphs super)
+                    collect
+                    (if (memq poly (et-type-case-polymorphs sub)) (et--success-match-result nil)
+                      (cl-loop for (op _ lower-bound) in (et--polymorphic-type-constraints poly)
+                               for or-result =
+                               (when (eq op 'Q:GEQ)
+                                 (et--subtype?-1 (et-type sub) lower-bound))
+                               when or-result collect or-result into or-results
+                               finally return
+                               (let* ((res (et--success-match-result (list (list 'I:GEQ poly (et-type sub))))))
+                                 (et--subtype-result-or (cons res or-results)))))
+                    into results
+                    finally return (apply #'et--merge-match-results results))
 
-   ;; Macro expansion in `et--subtype?-0' means that the value should always be a datatype
-   (et--datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
-   (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))))
+           ;; Macro expansion in `et--subtype?-0' means that the value should always be a datatype
+           (et--datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
+           (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))))
+         (success (et-match-result-success result))
+         (indes (et-match-result-value result))
+         (sub-polys (et-type-case-polymorphs sub)))
+
+    (if (or (and success (null indes)) (null sub-polys)) result
+      ;; If the above failed, and there are polymorphs in the subtype,
+      ;; our last hope is having subtype be conditional on those polymorphs
+      (et--success-match-result
+       (append (cl-loop for name in sub-polys collect (list 'I:LEQ name (et-type super)))
+               indes)))))
 
 ;; This function could just use `et-sub-match', but it needs to take
 ;; into account binds.
@@ -2379,15 +2415,8 @@ same as [T (<= T Number)]."
   (cl-loop for sub-case in (et-type-cases sub)
            collect
            (cl-loop for super-case in (et-type-cases super)
-                    for res = (et--case-subtype? sub-case super-case)
-                    when (et-match-result-success res) collect res into or-results
-                    finally return
-                    (if (null or-results) (et--failed-match-result)
-                      ;; If there is any unconditionally true result (no indeterminates), return it.
-                      ;; Otherwise, add together all of the indeterminates, as to not discriminate.
-                      (or (cl-find-if-not #'et-match-result-value results)
-                          (et--success-match-result
-                           (apply #'append (mapcar #'et-match-result-value or-results))))))
+                    collect (et--case-subtype? sub-case super-case) into or-results
+                    finally return (et--subtype-result-or or-results))
            into and-results
            finally return (apply #'et--merge-match-results and-results)))
 
