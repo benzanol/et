@@ -810,7 +810,7 @@ BINDING is either (NAME EXPR), whose type is the type of EXPR, or
 Returns the declared function type."
   (let* ((arglist (cadr binding))
          (body (cddr binding))
-         (params (et-at (list rel 1) (et--parse-arglist-params arglist)))
+         (params (et-at (list rel 1) (et--func-parse-params arglist)))
          (declares (cdr (et--traverse-tree body declare-path)))
          (decls (et-at rel
                   (et-at-offset 2
@@ -821,7 +821,7 @@ Returns the declared function type."
          (body-path (append rel (list (+ 2 (1+ (car declare-path)))))))
     (if (et-type-p func-type)
         (progn
-          (et--func-check-body func-type params body-path)
+          (et--func-check-body params func-type body-path)
           func-type)
       (et-err rel "A declared local function must have an `@return' or `@function' type")
       (et-checker-deferred
@@ -835,7 +835,7 @@ Returns the declared function type."
 
 BINDING is (NAME ARGLIST . BODY), and has no function declaration."
   (pcase-let* ((`(,_name ,arglist . ,_body) binding)
-               (params (et-at (list rel 1) (et--parse-arglist-params arglist)))
+               (params (et-at (list rel 1) (et--func-parse-params arglist)))
                (fn (lambda (p)
                      (if (memq p (nth 3 params))
                          (et-parse-repr 'ListR<Any> nil)

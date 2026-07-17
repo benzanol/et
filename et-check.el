@@ -781,7 +781,7 @@ rare event that the identifier is declaring some custom type."
 
 ;;;;; Parse arglist params
 
-(defun et--parse-arglist-params (arglist)
+(defun et--func-parse-params (arglist)
   "Parse ARGLIST into (REQUIRED OPTIONAL KEY REST).
 
 ARGLIST is a plain parameter list with no type annotations — just
@@ -819,7 +819,7 @@ element."
           (when rest-param (list rest-param)))))
 
 
-;;;;; Parsing declarations
+;;;;; Make function type
 
 (defun et--make-function-type (generics constraints input-repr output-repr)
   "Build a Function or DynFunction type from reprs."
@@ -837,6 +837,27 @@ element."
     (et-dt 'Function
            (et-repr-to-type input-repr nil)
            (et-repr-to-type output-repr nil))))
+
+
+;;;;; Finding/parsing declarations
+
+(defun et--func-declares-path (expr)
+  (et-declare (expr Sexp) (@return List<Integer>))
+
+  (if-let* ((etd-pos (cl-position 'et-declare expr :key #'car-safe)))
+      (list etd-pos)
+    (if-let* ((decl-pos (cl-position 'declare expr :key #'car-safe))
+              (et-pos (cl-position 'et (nth decl-pos expr) :key #'car-safe)))
+        (list decl-pos et-pos)
+      nil)))
+
+(defun et--func-find-and-parse-decls (params exprs)
+  (et-declare (params EtFuncParameters<Var>) (exprs ListR<Sexp>))
+  (when-let* ((declare-path (et--func-declares-path exprs)))
+    (let* ((declares (cdr (et--traverse-tree exprs declare-path))))
+      (et-at declare-path
+        (et-at-offset 1
+          (et--func-parse-declarations params declares))))))
 
 (defun et--func-parse-declarations (params declares)
   "Parse function declarations.
@@ -928,6 +949,11 @@ This assumes that the current path points to DECLARES."
 
 
 ;;;;; Construct input repr
+
+(defun et--func-params-untyped-input (params)
+  (et-declare (params EtFuncParameters<T>) (@return *et-type))
+  (et-repr-to-type
+   (et--func-params-to-input nil params (lambda (_) (et Any)) #'identity)))
 
 (defun et--func-params-to-input (generics params fn key-fn)
   "Build an input repr from parameter specs.
@@ -1021,31 +1047,17 @@ FN converts a parameter (T) to the repr that should be used for it, and"
     ((and type (pred et-type-p)) (put name 'et-function-type type))
     ((and chk (pred functionp)) (put name 'et-checker chk))))
 
-(defun et--func-declares-path (expr)
-  (et-declare (expr Sexp) (@return List<Integer>))
-  (if-let* ((etd-pos (cl-position 'et-declare expr :key #'car-safe)))
-      (list etd-pos)
-    (if-let* ((decl-pos (cl-position 'declare expr :key #'car-safe))
-              (et-pos (cl-position 'et (nth decl-pos expr) :key #'car-safe)))
-        (list decl-pos et-pos)
-      nil)))
-
 (et-define-identifier (defun cl-defun defmacro) (name arglist &rest rest)
   (list
    :declare
    (lambda ()
-     (let* ((params (et-at 2 (et--parse-arglist-params arglist))))
-       (when-let* ((declare-path (et--func-declares-path rest))
-                   (declares (cdr (et--traverse-tree rest declare-path)))
-                   (decls (et-at-offset 3
-                            (et-at declare-path
-                              (et-at-offset 1
-                                (et--func-parse-declarations params declares))))))
+     (let* ((params (et-at 2 (et--func-parse-params arglist))))
+       (when-let* ((decls (et-at-offset 3 (et--func-find-and-parse-decls params rest))))
          (et--func-assign-decls name decls))))))
 
 
 (defun et--func-declare-from-directive (name arglist declares)
-  (let* ((param-groups (et-at 2 (et--parse-arglist-params arglist)))
+  (let* ((param-groups (et-at 2 (et--func-parse-params arglist)))
          (decls (et-at-offset 3 (et--func-parse-declarations param-groups declares))))
     (et--func-assign-decls name decls)))
 
@@ -1074,7 +1086,7 @@ FN converts a parameter (T) to the repr that should be used for it, and"
                 (et-fatal 0 "No checker specified")))))))
 
 
-;;;;; Checkers
+;;;;; Check body
 
 (et-defvar et-checking-defun Nil|Var nil
   "The defun currently being checked.")
@@ -1097,9 +1109,12 @@ FN converts a parameter (T) to the repr that should be used for it, and"
      (list nil i-type o-type))
     (_ (error "Invalid function type: %s" func-type))))
 
-(defun et--func-check-body (func-type params body-path)
-  "The path should point to the function expr."
-  (et-declare (func-type *et-type) (params EtFuncParameters<Var>))
+(defun et--func-check-body (params func-type body-path)
+  "The path should point to the function expr.
+
+Returns the type of the last expression in the body."
+  (et-declare (func-type *et-type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
+              (@return *et-type))
 
   (pcase-let* ((`(,scoped ,input-type ,expected-ret) (et--func-destructure func-type)))
     (et--with-scoped-datatypes scoped
@@ -1116,44 +1131,35 @@ FN converts a parameter (T) to the repr that should be used for it, and"
           (et-checker-deferred
             (let* ((actual-ret (et-checker-tail body-path)))
               (or (et-subtype? actual-ret expected-ret)
-                  (et-err 0 "Expected %s, found %s" expected-ret actual-ret)))))))))
+                  (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
+              actual-ret)))))))
+
+
+;;;;; Checkers
 
 (et-define-pcase-checker (defun cl-defun) `(,name . ,_)
   (when-let* ((func-type (et-function-type name))
               ((not (plist-get (get name 'et-function-props) :skip)))
               (et-checking-defun name))
-    (et--func-check-body func-type (get name 'et-function-parameters) 3))
+    (et--func-check-body (get name 'et-function-parameters) func-type 3))
   (et-literal name))
 
 
-;;;;; Check lambda
-
 (et-define-pcase-checker lambda `(,arglist . ,body)
-  (let* ((params (et-at 1 (et--parse-arglist-params arglist))))
-    (or
-     ;; Parse from declare
-     (when-let* ((declare-path (et--func-declares-path body)))
-       (let* ((declares (cdr (et--traverse-tree body declare-path)))
-              (decls (et-at-offset 2
-                       (et-at declare-path
-                         (et-at-offset 1
-                           (et--func-parse-declarations params declares)))))
-              (func-type (plist-get decls :definition)))
-         (if (not (et-type-p func-type)) (et-err 0 "Declare should have either @return or @function")
-           (et--func-check-body func-type params 2) func-type)))
-
-     ;; Parse from recommendation
-     (when et--checker-recommendation
-       (et--func-check-body et--checker-recommendation params 2)
-       et--checker-recommendation)
-
-     ;; Parse from nothing
-     (et-with-vars (cl-loop for name in (apply #'append params)
-                            collect (et-new-var name (et Any)))
-       (et-checker-deferred
-         (et-dt 'Function
-                (et-repr-to-type (et--func-params-to-input nil params (lambda (_) (et Any)) #'identity))
-                (et-checker-tail 2)))))))
+  (let* ((params (et-at 1 (et--func-parse-params arglist)))
+         (untyped-input nil)
+         (func-type
+          (or (when-let* ((decls (et-at-offset 2 (et--func-find-and-parse-decls params body)))
+                          (func-type (plist-get decls :definition)))
+                (when (et-type-p func-type) func-type))
+              ;; From recommendation
+              et--checker-recommendation
+              ;; All params are Any
+              (progn (setq untyped-input (et--func-params-untyped-input params))
+                     (et-dt 'Function untyped-input (et Any)))))
+         (actual-ret (et--func-check-body params func-type 2)))
+    ;; If the function is untyped, then we should use the actual return type
+    (if untyped-input (et-dt 'Function untyped-input actual-ret) func-type)))
 
 
 ;;;; Variables
