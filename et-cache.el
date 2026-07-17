@@ -124,12 +124,17 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 ;; variable-length sequence so that distinct structures cannot flatten
 ;; to the same accumulator.
 ;;
-;; Variables and scoped datatypes are ephemeral (fresh symbols every
-;; session), so hashing them by identity would be useless. Instead each
-;; is replaced by its index in `vars'/`scoped' -- two types differing
-;; only in which ephemeral objects they contain hash identically. The
-;; encountered objects are returned alongside the hash, so the caller
-;; can restore the correct ephemeral objects into a cached result.
+;; Variables (`et-var's) are ephemeral (fresh symbols every session), so
+;; hashing them by identity would be useless. Instead each is replaced by
+;; its index in `vars' -- two types differing only in which ephemeral
+;; variables they contain hash identically. The encountered variables are
+;; returned alongside the hash, so the caller can restore the correct
+;; ephemeral variables into a cached result.
+;;
+;; Polymorphic types, by contrast, are keyed by a stable generic name
+;; (unique within a scope, and the same symbol across sessions), so they
+;; are hashed by that name directly -- `^T' and `^U' are nominally
+;; distinct types and must hash apart.
 ;;
 ;; The alias-definition stack is threaded as a plain parameter (newest
 ;; first, extended with `cons') rather than living on the state: a
@@ -141,7 +146,6 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
 (cl-defstruct (et--hashing-state (:constructor et--make-hashing-state))
   (acc nil)            ; Accumulated values, in reverse order
   (vars nil)           ; `et-var's encountered so far, in order (index = position)
-  (scoped nil)         ; Scoped arg-tuples encountered so far (compared by `equal')
   (name-dependent nil)) ; Whether to fold alias names into the hash (see `et--hash-alias-def')
 
 (defun et--hash-push (state value)
@@ -155,15 +159,6 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
         (prog1 (length vars)
           (setf (et--hashing-state-vars state) (append vars (list var)))))))
 
-(defun et--hash-scoped-index (state tuple)
-  "Return the index of scoped TUPLE in STATE, appending if new.
-TUPLE is the (NAME UNIQUE CONSTRAINTS) arg list of a `Scoped' datatype."
-  (let ((scoped (et--hashing-state-scoped state)))
-    (or (cl-position tuple scoped :test #'equal)
-        (prog1 (length scoped)
-          (setf (et--hashing-state-scoped state) (append scoped (list tuple)))))))
-
-
 ;;;; Types
 
 (defun et--hash-type (state type alias-stack)
@@ -176,6 +171,7 @@ TUPLE is the (NAME UNIQUE CONSTRAINTS) arg list of a `Scoped' datatype."
 (defun et--hash-type-case (state case alias-stack)
   (let ((binds (et-type-case-binds case))
         (typeofs (et-type-case-typeofs case))
+        (polymorphs (et-type-case-polymorphs case))
         (value (et-type-case-value case)))
     ;; Binds: (et-var . et-type)
     (et--hash-push state (length binds))
@@ -186,6 +182,11 @@ TUPLE is the (NAME UNIQUE CONSTRAINTS) arg list of a `Scoped' datatype."
     (et--hash-push state (length typeofs))
     (dolist (var typeofs)
       (et--hash-push state (et--hash-var-index state var)))
+    ;; Polymorphs: stable generic-name symbols, hashed by name (not index),
+    ;; since `^T' and `^U' are nominally distinct and persist across sessions.
+    (et--hash-push state (length polymorphs))
+    (dolist (name polymorphs)
+      (et--hash-push state name))
     ;; Value: datatype or alias
     (cond
      ((et-datatype-p value)
@@ -209,12 +210,6 @@ hashed."
   (et--hash-push state (or (cl-position name et--datatypes :key #'car)
                            (error "Invalid datatype: %s" name)))
   (cond
-   ;; Scoped: the (NAME UNIQUE CONSTRAINTS) tuple is ephemeral, so it is
-   ;; treated like a variable -- hash its index -- plus its constraints
-   ;; (the generic name is irrelevant).
-   ((eq name 'Scoped)
-    (et--hash-push state (et--hash-scoped-index state args))
-    (et--hash-constraints state (nth 2 args) alias-stack))
    ;; DynFunction: arg 0 is a matcher, arg 1 an output repr.
    ((eq name 'DynFunction)
     (et--hash-matcher state (nth 0 args) alias-stack)
@@ -362,13 +357,11 @@ by the `et-op' registered under OP-NAME (see `et-op-args'/`et-op-rest-arg')."
 (cl-defstruct et-hash
   "The result of hashing a list of items.
 
-VALUE is the digest string. VARS and SCOPED are the `et-var's and
-`Scoped' datatype arg-tuples encountered (in the order their indices
-were assigned), which let a caller restore the ephemeral objects of a
-cached result."
+VALUE is the digest string. VARS are the `et-var's encountered (in the
+order their indices were assigned), which let a caller restore the
+ephemeral variables of a cached result."
   (value nil :et String)
-  (vars nil :et List<*et-var>)
-  (scoped nil :et List<Any>))
+  (vars nil :et List<*et-var>))
 
 (cl-defun et-hash-items (items &key name-dependent)
   "Hash ITEMS into a structural `et-hash'.
@@ -402,8 +395,7 @@ input (see the call cache)."
        (t (error "Cannot hash item: %s" item))))
     (make-et-hash
      :value (et--hash-finalize state)
-     :vars (et--hashing-state-vars state)
-     :scoped (et--hashing-state-scoped state))))
+     :vars (et--hashing-state-vars state))))
 
 
 ;;;; Tests
@@ -548,7 +540,7 @@ the uncached path otherwise; they never consult `et-cache-enabled'.")
 
 DEFUN-CACHE maps a function name to its `et--cached-defun'.
 CALL-CACHE maps a call hash (see `et--call-cached') to a cached result,
-with ephemeral variables and scoped datatypes replaced by placeholders."
+with ephemeral variables replaced by placeholders."
   (defun-cache (make-hash-table :test 'eq))
   (call-cache (make-hash-table :test 'equal)))
 
@@ -845,14 +837,15 @@ pass straight through to ORIG."
 ;; stack" below for why. Two wrinkles make this more than a plain memo
 ;; table.
 ;;
-;; Ephemerals. A constraint result can contain `et-var's and scoped
-;; datatypes, fresh identity tokens with no meaning across sessions.
-;; Their identities in a result are always a subset of the input's, and
-;; hashing the input already enumerates them: an `et-hash' carries the
-;; `vars' and `scoped' it encountered, in index order. On a store we swap
-;; each ephemeral for a positional placeholder; on a hit we swap the
-;; placeholders back for the *current* call's ephemerals, reconstituting
-;; an answer with the right fresh tokens.
+;; Ephemerals. A constraint result can contain `et-var's: fresh identity
+;; tokens with no meaning across sessions. Their identities in a result
+;; are always a subset of the input's, and hashing the input already
+;; enumerates them: an `et-hash' carries the `vars' it encountered, in
+;; index order. On a store we swap each variable for a positional
+;; placeholder; on a hit we swap the placeholders back for the *current*
+;; call's variables, reconstituting an answer with the right fresh tokens.
+;; (Polymorphic types carry stable generic names, not ephemeral tokens,
+;; so they pass through the cache verbatim and need no such swap.)
 ;;
 ;; The recursion stack. Each function wraps its body in
 ;; `et--stop-recursion', which breaks cycles by optimistically assuming a
@@ -882,16 +875,12 @@ pass straight through to ORIG."
   (intern (format "@@et-ph-%s-%d@@" kind idx)))
 
 (defun et--call-ephemeral-alist (hash store)
-  "Substitution alist between HASH's ephemerals and their placeholders.
-With STORE non-nil, map each ephemeral to its placeholder; otherwise map
-each placeholder back to the ephemeral. A variable is keyed by its
-`et-var', a scoped datatype by its unique symbol."
-  (cl-loop for kind in '(var scoped)
-           for ephemerals in (list (et-hash-vars hash)
-                                   (mapcar #'cadr (et-hash-scoped hash)))
-           nconc (cl-loop for e in ephemerals for i from 0
-                          for ph = (et--call-ph kind i)
-                          collect (if store (cons e ph) (cons ph e)))))
+  "Substitution alist between HASH's ephemeral variables and placeholders.
+With STORE non-nil, map each `et-var' to its placeholder; otherwise map
+each placeholder back to the `et-var'."
+  (cl-loop for var in (et-hash-vars hash) for i from 0
+           for ph = (et--call-ph 'var i)
+           collect (if store (cons var ph) (cons ph var))))
 
 
 ;;;; Cache policy
@@ -950,18 +939,24 @@ solving), and nil when it cannot (subtyping returns a bare boolean)."
 ;;;; Advice
 
 (defun et--sub-constraints-cached (orig &rest args)
-  (et--call-cached 'et--sub-constraints-1 orig args
-                   et--constraints-stack #'et-match-result-success
-                   :name-dependent t))
+  (if (not et-cache-enabled)
+      (apply orig args)
+    (et--call-cached 'et--sub-constraints-1 orig args
+                     et--constraints-stack #'et-match-result-success
+                     :name-dependent t)))
 
 (defun et--super-constraints-cached (orig &rest args)
-  (et--call-cached 'et--super-constraints-1 orig args
-                   et--constraints-stack #'et-match-result-success
-                   :name-dependent t))
+  (if (not et-cache-enabled)
+      (apply orig args)
+    (et--call-cached 'et--super-constraints-1 orig args
+                     et--constraints-stack #'et-match-result-success
+                     :name-dependent t)))
 
 (defun et--subtype?-cached (orig &rest args)
-  (et--call-cached 'et--subtype?-1 orig args
-                   et--subtype-stack (lambda (&rest _) t)))
+  (if (not et-cache-enabled)
+      (apply orig args)
+    (et--call-cached 'et--subtype?-1 orig args
+                     et--subtype-stack (lambda (&rest _) t))))
 
 
 ;;; ============================================================
