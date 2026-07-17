@@ -1200,21 +1200,24 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
     (et--sub-constraints-0 matcher type)))
 
 (defun et--failed-match-result ()
+  (et-declare (@generics [T]) (@return *et-match-result<T>))
   (make-et-match-result
    :success nil
    :stack (mapcar #'car et--constraints-stack)))
 
+(defun et--success-match-result (value)
+  (et-declare (@generics [T]) (value T) (@return *et-match-result<T>))
+  (make-et-match-result :success t :value value))
+
 (defun et--merge-match-results (&rest results)
-  (declare (et (results ListR<EtMatchResult>)
-               (@return EtMatchResult)))
+  (declare (et (@generics [T])
+               (results ListR<EtMatchResult<List<T>>>)
+               (@return EtMatchResult<List<T>>)))
   (cl-loop for result in results
-           when (not (et-match-result-success result))
+           if (not (et-match-result-success result))
            return result
            append (et-match-result-value result) into constraints
-           finally return
-           (make-et-match-result
-            :success t
-            :value (delete-dups constraints))))
+           finally return (et--success-match-result (delete-dups constraints))))
 
 (defun et--sub-constraints-0 (matcher type)
   (declare (et (matcher *et-matcher) (type *et-type)
@@ -1224,7 +1227,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (et--verify-type type)
 
   (et--stop-recursion et--constraints-stack (list 'sub (et-matcher-repr matcher) type)
-                      (make-et-match-result :success t :value nil)
+                      (et--success-match-result nil)
     (et--sub-constraints-1 matcher type)))
 
 (defun et--sub-constraints-1 (matcher type)
@@ -1247,7 +1250,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                         (let* ((type (et--supersect (caddr q) (et--replace-type-binds (et-any) binds))))
                           (list 'Q:GEQ (cadr q) type)))
                       into qs
-                      finally return (make-et-match-result :success t :value qs)))
+                      finally return (et--success-match-result qs)))
            collect result-with-binds into results
            finally return (apply #'et--merge-match-results results)))
 
@@ -1288,7 +1291,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (pcase match-factor
     (`(S:GENERIC ,var)
      (let* ((q (list (if is-super 'Q:LEQ 'Q:GEQ) var (et-type case))))
-       (make-et-match-result :success t :value (list q))))
+       (et--success-match-result (list q))))
     (`(S:SET ,mr ,type)
      (funcall (if is-super #'et--super-constraints-0 #'et--sub-constraints-0)
               (make-et-matcher :repr mr :generics generics) type))
@@ -1296,7 +1299,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
      (let* ((req (list (if is-super 'R:LEQ 'R:GEQ)
                        (make-et-repr :generics generics :dnf (list (list match-factor)))
                        (et-type case))))
-       (make-et-match-result :success t :value (list req))))
+       (et--success-match-result (list req))))
     (`(S:DT ,mdt-name . ,mdt-args)
      (pcase (et-type-case-value case)
        ((and alias (pred et-alias-p))
@@ -1331,10 +1334,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          ;; be resolved once the matcher's generics are known, so record
          ;; an R:FN constraint for constraint satisfaction.
          (lambda (dyn-args fn-args)
-           (make-et-match-result
-            :success t
-            :value (list (list 'R:FN (car dyn-args) (cadr dyn-args)
-                               (car fn-args) (cadr fn-args))))))
+           (et--success-match-result (list (list 'R:FN (car dyn-args) (cadr dyn-args)
+                                                 (car fn-args) (cadr fn-args))))))
       ;; supertype matching (sub=MATCHER < super=TYPE)
       (et--datatype-constraints
        m-name m-args t-name t-args
@@ -1360,7 +1361,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
   ;; The 'super' version of scoped constraint checking
   (et--stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type)
-                      (make-et-match-result :success t :value nil)
+                      (et--success-match-result nil)
     (et--super-constraints-1 matcher type)))
 
 (defun et--super-constraints-1 (matcher type)
@@ -1384,7 +1385,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
    (pcase match-case
      ;; A single match factor, at that is a S:GENERIC match factor
      (`((S:GENERIC ,var))
-      (make-et-match-result :success t :value (list (list 'Q:LEQ var type)))))
+      (et--success-match-result (list (list 'Q:LEQ var type)))))
 
    (cl-loop for case in (et-type-cases type)
             for result =
@@ -1653,8 +1654,8 @@ Depth tracks < > and { } nesting."
 
 ;;;; Repr to type
 
-(et-declare (@variable et--totype-gen-repls (ListR (ConsR EtGeneric *et-type))))
-(defvar et--totype-gen-repls nil)
+(et-defvar et--totype-gen-repls AListR<EtGeneric~*et-type> nil)
+(et-defvar et--totype-indeterminates @N/A|List<EtIndeterminate> 'N/A)
 
 (defun et--totype-sub (repr)
   (declare (et (repr EtRepr) (@return *et-type)))
@@ -1676,7 +1677,7 @@ Depth tracks < > and { } nesting."
              (if (et-type-label ored) ored
                (et-copy-with ored :label (et-repr-label repr))))))
 
-(defun et-repr-to-type (repr &optional gen-repls)
+(defun et--repr-to-type (repr gen-repls)
   "Convert REPR to an `et-type'.
 
 GEN-REPLS is an alist of symbols to `et-type's. Each time S:GENERIC
@@ -1684,15 +1685,20 @@ appears in REPR, it will be replaced with the corresponding value
 in GEN-REPLS, if it exists."
   (declare (et (repr EtRepr)
                (gen-repls (ListR (ConsR EtGeneric *et-type)))
-               (@return *et-type)))
+               (@return Cons<*et-type~List<EtIndeterminate>>)))
 
   (when et-debug
     (unless (seq-set-equal-p (mapcar #'car gen-repls) (et-repr-generics repr) #'eq)
       (error "Converting with %s, but repr has generics %s"
              (mapcar #'car gen-repls) (et-repr-generics repr))))
 
-  (let* ((et--totype-gen-repls gen-repls))
-    (et--totype-sub repr)))
+  (let* ((et--totype-gen-repls gen-repls)
+         (et--totype-indeterminates nil))
+    (cons (et--totype-sub repr)
+          et--totype-indeterminates)))
+
+(defun et-repr-to-type (repr &optional gen-repls)
+  (car (et--repr-to-type repr gen-repls)))
 
 
 ;;;; Replacement for matchers
@@ -2283,46 +2289,59 @@ same as [T (<= T Number)]."
 
 ;;;; Subtype
 
+(et-declare
+ (@alias EtIndeterminate (Tuple (or @I:LEQ @I:GEQ EtGeneric *et-type)))
+ (@alias EtSubtypeResult *et-match-result<List<EtIndeterminate>>))
+
 (defun et-datatype-subtype? (sub super)
   (et-declare (sub *et-datatype) (super *et-datatype) (@return Boolean))
+  (et-match-result-success (et--datatype-subtype? sub super)))
 
-  (cl-flet ((valid-if (valid)
-              (if valid (make-et-match-result :success t)
-                (et--failed-match-result))))
-    (let* ((result
-            (et--datatype-constraints
-             (et-datatype-name sub) (et-datatype-args sub)
-             (et-datatype-name super) (et-datatype-args super)
-             (lambda (a b) (valid-if (et--subtype?-0 a b)))
-             (lambda (a b) (valid-if (et--subtype?-0 b a)))
-             (lambda (a b) (valid-if (and (et--subtype?-0 a b) (et--subtype?-0 b a))))
-             (lambda (literal b) (valid-if (and (et--subtype?-0 (et-literal literal) b))))
-             #'et--cons-plist-super-type
-             nil)))
+(defun et--datatype-subtype? (sub super)
+  (et-declare (sub *et-datatype) (super *et-datatype) (@return EtSubtypeResult))
 
-      (et-match-result-success result))))
+  (et--datatype-constraints
+   (et-datatype-name sub) (et-datatype-args sub)
+   (et-datatype-name super) (et-datatype-args super)
+   (lambda (a b) (valid-if (et--subtype?-0 a b)))
+   (lambda (a b) (valid-if (et--subtype?-0 b a)))
+   (lambda (a b) (valid-if (and (et--subtype?-0 a b) (et--subtype?-0 b a))))
+   (lambda (literal b) (valid-if (and (et--subtype?-0 (et-literal literal) b))))
+   #'et--cons-plist-super-type
+   nil))
 
 (defun et--binds-subtype? (sub-binds super-binds)
   (et-declare (sub-binds EtBinds) (super-binds EtBinds)
-              (@return Boolean))
+              (@return EtSubtypeResult))
+
   (cl-loop for (var . super-type) in super-binds
            for sub-type = (alist-get var sub-binds)
-           always (and sub-type (et--subtype?-0 sub-type super-type))))
+           collect (if sub-type (et--subtype?-0 sub-type super-type)
+                     (et--failed-match-result))
+           into results
+           finally return (apply #'et--merge-match-results results)))
 
 (defun et--case-subtype? (sub super)
-  (et-declare (sub *et-type-case) (super *et-type-case) (@return Boolean))
+  (et-declare (sub *et-type-case) (super *et-type-case) (@return EtSubtypeResult))
 
-  (and (cl-subsetp (et-type-case-typeofs super) (et-type-case-typeofs sub))
-       (cl-loop for poly in (et-type-case-polymorphs super)
-                always
-                (or (memq poly (et-type-case-polymorphs sub))
+  (et--merge-match-results
+   (if (cl-subsetp (et-type-case-typeofs super) (et-type-case-typeofs sub))
+       (et--success-match-result nil) (et--failed-match-result))
+
+   (cl-loop for poly in (et-type-case-polymorphs super)
+            collect
+            (if (or (memq poly (et-type-case-polymorphs sub))
                     (cl-loop for (op _ lower-bound) in (et--polymorphic-type-constraints poly)
                              thereis (and (eq op 'Q:GEQ)
-                                          (et--subtype?-1 (et-type sub) lower-bound)))))
-       ;; Macro expansion in `et--subtype?-0' means that the value should always be a datatype
-       (et-datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
-       (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))
-       t))
+                                          (et--subtype?-1 (et-type sub) lower-bound))))
+                (et--success-match-result nil)
+              (et--success-match-result (list (list 'I:GEQ poly (et-type sub)))))
+            into results
+            finally return (apply #'et--merge-match-results results))
+
+   ;; Macro expansion in `et--subtype?-0' means that the value should always be a datatype
+   (et--datatype-subtype? (et-type-case-value sub) (et-type-case-value super))
+   (et--binds-subtype? (et-type-case-binds sub) (et-type-case-binds super))))
 
 ;; This function could just use `et-sub-match', but it needs to take
 ;; into account binds.
@@ -2333,28 +2352,44 @@ same as [T (<= T Number)]."
 (defun et-subtype? (sub super)
   "Entrypoint for determining subtype."
   (et-declare (sub *et-type) (super *et-type) (@return Boolean))
-  (let* ((et--subtype-stack nil))
-    (et--subtype?-0 sub super)))
+  (let* ((et--subtype-stack nil)
+         (result (et--subtype?-0 sub super)))
+    (when (et-match-result-success result)
+      (if-let* ((inds (et-match-result-value result)))
+          (prog1 nil
+            (unless (eq et--totype-indeterminates 'N/A)
+              (cl-callf append et--totype-indeterminates inds)))
+        t))))
 
 (defun et--subtype?-0 (sub super)
-  (et-declare (sub *et-type) (super *et-type) (@return Boolean))
+  (et-declare (sub *et-type) (super *et-type) (@return EtSubtypeResult))
   (et--verify-type sub)
   (et--verify-type super)
 
-  (if (equal sub super) t ; Not strictly necessary, but improves efficiency
-    (et--stop-recursion et--subtype-stack (cons sub super) t
+  (if (equal sub super) (et--success-match-result nil) ; Not strictly necessary, but improves efficiency
+    (et--stop-recursion et--subtype-stack (cons sub super)
+                        (et--success-match-result nil)
       (et--subtype?-1 sub super))))
 
 (defun et--subtype?-1 (sub super)
-  (et-declare (sub *et-type) (super *et-type) (@return Boolean))
+  (et-declare (sub *et-type) (super *et-type) (@return EtSubtypeResult))
   (setq sub (et-expand-all-aliases sub))
   (setq super (et-expand-all-aliases super))
 
   (cl-loop for sub-case in (et-type-cases sub)
-           always
+           collect
            (cl-loop for super-case in (et-type-cases super)
-                    thereis
-                    (et--case-subtype? sub-case super-case))))
+                    for res = (et--case-subtype? sub-case super-case)
+                    when (et-match-result-success res) collect res into or-results
+                    finally return
+                    (if (null or-results) (et--failed-match-result)
+                      ;; If there is any unconditionally true result (no indeterminates), return it.
+                      ;; Otherwise, add together all of the indeterminates, as to not discriminate.
+                      (or (cl-find-if-not #'et-match-result-value results)
+                          (et--success-match-result
+                           (apply #'append (mapcar #'et-match-result-value or-results))))))
+           into and-results
+           finally return (apply #'et--merge-match-results and-results)))
 
 (et-test
  (et-subtype? (et Integer) (et Number))
