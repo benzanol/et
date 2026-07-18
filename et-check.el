@@ -1100,22 +1100,58 @@ FUNC-INPUT-TYPE."
 (et-defvar et-checking-defun Nil|Var nil
   "The defun currently being checked.")
 
-(defun et--func-destructure (func-type)
+(defun et--func-destructure (func-type &optional overloads)
+  "Destructure FUNC-TYPE into its input and output types.
+
+Converting the input of a DynFunction to a type requires concrete types
+for each generic. This requires creating a polymorphic type for each
+generic, which are returned along side the input and output types.
+
+If OVERLOADS is non-nil, and FUNC-TYPE is a DynFunction, then
+automatically detect different overload definitions, and return them
+each as a separate entry. The only thing that differs between overloads
+is the constraints on each polymorphic type, and whatever effect those
+constraints have on the resolved return type.
+
+For example, the function
+
+[T] (Args T) => (or String (if-nil? T Never Nil))
+
+would have overloads
+
+(((T (P:LEQ Nil))) Args<T> String)
+and
+(((T (P:NLEQ Nil))) Args<T> String|Nil)
+
+This is a common pattern for functions that have a `noerror' argument."
   (et-declare (func-type *et-type)
-              (@return (Tuple List<EtGeneric> *et-type *et-type)))
+              (overloads Boolean)
+              (@return (List (Tuple EtPolymorphicTypes *et-type *et-type))))
 
   (pcase (et-type-single (et-expand-all-aliases func-type))
     ((cl-struct et-datatype (name 'DynFunction) (args `(,i-matcher ,o-repr)))
-     (let* ((polys (et--make-polymorphic-types i-matcher)))
-       (et--with-polymorphic-types polys
-         (cl-loop for gen in (et-matcher-generics i-matcher)
-                  collect (cons gen (et-parse-type gen)) into gen-repls
-                  finally return
-                  (list polys
-                        (et-repr-to-type (et-matcher-repr i-matcher) gen-repls)
-                        (et-repr-to-type o-repr gen-repls))))))
+     (let* ((make-gen-repls
+             ;; Must be called within et--with-polymorphic-types
+             (lambda ()
+               (cl-loop for gen in (et-matcher-generics i-matcher)
+                        collect (cons gen (et-parse-type gen)))))
+            (base-polys (et--make-polymorphic-types i-matcher))
+            (all-polys
+             (et--with-polymorphic-types base-polys
+               (if (not overloads) (list base-polys)
+                 (et--indeterminates-to-overloads
+                  ;; Calculate the indeterminates by parsing o-repr
+                  base-polys (cdr (et--repr-to-type o-repr (funcall make-gen-repls))))))))
+       (cl-loop for polys in all-polys
+                collect
+                (et--with-polymorphic-types polys
+                  (let* ((gen-repls (funcall make-gen-repls))
+                         (in (et-repr-to-type (et-matcher-repr i-matcher) gen-repls))
+                         (out (et-repr-to-type o-repr gen-repls)))
+                    (list polys in out))))))
+
     ((cl-struct et-datatype (name 'Function) (args `(,i-type ,o-type)))
-     (list nil i-type o-type))
+     (list (list nil i-type o-type)))
     (_ (error "Invalid function type: %s" func-type))))
 
 (defun et--func-check-body (params func-type body-path)

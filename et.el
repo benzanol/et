@@ -536,7 +536,9 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 ;;;; Polymorphic types
 
 (et-declare
- (@alias EtPolymorphicTypes AList<EtGeneric~ListR<EtTypeConstraint>>))
+ (@alias EtPolymorphConstraint
+         (Tuple (or @P:LEQ @P:NLEQ @P:GEQ @P:NGEQ) *et-type))
+ (@alias EtPolymorphicTypes AList<EtGeneric~ListR<EtPolymorphConstraint>>))
 
 (et-defvar et--polymorphic-types EtPolymorphicTypes nil
   "Polymorphic types in scope.")
@@ -546,10 +548,11 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
   (cl-loop for name in (et-matcher-generics matcher)
            when (assq name et--polymorphic-types)
-           do (error "Polymorphic type `%s' is already defined")
-           for qs = (cl-loop for q in (et-matcher-constraints matcher)
-                             when (eq (cadr q) name)
-                             collect q)
+           do (error "Polymorphic type `%s' is already defined" name)
+           for qs = (cl-loop for (op gen q-type) in (et-matcher-constraints matcher)
+                             when (eq gen name)
+                             collect (list (pcase op ('Q:LEQ 'P:LEQ) ('Q:GEQ 'P:GEQ))
+                                           q-type))
            collect (cons name qs)))
 
 (defmacro et--with-polymorphic-types (polys &rest body)
@@ -560,6 +563,41 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 (defun et--polymorphic-type-constraints (name)
   (cdr (or (assq name et--polymorphic-types)
            (error "Polymorphic type `%s' not defined" name))))
+
+(defun et--indeterminates-to-overloads (base-polys indeterminates)
+  "Produce polymorphic environments for every resolution of INDETERMINATES.
+
+Source: gpt-5.6.sol high."
+  (et-declare
+   (base-polys EtPolymorphicTypes)
+   (indeterminates ListR<EtIndeterminate>)
+   (@return List<EtPolymorphicTypes>))
+
+  (cl-labels ((add-constraint (polys generic constraint)
+                (let* ((copy (copy-tree polys))
+                       (entry (assq generic copy)))
+                  (unless entry
+                    (error "Indeterminate generic `%s' is not in scope" generic))
+                  (push constraint (cdr entry))
+                  copy)))
+    (cl-loop
+     with overloads = (list base-polys)
+     for (i-op generic type)
+     in (delete-dups (copy-sequence indeterminates))
+     for p-ops =
+     (pcase i-op
+       ('I:LEQ '(P:LEQ P:NLEQ))
+       ('I:GEQ '(P:GEQ P:NGEQ))
+       (_ (error "Invalid indeterminate operator: %s" i-op)))
+     do
+     (setq overloads
+           (cl-loop for polys in overloads
+                    nconc
+                    (cl-loop for p-op in p-ops
+                             collect
+                             (add-constraint
+                              polys generic (list p-op type)))))
+     finally return overloads)))
 
 
 ;;;; Datatype helpers
@@ -1923,9 +1961,9 @@ in GEN-REPLS, if it exists."
 (et--define-repr-segment S:POLY poly (name)
   :parse (progn (et--polymorphic-type-constraints name) (list name))
   :to-type
-  (let* ((constrs (cl-remove 'Q:LEQ (et--polymorphic-type-constraints name)
+  (let* ((constrs (cl-remove 'P:LEQ (et--polymorphic-type-constraints name)
                              :key #'car :test-not #'eq)))
-    (cl-loop for case in (et-type-cases (apply #'et--supersect (mapcar #'caddr constrs)))
+    (cl-loop for case in (et-type-cases (apply #'et--supersect (mapcar #'cadr constrs)))
              collect (et-copy-with case :polymorphs (cons name (et-type-case-polymorphs case)))))
   :print (format "^%s" name))
 
@@ -2354,9 +2392,9 @@ same as [T (<= T Number)]."
            (cl-loop for poly in (et-type-case-polymorphs super)
                     collect
                     (if (memq poly (et-type-case-polymorphs sub)) (et--success-match-result nil)
-                      (cl-loop for (op _ lower-bound) in (et--polymorphic-type-constraints poly)
+                      (cl-loop for (op lower-bound) in (et--polymorphic-type-constraints poly)
                                for or-result =
-                               (when (eq op 'Q:GEQ)
+                               (when (eq op 'P:GEQ)
                                  (et--subtype?-1 (et-type sub) lower-bound))
                                when or-result collect or-result into or-results
                                finally return
