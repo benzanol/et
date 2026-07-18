@@ -1095,10 +1095,7 @@ FUNC-INPUT-TYPE."
                 (et-fatal 0 "No checker specified")))))))
 
 
-;;;;; Check body
-
-(et-defvar et-checking-defun Nil|Var nil
-  "The defun currently being checked.")
+;;;;; Destructure
 
 (defun et--func-destructure (func-type &optional overloads)
   "Destructure FUNC-TYPE into its input and output types.
@@ -1154,6 +1151,15 @@ This is a common pattern for functions that have a `noerror' argument."
      (list (list nil i-type o-type)))
     (_ (error "Invalid function type: %s" func-type))))
 
+
+;;;;; Check body
+
+(et-defvar et-checking-defun Nil|Var nil
+  "The defun currently being checked.")
+
+(et-defvar et-func-check-overloads Boolean t
+  "Whether to check all overloads of functions.")
+
 (defun et--func-check-body (params func-type body-path)
   "The path should point to the function expr.
 
@@ -1161,23 +1167,30 @@ Returns the type of the last expression in the body."
   (et-declare (func-type *et-type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
               (@return *et-type))
 
-  (pcase-let* ((`(,polys ,input-type ,expected-ret) (et--func-destructure func-type)))
-    (et--with-polymorphic-types polys
-      (let* ((param-types (et--func-param-types params input-type))
-             (param-vars (cl-loop for (p . type) in param-types collect (et-new-var p type))))
+  (cl-loop
+   with overloads = (et--func-destructure func-type et-func-check-overloads)
+   for (polys input-type expected-ret) in overloads
+   for overload-idx upfrom 1
+   collect
+   (et-with-diagnostic-prefix (when (cdr overloads) (format "Overload %s" overload-idx))
+     (et--with-polymorphic-types polys
+       (let* ((param-types (et--func-param-types params input-type))
+              (param-vars (cl-loop for (p . type) in param-types collect (et-new-var p type))))
 
-        ;; Ensure that optional parameters are nillable
-        (dolist (opt (cadr params))
-          (unless (et-subtype? (et Nil) (alist-get opt param-types))
-            (et-err nil "Optional parameter %s is not nillable" opt)))
+         ;; Ensure that optional parameters are nillable
+         (dolist (opt (cadr params))
+           (unless (et-subtype? (et Nil) (alist-get opt param-types))
+             (et-err nil "Optional parameter %s is not nillable" opt)))
 
-        (et-with-vars param-vars
-          ;; The body runs whenever the function is called, not here
-          (et-checker-deferred
-            (let* ((actual-ret (et-checker-tail body-path)))
-              (or (et-subtype? actual-ret expected-ret)
-                  (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
-              actual-ret)))))))
+         (et-with-vars param-vars
+           ;; The body runs whenever the function is called, not here
+           (et-checker-deferred
+             (let* ((actual-ret (et-checker-tail body-path)))
+               (or (et-subtype? actual-ret expected-ret)
+                   (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
+               actual-ret))))))
+   into rets
+   finally return (et-simplify-type (apply #'et--or rets))))
 
 
 ;;;;; Checkers

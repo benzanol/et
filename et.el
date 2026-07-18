@@ -157,7 +157,10 @@ expression that is not actually in the buffer, ensure that
 
 (defmacro et-with-diagnostic-prefix (prefix-obj &rest body)
   (declare (indent 1))
-  `(let* ((et--diagnostic-prefixes (cons ,prefix-obj et--diagnostic-prefixes )))
+  `(let* ((prefix ,prefix-obj)
+          (et--diagnostic-prefixes
+           (if (null prefix) et--diagnostic-prefixes
+             (cons prefix et--diagnostic-prefixes))))
      ,@body))
 
 (defun et--diagnostic-message (fmt args)
@@ -2389,16 +2392,30 @@ same as [T (<= T Number)]."
            (if (cl-subsetp (et-type-case-typeofs super) (et-type-case-typeofs sub))
                (et--success-match-result nil) (et--failed-match-result))
 
+           ;; For all polymorphs in the super-type,
+           ;; the subtype must have the same polymorphs,
+           ;; or be guaranteed smaller than all of the polymorphs
            (cl-loop for poly in (et-type-case-polymorphs super)
                     collect
                     (if (memq poly (et-type-case-polymorphs sub)) (et--success-match-result nil)
+                      ;; Look for a lower bound on the polymorph
+                      ;; which guarantees that it will be larger than sub,
+                      ;; or that guarantees that it will NOT be larger than sub
                       (cl-loop for (op lower-bound) in (et--polymorphic-type-constraints poly)
-                               for or-result =
-                               (when (eq op 'P:GEQ)
-                                 (et--subtype?-1 (et-type sub) lower-bound))
+                               ;; The polymorph is DEFINITELY NOT larger than sub
+                               when (and (eq op 'P:NGEQ)
+                                         ;; (LB !<= poly) & (LB <= sub) implies (sub !<= poly)
+                                         (et-subtype? lower-bound (et-type sub)))
+                               return (et--failed-match-result)
+                               ;; The polymorph is larger than sub if the subtype succeeds
+                               for or-result = (when (eq op 'P:GEQ)
+                                                 (et--subtype?-1 (et-type sub) lower-bound))
                                when or-result collect or-result into or-results
                                finally return
-                               (let* ((res (et--success-match-result (list (list 'I:GEQ poly (et-type sub))))))
+                               ;; Based on what the polymorph ends up resolving to,
+                               ;; sub MAY OR MAY NOT be smaller than the polymorph
+                               (let* ((res (et--success-match-result
+                                            (list (list 'I:GEQ poly (et-type sub))))))
                                  (et--subtype-result-or (cons res or-results)))))
                     into results
                     finally return (apply #'et--merge-match-results results))
@@ -2413,9 +2430,14 @@ same as [T (<= T Number)]."
     (if (or (and success (null indes)) (null sub-polys)) result
       ;; If the above failed, and there are polymorphs in the subtype,
       ;; our last hope is having subtype be conditional on those polymorphs
-      (et--success-match-result
-       (append (cl-loop for name in sub-polys collect (list 'I:LEQ name (et-type super)))
-               indes)))))
+      (cl-loop for poly in sub-polys
+               ;; There is a constraint that super CANNOT be larger than this polymorph.
+               when (cl-loop for (op upper-bound) in (et--polymorphic-type-constraints poly)
+                             ;; (poly !<= UB) & (super <= UB) implies (poly !<= super)
+                             thereis (and (eq op 'P:NLEQ) (et-subtype? (et-type super) upper-bound)))
+               return (et--failed-match-result)
+               collect (list 'I:LEQ poly (et-type super)) into new-indes
+               finally return (et--success-match-result (append new-indes indes))))))
 
 ;; This function could just use `et-sub-match', but it needs to take
 ;; into account binds.
