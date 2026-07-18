@@ -132,10 +132,15 @@
              when (and (string-match-p ": hint: " line)
                        (string-match
                         (concat ": hint: "
+                                "\\(\\(?:\\[[^]]*\\] \\)*\\)"
                                 (regexp-quote prefix)
                                 "\\(.*?\\) path=")
                         line))
-             return (string-trim (match-string 1 line)))))
+             collect (string-trim
+                      (concat (match-string 1 line)
+                              (match-string 2 line)))
+             into matches
+             finally return (when matches (string-join matches "\n")))))
 
 (defun et--peek (cb)
   "Determine the type of the expression at point, then call CB with it."
