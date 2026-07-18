@@ -160,7 +160,7 @@ expression that is not actually in the buffer, ensure that
   `(let* ((prefix ,prefix-obj)
           (et--diagnostic-prefixes
            (if (null prefix) et--diagnostic-prefixes
-             (cons prefix et--diagnostic-prefixes))))
+             (cons (et-pp prefix) et--diagnostic-prefixes))))
      ,@body))
 
 (defun et--diagnostic-message (fmt args)
@@ -2928,6 +2928,16 @@ Returns the final list of generic types, or `INVALID'."
    type nil
    (lambda (_ case value)
      (et-copy-with case :value value :binds nil :typeofs nil))))
+
+(defun et-remove-type-binds-and-polys (type polys)
+  (et-declare (type *et-type) (polys ListR<EtGeneric>) (@return *et-type))
+  (et--recursively-modify-type
+   type nil
+   (lambda (_ case value)
+     (et-copy-with case :value value :binds nil :typeofs nil
+                   :polymorphs
+                   (cl-remove-if (lambda (x) (memq x polys))
+                                 (et-type-case-polymorphs case))))))
 
 (defun et--type-binds (type)
   (declare (et (type *et-type) (@return EtBinds)))

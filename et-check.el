@@ -1188,7 +1188,7 @@ Returns the type of the last expression in the body."
              (let* ((actual-ret (et-checker-tail body-path)))
                (or (et-subtype? actual-ret expected-ret)
                    (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
-               actual-ret))))))
+               (et-remove-type-binds-and-polys actual-ret (mapcar #'car polys))))))))
    into rets
    finally return (et-simplify-type (apply #'et--or rets))))
 
