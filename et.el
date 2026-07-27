@@ -35,8 +35,93 @@
 
 
 ;;; ============================================================
-;;; Results
-;;;; Struct
+;;; Type declarations
+
+(et-declare
+ (@alias EtRel TreeR<Integer>) ; An (unflattened) relative path
+ (@alias EtPath List<Integer>)
+ (@alias EtSeverity (or @error @warning @hint))
+ (@alias EtDiagnostic (Tuple EtPath EtSeverity String)))
+
+(et-declare
+ (@alias EtBinds AList<*et-var~*et-type>))
+
+(et-declare
+ (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO))
+ (@alias EtDatatypeProps
+         (PList :args (or List<EtDatatypeRole> (Function (Args ListR<Any>) List<EtDatatypeRole>))
+                :overlap True|List<Symbol>
+                :predicate (Function Any True|List<Any>)))
+ (@alias EtDatatypeName (or @Any @Literal @NonNil
+                            @Symbol @NonNilSymbol @Var @Number @Integer @Positive @Negative @String
+                            @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
+                            @Function @DynFunction
+                            @Struct))
+ (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
+
+(et-declare
+ (@alias EtPolymorphConstraint
+         (Tuple (or @P:LEQ @P:NLEQ @P:GEQ @P:NGEQ) *et-type))
+ (@alias EtPolymorphicTypes AList<EtGeneric~ListR<EtPolymorphConstraint>>))
+
+(et-declare
+ (@alias EtTypeSpec Any)
+ (@alias EtGeneric Var)
+ (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
+ (@alias EtAliasName Var)
+ (@alias EtAliasDefinitionPlist
+         (PList :custom (or Nil (Function Args<List<Any>> *et-repr))
+                :generics List<EtGeneric>
+                :constraints List<EtTypeConstraint>
+                :repr (or Nil EtRepr)
+                :type (or Nil *et-type))))
+
+(et-declare
+ (@alias EtMatchResult *et-match-result<List<EtMatchConstraint>>))
+
+(et-declare
+ (@alias EtLabel (PList :field Symbol :position Number|Nil))
+
+ (@alias EtMatchStack (List (Tuple @SUB|@SUPER EtRepr *et-type)))
+ (@alias EtTypeConstraint
+         (Tuple (or @Q:GEQ @Q:LEQ) EtGeneric *et-type))
+ (@alias EtNoinferConstraint
+         (Tuple (or @R:LEQ @R:GEQ) EtRepr *et-type))
+ (@alias EtMatchFunctionConstraint
+         (Tuple @R:FN
+                ;; The DynFunction matcher and output (sub)
+                *et-matcher EtRepr
+                ;; The Function input and output (super)
+                EtRepr EtRepr))
+ (@alias EtMatchConstraint
+         (or EtTypeConstraint EtNoinferConstraint
+             EtMatchFunctionConstraint))
+
+ (@alias EtReprFactor
+         (or (TupleStar @S:DT EtDatatypeName List<Any>)
+             (TupleStar @S:ALIAS EtAliasName List<*et-type>)
+             (Tuple @S:GENERIC EtGeneric)
+             (Tuple @S:POLY EtGeneric)
+             (Tuple @S:NOINFER EtRepr AList<EtGeneric~EtRepr>)
+             (TupleStar @S:OP Var List<Any>)
+             (Tuple @S:SET EtRepr *et-type)))
+
+ (@alias EtReprCase (ListR EtReprFactor))
+ (@alias EtReprDnf (ListR EtReprCase))
+
+ (@alias EtRepr *et-repr)
+
+ ;; Could have a stricter type. Maybe later.
+ (@alias EtSpec Any))
+
+(et-declare
+ (@alias EtIndeterminate (Tuple (or @I:LEQ @I:GEQ EtGeneric *et-type)))
+ (@alias EtSubtypeResult *et-match-result<List<EtIndeterminate>>))
+
+
+;;; ============================================================
+;;; Results - et:result
+;;;; Explanation
 
 ;; When type-checking an expression, it is important to know where
 ;; each error occurred in the expression. Since emacs lisp code is
@@ -44,36 +129,69 @@
 ;; paths to the correct expression, where each element of the path is
 ;; the index in the next expression.
 ;;
-;; An `et-result' struct represents the result of performing some
+;; An `et:result' struct represents the result of performing some
 ;; action on an expression. It contains the output value, whether it
 ;; succeeded or failed, and a list of diagnostics which occurred, and
 ;; where they occurred in the expression.
 ;;
-;; To collect an et-result, wrap the corresponding code in an
+;; To collect an et:result, wrap the corresponding code in an
 ;; `et-result-boundary'. This will declare a collection of dynamically
 ;; scoped variables for collecting information about checking. If an
 ;; error is thrown, the result boundary will catch an error, and
-;; observe the current value of `et--path' to see where the error
-;; occurred.
+;; observe the current value of `et:result--path' to see where the
+;; error occurred.
 ;;
 ;; The `et-at' macro should be used whenever processing a
 ;; sub-expression of the current expression. The `et-error-boundary'
 ;; function should also be used to continue from a certain location in
 ;; the event of an error.
 
-(et-declare
- (@alias EtPath List<Integer>)
- (@alias EtSeverity (or @error @warning @hint))
- (@alias EtDiagnostic (Tuple EtPath EtSeverity String)))
 
-(defvar et--in-result? nil)
+;;;; Dynamic variables
 
-(cl-defstruct et-result
+;; Each result boundary will dynamically bind these variables. At the
+;; end of the result boundary, they will be collected to create the
+;; result.
+
+(et-defvar et:result--active? Boolean nil)
+
+(et-defvar et:result--path List<Integer> nil
+  "The path to the current expression being processed.")
+
+(et-defvar et:result--path-offset Integer 0
+  "An offset for future appends to `et:result--path'.
+
+This is relevant if the current expression being processed is actually
+the cdr of a larger expression. For example, when type checking a
+function body, the body of the function is the `cddr' (offset=2) of a
+lambda expression, or the `cdddr' (offset=3) of a defun.")
+
+(et-defvar et:result--sticky-path Boolean nil
+  "Whether to inhibit modifications to `et:result--path'.
+
+`et:result--path' should only be changed when the expression being evaluated
+corresponds to an expression present in the buffer. When calling a
+function which thinks it is operating on a buffer expression, with an
+expression that is not actually in the buffer, ensure that
+`et:result--sticky-path' is non-nil to avoid creating an invalid path.")
+
+(et-defvar et:result--diagnostics List<EtDiagnostic> nil
+  "Diagnostics collected for the current result.")
+
+(et-defvar et:result--diagnostic-prefixes List<String> nil
+  "Prefixes to show for all diagnostics, in reverse order.")
+
+(et-defvar et:result--failed Boolean nil)
+
+
+;;;; Struct
+
+(cl-defstruct et:result
   (value nil :et-generics [T] :et T|Nil)
   (failed nil :et Boolean)
   (diagnostics nil :et List<EtDiagnostic>))
 
-(cl-defmethod cl-print-object ((result et-result) stream)
+(cl-defmethod cl-print-object ((result et:result) stream)
   (cl-flet* ((count-str (count) (if (eq count 0) "" (format " (+%s)" count))))
 
     (if (et-result-failed result)
@@ -90,176 +208,147 @@
 
 ;;;; Paths
 
-(defvar et--path nil
-  "The path to the current expression being processed.")
+(defun et:result--resolve-path (rel)
+  (et-declare (rel EtRel) (@return EtPath))
 
-(defvar et--path-offset 0
-  "An offset for future appends to `et--path'.
-
-This is relevant if the current expression being processed is actually
-the cdr of a larger expression. For example, when type checking a
-function body, the body of the function is the `cddr' (offset=2) of a
-lambda expression, or the `cdddr' (offset=3) of a defun.")
-
-(defvar et--sticky-path nil
-  "Whether to inhibit modifications to `et--path'.
-
-`et--path' should only be changed when the expression being evaluated
-corresponds to an expression present in the buffer. When calling a
-function which thinks it is operating on a buffer expression, with an
-expression that is not actually in the buffer, ensure that
-`et--sticky-path' is non-nil to avoid creating an invalid path.")
-
-(et-declare
- (@variable et--path List<Integer>)
- (@variable et--path-offset Integer)
- (@variable et--sticky-path Boolean))
-
-(defun et--resolve-path (rel)
-  (declare (et (rel Tree<Integer>) (@return List<Integer>)))
-
-  (if et--sticky-path et--path
+  (if et:result--sticky-path et:result--path
     (if-let* ((flat (flatten-tree (list rel))))
-        (append et--path (list (+ et--path-offset (car flat))) (cdr flat))
-      et--path)))
+        (append et:result--path (list (+ et:result--path-offset (car flat))) (cdr flat))
+      et:result--path)))
 
 (defmacro et-at (rel &rest body)
-  (declare (indent 1) (et (@expand)))
+  (declare (indent 1) (et (@with EtRel)))
   (let* ((orig-var (gensym 'orig)))
     ;; On error, we want the path to stay where it is, hence using setq instead of let
-    `(let ((,orig-var et--path))
-       (setq et--path (et--resolve-path ,rel))
-       (prog1 (let ((et--path-offset 0)) ,@body)
-         (setq et--path ,orig-var)))))
+    `(let ((,orig-var et:result--path))
+       (setq et:result--path (et:result--resolve-path ,rel))
+       (prog1 (let ((et:result--path-offset 0)) ,@body)
+         (setq et:result--path ,orig-var)))))
 
 (defmacro et-at-offset (offset &rest body)
-  (declare (indent 1) (et (@expand)))
+  (declare (indent 1) (et (@with Integer)))
   ;; On error, we want the path to stay where it is, hence using setq instead of let
-  `(let ((et--path-offset (+ et--path-offset ,offset)))
+  `(let ((et:result--path-offset (+ et:result--path-offset ,offset)))
      ,@body))
 
 
-(defmacro et-with-sticky-path (&rest body)
-  "Evaluate BODY with a sticky path. See `et--sticky-path'."
-  `(let* ((et--sticky-path t)) ,@body))
+(defmacro et-at-sticky (rel &rest body)
+  "Evaluate BODY with a sticky path at path REL."
+  (declare (indent 1) (et (@with EtRel)))
+  `(et-at ,rel (let* ((et:result--sticky-path t)) ,@body)))
 
 
 ;;;; Diagnostics
 
-(defvar et--result-diagnostics nil
-  "Diagnostics collected for the current result.")
-
-(defvar et--diagnostic-prefixes nil
-  "Prefixes to show for all diagnostics, in reverse order.")
-
-(defvar et--result-failed nil)
-
-
 (defmacro et-with-diagnostic-prefix (prefix-obj &rest body)
   (declare (indent 1))
   `(let* ((prefix ,prefix-obj)
-          (et--diagnostic-prefixes
-           (if (null prefix) et--diagnostic-prefixes
-             (cons (et-pp prefix) et--diagnostic-prefixes))))
+          (et:result--diagnostic-prefixes
+           (if (null prefix) et:result--diagnostic-prefixes
+             (cons (et-pp prefix) et:result--diagnostic-prefixes))))
      ,@body))
 
-(defun et--diagnostic-message (fmt args)
-  (cl-loop for prefix in et--diagnostic-prefixes
+(defun et:result--diagnostic-message (fmt args)
+  (et-declare (fmt String) (args ListR<Any>) (@return String))
+  (cl-loop for prefix in et:result--diagnostic-prefixes
            collect (format "[%s]" (et-pp prefix)) into prefixes
            finally return
            (let* ((msg (if args (apply #'format fmt (mapcar #'et-pp args)) (et-pp fmt))))
              (string-join (nreverse (cons msg prefixes)) " "))))
 
-(defun et--diagnostic (rel severity fmt &rest args)
-  (unless et--in-result? (error "Not in a result boundary"))
-  (push (list (et--resolve-path rel) severity
-              (et--diagnostic-message fmt args))
-        et--result-diagnostics)
+(defun et:result--make-diagnostic (rel severity fmt &rest args)
+  (et-declare (rel EtRel) (severity EtSeverity) (fmt String) (args ListR<Any>)
+              (@return Nil))
+  (unless et:result--active? (error "Not in a result boundary"))
+  (push (list (et:result--resolve-path rel) severity
+              (et:result--diagnostic-message fmt args))
+        et:result--diagnostics)
   ;; Intentionally return nil
   nil)
 
-(defmacro et--define-diagnostics-function (name severity &optional failed)
+(defmacro et:result--define-diagnostics-function (name severity &optional failed)
+  (declare (et (@expand)))
   `(defun ,name (relative fmt &rest args)
      ,(format "Create a diagnostic with severity `%s'." severity)
-     (apply #'et--diagnostic relative ',severity fmt args)
-     ,@(when failed (list '(setq et--result-failed t)))
+     (apply #'et:result--make-diagnostic relative ',severity fmt args)
+     ,@(when failed (list '(setq et:result--failed t)))
      nil))
 
-(et--define-diagnostics-function et-err error t)
-(et--define-diagnostics-function et-warn warning)
-(et--define-diagnostics-function et-hint hint)
+(et:result--define-diagnostics-function et-err error t)
+(et:result--define-diagnostics-function et-warn warning)
+(et:result--define-diagnostics-function et-hint hint)
 
-(defun et-fatal (relative fmt &rest args)
-  (et-at relative
-    (error "%s" (et--diagnostic-message fmt args))))
+(defun et-fatal (rel fmt &rest args)
+  (et-declare (rel EtRel) (fmt String) (args ListR<Any>) (@return Nil))
+  (et-at rel
+    (error "%s" (et:result--diagnostic-message fmt args))))
 
 
 ;;;; Boundaries
 
 (defmacro et-wrap-errors (format &rest body)
   "Add context to errors thrown in BODY."
-  (declare (indent 1))
+  (declare (indent 1) (et (@with String)))
   `(condition-case-unless-debug err (progn . ,body)
      (error (error ,format (error-message-string err)))))
 
 (defmacro et-error-boundary (relative &rest body)
-  (declare (indent 1))
+  (declare (indent 1) (et (@with EtRel)))
   `(et-at ,relative
      (condition-case-unless-debug err (progn . ,body)
        (error (et-err nil (error-message-string err))))))
 
 (defmacro et-result-boundary (&rest body)
-  (declare (et (@generics [T])
-               (@return *et-result<T>)))
+  (declare (et (@expand)))
 
-  `(let* ((et--in-result? t)
-          (et--path nil)
-          (et--path-offset 0)
-          (et--sticky-path nil)
-          (et--result-diagnostics nil)
-          (et--result-failed nil))
+  `(let* ((et:result--active? t)
+          (et:result--path nil)
+          (et:result--path-offset 0)
+          (et:result--sticky-path nil)
+          (et:result--diagnostics nil)
+          (et:result--failed nil))
      (make-et-result
       :value (et-error-boundary nil ,@body)
-      :failed et--result-failed
-      :diagnostics et--result-diagnostics)))
+      :failed et:result--failed
+      :diagnostics et:result--diagnostics)))
 
 (defun et-propagate-result (result)
-  (cl-assert et--in-result?)
+  (et-declare (result *et:result<Any>) (@return Nil))
+  (cl-assert et:result--active?)
   (cl-loop for (path severity msg) in (et-result-diagnostics result)
-           do (et--diagnostic path severity msg))
-  (when (et-result-failed result) (setq et--result-failed t)))
-
-;; I think that this is a bad idea: either be a result boundary or don't, not both
-;; (defmacro et-subresult-boundary (&rest body)
-;;   `(let* ((result (et-result-boundary ,@body)))
-;;      (when et--in-result? (et-propagate-result result))
-;;      result))
+           do (et:result--make-diagnostic path severity msg))
+  (when (et-result-failed result) (setq et:result--failed t))
+  nil)
 
 (defmacro et-failed-boundary (&rest body)
-  "Evaluate BODY with `et--result-failed' temporarily bound to nil.
+  "Evaluate BODY with `et:result--failed' temporarily bound to nil.
 
 Sometimes, we care whether a particular function call failed. Checking
-`et--result-failed' normally isn't sufficient, because it already might
+`et:result--failed' normally isn't sufficient, because it already might
 be non-nil."
+  (declare (et (@progn)))
   `(let* ((value-and-failed
-           (let* ((et--result-failed nil))
-             (cons (progn ,@body) et--result-failed))))
-     (setq et--result-failed (or et--result-failed (cdr value-and-failed)))
+           (let* ((et:result--failed nil))
+             (cons (progn ,@body) et:result--failed))))
+     (setq et:result--failed (or et:result--failed (cdr value-and-failed)))
      (car value-and-failed)))
 
 
 ;;;; Utils
 
 (defun et-result-map (func exprs)
+  (et-declare (@generics [I O]) (func (fn (Args I) O)) (exprs ListR<I>)
+              (@return List<O>))
   (cl-loop for expr in exprs
            for idx upfrom 0
            collect (et-at idx (funcall func expr))))
 
 
 ;;; ============================================================
-;;; Utils
+;;; Utils - et:util
 ;;;; Modify struct
 
+;; TODO: Create a custom checker
 (defun et-copy-with (struct &rest changes)
   "Return a copy of STRUCT with properties CHANGES."
   (unless (cl-struct-p struct)
@@ -275,7 +364,7 @@ be non-nil."
 ;;;; Repeat
 
 (defmacro et-repeat (var repls &rest body)
-  (declare (indent 2))
+  (declare (indent 2) (et (@expand)))
   (cl-assert (vectorp repls))
   (cl-loop for repl across repls
            collect (cl-subst repl var body) into all
@@ -285,15 +374,15 @@ be non-nil."
 ;;;; Quote macro
 
 (eval-and-compile
-  (defun et--copy-quotes (expr)
+  (defun et:util--copy-quotes (expr)
     (cond ((and (eq (car-safe expr) #'quote) (consp (cdr-safe expr)))
            (list #'copy-tree expr))
-          ((consp expr) (cons (et--copy-quotes (car expr)) (et--copy-quotes (cdr expr))))
+          ((consp expr) (cons (et:util--copy-quotes (car expr)) (et:util--copy-quotes (cdr expr))))
           (t expr))))
 
 (et-test
  (equal '(a (copy-tree '(b)) c (copy-tree ''(((1 2 'hi)))))
-        (et--copy-quotes '(a '(b) c ''(((1 2 'hi)))))))
+        (et:util--copy-quotes '(a '(b) c ''(((1 2 'hi)))))))
 
 
 (defmacro et-q (expr)
@@ -305,28 +394,22 @@ could be improved in the future by replacing all list literals with
 instances of `list' and `cons', but this is not currently a high
 priority."
   (declare (et (@expand)))
-  (et--copy-quotes (cdr (backquote-process expr))))
+  (et:util--copy-quotes (cdr (backquote-process expr))))
 
 (defmacro et-ql (&rest exprs)
   (declare (et (@expand)))
-  (et--copy-quotes (cdr (backquote-process exprs))))
+  (et:util--copy-quotes (cdr (backquote-process exprs))))
 
 
-;;;; Dnf And
+;;;; Dnf intersection
 
-(et-declare
- (@function et--dnf-and (&rest dnfs)
-            (@generics [T])
-            (dnfs ListR<ListR<ListR<T>>>)
-            (@return List<List<T>>)))
-
-(defun et--dnf-and (&rest dnfs)
+(et-defun et-dnf-intersect ([T] &rest dnfs: ListR<ListR<ListR<T>>>) List<List<T>>
   "Return the DNF of intersecting DNFS."
 
   (pcase dnfs
     ('() (list (list)))
     (`(,a) a)
-    (`(,a ,b ,c . ,rest) (et--dnf-and a (apply #'et--dnf-and b c rest)))
+    (`(,a ,b ,c . ,rest) (et-dnf-intersect a (apply #'et-dnf-intersect b c rest)))
     (`(,a ,b)
      (cl-loop for a-case in a
               nconc
@@ -336,9 +419,12 @@ priority."
 
 ;;;; Stop recursion
 
-(defvar et--stop-recursion-unset-marker (gensym "unset@"))
+(et-defvar et:util--stop-recursion-unset-marker Symbol (gensym "unset@"))
 
-(defmacro et--stop-recursion (var elem default &rest body)
+(et-defun et-stop-recursion-unset? (obj: Any) Boolean
+  (eq obj et:util--stop-recursion-unset-marker))
+
+(defmacro et-stop-recursion (var elem default &rest body)
   "This allows defining recursive algorithms that loop.
 
 A function implementing this kind of algorithm should define a stack
@@ -353,20 +439,17 @@ variable."
   (declare (indent 3) (et (@expand)))
   `(let ((elem ,elem))
      (if-let* ((entry (assoc elem ,var)))
-         (if (eq (cdr entry) et--stop-recursion-unset-marker)
+         (if (et-stop-recursion-unset? (cdr entry))
              (setcdr entry ,default)
            (cdr entry))
 
-       (let ((,var (cons (cons elem et--stop-recursion-unset-marker) ,var)))
+       (let ((,var (cons (cons elem et:util--stop-recursion-unset-marker) ,var)))
          ,@body))))
 
 
 ;;; ============================================================
 ;;; Types
 ;;;; Struct
-
-(et-declare
- (@alias EtBinds AList<*et-var~*et-type>))
 
 (cl-defstruct et-var
   "A variable currently in scope."
@@ -377,12 +460,12 @@ variable."
   (name nil :et Var)
   (args nil :et List<*et-type|Any>))
 
-(cl-defstruct et-alias
+(cl-defstruct et:type-alias
   "A type alias factor of an `et-type'."
   (name nil :et Var)
   (args nil :et List<*et-type>))
 
-(cl-defstruct et-type-case
+(cl-defstruct et:type-case
   "Struct representing a case of an `et-type'.
 
 BINDS is a list of (`et-var' . `et-type').
@@ -435,19 +518,6 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 
 ;;;; Datatypes
-
-(et-declare
- (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO))
- (@alias EtDatatypeProps
-         (PList :args (or List<EtDatatypeRole> (Function (Args ListR<Any>) List<EtDatatypeRole>))
-                :overlap True|List<Symbol>
-                :predicate (Function Any True|List<Any>)))
- (@alias EtDatatypeName (or @Any @Literal @NonNil
-                            @Symbol @NonNilSymbol @Var @Number @Integer @Positive @Negative @String
-                            @ConsFull @ConsFresh @VectorFull @VectorFresh @PList
-                            @Function @DynFunction
-                            @Struct))
- (@variable et--datatypes AList<EtDatatypeName~EtDatatypeProps>))
 
 (defvar et--datatypes
   (et! AList<EtDatatypeName~EtDatatypeProps>
@@ -537,11 +607,6 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
 
 ;;;; Polymorphic types
-
-(et-declare
- (@alias EtPolymorphConstraint
-         (Tuple (or @P:LEQ @P:NLEQ @P:GEQ @P:NGEQ) *et-type))
- (@alias EtPolymorphicTypes AList<EtGeneric~ListR<EtPolymorphConstraint>>))
 
 (et-defvar et--polymorphic-types EtPolymorphicTypes nil
   "Polymorphic types in scope.")
@@ -902,18 +967,6 @@ FUNC is called with one argument, the current argument"
 
 ;;;; Defining aliases
 
-(et-declare
- (@alias EtTypeSpec Any)
- (@alias EtGeneric Var)
- (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
- (@alias EtAliasName Var)
- (@alias EtAliasDefinitionPlist
-         (PList :custom (or Nil (Function Args<List<Any>> *et-repr))
-                :generics List<EtGeneric>
-                :constraints List<EtTypeConstraint>
-                :repr (or Nil EtRepr)
-                :type (or Nil *et-type))))
-
 (defmacro et-define-custom-alias (name arglist &rest body)
   (declare (indent 2))
   (let* ((props (cl-loop while (keywordp (car body))
@@ -1189,7 +1242,7 @@ DNF is the struct representing the matcher."
                         (et--repr-expand-aliases (et--alias-call name args 'MATCHER scope) scope)))
                       (other (list (list other))))
                     into and-terms
-                    finally return (apply #'et--dnf-and and-terms))
+                    finally return (apply #'et-dnf-intersect and-terms))
            into new-cases
            finally return (make-et-repr :dnf new-cases :generics scope :label (et-repr-label repr))))
 
@@ -1199,7 +1252,7 @@ DNF is the struct representing the matcher."
 (defvar et--constraints-stack nil
   "Stack of calls to `et--sub/super-constraints' for preventing loops.
 
-Used by `et--stop-recursion', with ELEM=(`sub'|`super' M-REPR TYPE).
+Used by `et-stop-recursion', with ELEM=(`sub'|`super' M-REPR TYPE).
 Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (defun et-iso-constraints (matcher type)
@@ -1228,9 +1281,6 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (defvar et-cache-constraints nil
   "Cache calls to `et--sub/super-constraints'.")
-
-(et-declare
- (@alias EtMatchResult *et-match-result<List<EtMatchConstraint>>))
 
 (defun et-sub-constraints (matcher type)
   "Entrypoint for calculating constraints."
@@ -1267,8 +1317,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (et--verify-matcher matcher)
   (et--verify-type type)
 
-  (et--stop-recursion et--constraints-stack (list 'sub (et-matcher-repr matcher) type)
-                      (et--success-match-result nil)
+  (et-stop-recursion et--constraints-stack (list 'sub (et-matcher-repr matcher) type)
+                     (et--success-match-result nil)
     (et--sub-constraints-1 matcher type)))
 
 (defun et--sub-constraints-1 (matcher type)
@@ -1401,8 +1451,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (et--verify-type type)
 
   ;; The 'super' version of scoped constraint checking
-  (et--stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type)
-                      (et--success-match-result nil)
+  (et-stop-recursion et--constraints-stack (list 'super (et-matcher-repr matcher) type)
+                     (et--success-match-result nil)
     (et--super-constraints-1 matcher type)))
 
 (defun et--super-constraints-1 (matcher type)
@@ -1451,41 +1501,6 @@ never be read for any purpose other than assertions."
   (dnf nil :et EtReprDnf)
   (generics nil :et List<EtGeneric>)
   (label nil :et EtLabel))
-
-(et-declare
- (@alias EtLabel (PList :field Symbol :position Number|Nil))
-
- (@alias EtMatchStack (List (Tuple @SUB|@SUPER EtRepr *et-type)))
- (@alias EtTypeConstraint
-         (Tuple (or @Q:GEQ @Q:LEQ) EtGeneric *et-type))
- (@alias EtNoinferConstraint
-         (Tuple (or @R:LEQ @R:GEQ) EtRepr *et-type))
- (@alias EtMatchFunctionConstraint
-         (Tuple @R:FN
-                ;; The DynFunction matcher and output (sub)
-                *et-matcher EtRepr
-                ;; The Function input and output (super)
-                EtRepr EtRepr))
- (@alias EtMatchConstraint
-         (or EtTypeConstraint EtNoinferConstraint
-             EtMatchFunctionConstraint))
-
- (@alias EtReprFactor
-         (or (TupleStar @S:DT EtDatatypeName List<Any>)
-             (TupleStar @S:ALIAS EtAliasName List<*et-type>)
-             (Tuple @S:GENERIC EtGeneric)
-             (Tuple @S:POLY EtGeneric)
-             (Tuple @S:NOINFER EtRepr AList<EtGeneric~EtRepr>)
-             (TupleStar @S:OP Var List<Any>)
-             (Tuple @S:SET EtRepr *et-type)))
-
- (@alias EtReprCase (ListR EtReprFactor))
- (@alias EtReprDnf (ListR EtReprCase))
-
- (@alias EtRepr *et-repr)
-
- ;; Could have a stricter type. Maybe later.
- (@alias EtSpec Any))
 
 ;; A repr is a general format that can be converted to either a
 ;; matcher or a type. It is a list of cases, each of which is a list
@@ -1603,7 +1618,7 @@ never be read for any purpose other than assertions."
                     when (string-empty-p and-seg)
                     do (error "Empty segment in intersection type: %s" s)
                     collect (et-repr-dnf (et--parse-atom and-seg)) into and-parts
-                    finally return (apply #'et--dnf-and and-parts))
+                    finally return (apply #'et-dnf-intersect and-parts))
            into or-parts
            finally return
            (make-et-repr :generics et--parsing-generics
@@ -1797,7 +1812,7 @@ in GEN-REPLS, if it exists."
                        collect
                        (et--repr-factor-substitute-generics factor gen-repls generics)
                        into and-structs
-                       finally return (apply #'et--dnf-and and-structs))
+                       finally return (apply #'et-dnf-intersect and-structs))
               into new-dnf
               finally return (et-copy-with repr :dnf new-dnf :generics generics)))))
 
@@ -1936,7 +1951,7 @@ in GEN-REPLS, if it exists."
          (ds (mapcar #'et-repr-dnf ps)))
     (apply #'nconc ds)))
 (et--define-spec-segment and :full (&rest args)
-  (apply #'et--dnf-and (mapcar #'et-repr-dnf (mapcar #'et--parse-sub args))))
+  (apply #'et-dnf-intersect (mapcar #'et-repr-dnf (mapcar #'et--parse-sub args))))
 
 ;; Repr factors
 
@@ -2342,10 +2357,6 @@ same as [T (<= T Number)]."
 
 ;;;; Subtype
 
-(et-declare
- (@alias EtIndeterminate (Tuple (or @I:LEQ @I:GEQ EtGeneric *et-type)))
- (@alias EtSubtypeResult *et-match-result<List<EtIndeterminate>>))
-
 (defun et--subtype-result-or (or-results)
   (et-declare (or-results ListR<EtSubtypeResult>) (@return EtSubtypeResult))
   (setq or-results (cl-remove-if-not #'et-match-result-success or-results))
@@ -2463,8 +2474,8 @@ same as [T (<= T Number)]."
   (et--verify-type super)
 
   (if (equal sub super) (et--success-match-result nil) ; Not strictly necessary, but improves efficiency
-    (et--stop-recursion et--subtype-stack (cons sub super)
-                        (et--success-match-result nil)
+    (et-stop-recursion et--subtype-stack (cons sub super)
+                       (et--success-match-result nil)
       (et--subtype?-1 sub super))))
 
 (defun et--subtype?-1 (sub super)
@@ -3101,11 +3112,11 @@ Recursive (\"loop\") types are broken with a placeholder alias whose name
 is deterministic within the enclosing `et--rec-transform-datatypes' call
 \(\"Loop0\", \"Loop1\", ...), recorded on `et--rec-transform-datatypes-loops'.
 These temporary uninterned names are rewritten by the wrapper."
-  (et--stop-recursion et--rec-transform-stack (list type)
-                      (let* ((idx (length et--rec-transform-datatypes-loops))
-                             (sym (make-symbol (format "Loop%d" idx))))
-                        (push (cons sym nil) et--rec-transform-datatypes-loops)
-                        (et-type (make-et-alias :name sym :args nil)))
+  (et-stop-recursion et--rec-transform-stack (list type)
+                     (let* ((idx (length et--rec-transform-datatypes-loops))
+                            (sym (make-symbol (format "Loop%d" idx))))
+                       (push (cons sym nil) et--rec-transform-datatypes-loops)
+                       (et-type (make-et-alias :name sym :args nil)))
 
     (cl-loop for case in (et-type-cases type)
              for val = (et-type-case-value case)
@@ -3130,7 +3141,7 @@ These temporary uninterned names are rewritten by the wrapper."
              (let* ((type (make-et-type :label (et-type-label type) :cases new-cases))
                     (no-binds (et--remove-type-binds type))
                     (alias-type (cdar et--rec-transform-stack)))
-               (if (not (eq alias-type et--stop-recursion-unset-marker))
+               (if (not (et-stop-recursion-unset? alias-type))
                    (let* ((alias (et-type-case-value (car (et-type-cases alias-type))))
                           (sym (et-alias-name alias)))
                      (setcdr (assq sym et--rec-transform-datatypes-loops) no-binds)

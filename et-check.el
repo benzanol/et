@@ -1659,8 +1659,8 @@ onto the original expression."
          ;; If we get another expansion inside an expansion, keep the original root-level expr
          (et--macroexpand-expr (or et--macroexpand-expr et--checker-expr))
          (result
-          (et-with-sticky-path
-           (et--check expanded et--checker-narrows recommendation))))
+          (et-at-sticky nil
+            (et--check expanded et--checker-narrows recommendation))))
     (setq et--checker-narrows (et--check-result-narrows result))
     (et--check-result-type result)))
 

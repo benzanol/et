@@ -44,13 +44,24 @@
   (declare (indent 3) (doc-string 4))
   `(defvar ,symbol . ,rest))
 
+(defmacro et-defstruct (name &rest args)
+  (declare (doc-string 2) (indent 1))
+  `(cl-defstruct
+       (,(or (car-safe name) name)
+        (:conc-name ,(intern (format "%s->" name)))
+        (:constructor ,(intern (format "%s-new" name)))
+        (:copier ,(intern (format "%s-copy" name)))
+        ,@(cdr-safe name))
+     ,@args))
+
 (defmacro et-defun (name arglist return &rest body)
   "Define NAME as a function with type annotations.
 
 \(fn NAME ARGLIST RETURN [DOCSTRING] [DECL] [INTERACTIVE] BODY...)"
   (declare (indent 3) (doc-string 4))
 
-  (let* (args decls)
+  (let* ((doc (when (stringp (car body)) (pop body)))
+         args decls)
     (when (vectorp (car arglist)) (push (list '@generics (pop arglist)) decls))
     (while-let ((arg (pop arglist)) (arg-str (format "%s" arg)))
       (if (not (string-match "^\\(.*\\):$" arg-str)) (push arg args)
@@ -59,11 +70,12 @@
     (push (list '@return return) decls)
     (if (assq 'et-declare body) (cl-callf2 nconc (nreverse decls) (alist-get 'et-declare body))
       (cl-callf2 nconc (nreverse decls) (alist-get 'et (alist-get 'declare body))))
-    `(cl-defun ,name ,(nreverse args) ,@(when (stringp (car body)) (list (pop body))) ,@body)))
+    `(cl-defun ,name ,(nreverse args) ,@(when doc (list doc)) ,@body)))
 
 (setf (alist-get 'et defun-declarations-alist) (list #'ignore)
       (alist-get 'et macro-declarations-alist) (list #'ignore))
 
-
 (provide 'et-macros)
+
+
 ;;; et-macros.el ends here
