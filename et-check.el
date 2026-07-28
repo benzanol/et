@@ -68,7 +68,7 @@
 TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
   (when et-display-narrows
     (cl-loop for (fmt type) on types by #'cddr
-             for binds = (et--type-binds type) ; TODO: display just binds instead of whole type
+             for binds = (et:algebra-type-binds type) ; TODO: display just binds instead of whole type
              when binds do (et-hint path fmt (et-pp-narrows binds)))))
 
 
@@ -194,13 +194,13 @@ determine the output type."
        ((and (let func-type (et-function-type func)) (guard func-type))
         (let* ((arg-types (cl-loop for type in (et-checker-remaining 1) for pos upfrom 1
                                    collect (et-copy-with type :label (list :position pos))))
-               (args-type (et--tuple 'Cons arg-types))
+               (args-type (et-tuple 'Cons arg-types))
                (output-result (et-funcall func-type args-type)))
           (cond
            ((et-match-result-success output-result) (et-match-result-value output-result))
            ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
            ;; which means the true error was in the arguments, not this call
-           (et--result-failed nil)
+           ((et-result-failed?) nil)
            ;; The stack in OUTPUT-RESULT is a list of (`sub'/`super' MATCHER TYPE)
            (t
             ;; Find the stack frame corresponding to the position
@@ -292,7 +292,7 @@ type, use `et-checker-tail'."
   (et-declare (a EtNarrows) (b EtNarrows) (@return EtNarrows))
   (cl-loop for (var . t1) in a
            for t2 = (alist-get var b)
-           when t2 collect (cons var (et-simplify-type (et--or t1 t2)))))
+           when t2 collect (cons var (et:algebra-simplify-type (et-union t1 t2)))))
 
 (defun et-checker-branches (&rest branches)
   "Type check parallel code paths, one of which must execute.
@@ -319,7 +319,7 @@ the resulting `et--checker-narrows'."
 
     (setq et--checker-narrows
           (when all-narrows (cl-reduce #'et--narrows-or all-narrows)))
-    (et-simplify-type (apply #'et--or all-types))))
+    (et:algebra-simplify-type (apply #'et-union all-types))))
 
 
 ;;;;; Condition sub checker
@@ -328,7 +328,7 @@ the resulting `et--checker-narrows'."
   (et-declare (a EtNarrows) (b EtNarrows) (@return EtNarrows))
   (cl-loop for var in (seq-uniq (mapcar #'car (append a b)) #'eq)
            for t1 = (alist-get var a) for t2 = (alist-get var b)
-           collect (cons var (if t1 (if t2 (et--supersect t1 t2) t1) t2))))
+           collect (cons var (if t1 (if t2 (et-supersect t1 t2) t1) t2))))
 
 (defun et-checker-sub-cond (cond-type then else)
   (et-declare (cond-type *et-type) (then fn) (else fn)
@@ -336,11 +336,11 @@ the resulting `et--checker-narrows'."
   (et-checker-branches
    (lambda ()
      (cl-callf et--narrows-and et--checker-narrows
-       (et--type-binds (et--non-nil cond-type)))
+       (et:algebra-type-binds (et-non-nil-of cond-type)))
      (funcall then))
    (lambda ()
      (cl-callf et--narrows-and et--checker-narrows
-       (et--type-binds (et--supersect cond-type (et Nil))))
+       (et:algebra-type-binds (et-nil-of cond-type)))
      (funcall else))))
 
 
@@ -1133,7 +1133,7 @@ Returns the type of the last expression in the body."
                    (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
                (et-remove-type-binds-and-polys actual-ret (mapcar #'car polys))))))))
    into rets
-   finally return (et-simplify-type (apply #'et--or rets))))
+   finally return (et:algebra-simplify-type (apply #'et-union rets))))
 
 
 ;;;;; Checkers
@@ -1570,6 +1570,9 @@ deterministically decide where the subexpressions ended up, but the best
 heuristic is by searching (using `equal') for each nested call to
 `et--check' inside of the original expression.")
 
+(et-defvar et--macroexpand-waiting Boolean nil
+  "We are in a macroexpand, waiting to find a matching expr.")
+
 (defun et--path-in-tree (expr tree)
   "If EXPR exists in TREE, return its path, or return `NO' otherwise."
   (if (equal expr tree) nil
@@ -1580,14 +1583,14 @@ heuristic is by searching (using `equal') for each nested call to
              finally return 'NO)))
 
 (defun et--macroexpand-check-advice (func &rest args)
-  (if (or (null et--macroexpand-expr)
-          (null et--sticky-path))
+  (if (not et--macroexpand-waiting)
       (apply func args)
 
     (let* ((path (et--path-in-tree (car args) et--macroexpand-expr)))
       (if (eq path 'NO) (apply func args)
-        (let* ((et--sticky-path nil))
-          (et-at path (apply func args)))))))
+        (let* ((et--macroexpand-waiting nil))
+          (et-without-sticky-path
+            (et-at path (apply func args))))))))
 
 (advice-add #'et--check :around #'et--macroexpand-check-advice)
 
@@ -1602,7 +1605,7 @@ onto the original expression."
          ;; If we get another expansion inside an expansion, keep the original root-level expr
          (et--macroexpand-expr (or et--macroexpand-expr et--checker-expr))
          (result
-          (et-at-sticky nil
+          (et-with-sticky-path
             (et--check expanded et--checker-narrows recommendation))))
     (setq et--checker-narrows (et--check-result-narrows result))
     (et--check-result-type result)))
