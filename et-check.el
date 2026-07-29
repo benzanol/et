@@ -35,7 +35,7 @@
   "Stack of (SYMBOL . `et-var').")
 
 (defun et-new-var (name type)
-  (make-et-var :name name :type type))
+  (et:type--var-new :name name :type type))
 
 (defun et-get-symbol-var (sym)
   (cl-assert (symbolp sym))
@@ -46,8 +46,8 @@
   "VARS can contain nil values."
   (declare (indent 1))
   `(let* ((vs (cl-loop for var in ,vars
-                       when var do (cl-assert (et-var-p var))
-                       and collect (cons (et-var-name var) var)))
+                       when var do (cl-assert (et:type--var-p var))
+                       and collect (cons (et:type--var->name var) var)))
           (et--binds (append vs et--binds)))
      ,@body))
 
@@ -56,7 +56,7 @@
 
 (defun et-pp-narrows (narrows &optional sep)
   (cl-loop for (var . type) in narrows
-           collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
+           collect (format "%s: %s" (et:type--var->name var) (et-pp type)) into strs
            finally return (string-join strs (or sep "\\n"))))
 
 (defvar et-display-narrows nil
@@ -77,7 +77,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 ;;;; The checking context
 
 (et-declare
- (@alias EtNarrows AList<*et-var~*et-type>))
+ (@alias EtNarrows AList<*et:type--var~*et:type>))
 
 ;; The checking context provides 3 things: an expr, a recommendation,
 ;; and an alist of narrows.
@@ -91,7 +91,7 @@ TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
 
   (get symbol 'et-function-type))
 
-(et-defvar et--checker-recommendation Nil|*et-type nil
+(et-defvar et--checker-recommendation Nil|*et:type nil
   "A hint to the current checker of what type its expression should be.
 
 This should ONLY be used in the checker for `lambda', in order to guess
@@ -111,12 +111,12 @@ only be read by functions in this file.")
 
 (defun et-current-var-type (var)
   "Get the current narrowed type of a variable."
-  (et-declare (var *et-var) (@return *et-type))
+  (et-declare (var *et:type--var) (@return *et:type))
   (or (alist-get var et--checker-narrows)
-      (et-var-type var)))
+      (et:type--var->type var)))
 
 (defun et-get-symbol-type (sym)
-  (et-declare (sym Var) (@return Nil|*et-type))
+  (et-declare (sym Var) (@return Nil|*et:type))
   (cl-assert (symbolp sym))
   (when-let* ((var (et-get-symbol-var sym)))
     (et-current-var-type var)))
@@ -124,12 +124,12 @@ only be read by functions in this file.")
 
 ;;;; Check
 
-(cl-defstruct et--check-result
-  (type nil :et *et-type)
-  (narrows nil :et AList<*et-var~*et-type>))
+(et-defstruct et--check-result
+  (type nil :et *et:type)
+  (narrows nil :et AList<*et:type--var~*et:type>))
 
 (defun et--var-in-scope? (var)
-  (or (eq var (get (et-var-name var) 'et-variable-var))
+  (or (eq var (get (et:type--var->name var) 'et-variable-var))
       (rassq var et--binds)))
 
 (defun et--check (expr narrows recommendation)
@@ -156,13 +156,13 @@ If FUNC is a symbol with the `et-function-type' property set to an
 `et-type', then the arguments to the function will first be checked
 individually, and then will be passed to `et-funcall' as a list to
 determine the output type."
-  (declare (et (expr Sexp) (narrows EtNarrows) (recommendation Nil|*et-type)
+  (declare (et (expr Sexp) (narrows EtNarrows) (recommendation Nil|*et:type)
                (@return *et--check-result)))
 
   (let* ((et--checker-expr expr)
          (et--checker-narrows narrows)
          (et--checker-recommendation recommendation))
-    (make-et--check-result
+    (et--check-result-new
      :type
      (et-failed-boundary
       (or (et-error-boundary nil
@@ -174,7 +174,7 @@ determine the output type."
                           et--checker-narrows))))
 
 (defun et--check-1 ()
-  (declare (et (@return *et-type)))
+  (declare (et (@return *et:type)))
 
   (pcase et--checker-expr
     (`(,func . ,_args)
@@ -187,7 +187,7 @@ determine the output type."
        ;; Custom checker
        ((and (let checker (get func 'et-checker)) (guard checker)
              (let output (funcall checker)))
-        (if (or (null output) (et-type-p output)) output
+        (if (or (null output) (et:type-p output)) output
           (et-fatal nil "Checker for `%s' had invalid return: %s" func output)))
 
        ;; Function type property
@@ -197,7 +197,7 @@ determine the output type."
                (args-type (et-tuple 'Cons arg-types))
                (output-result (et-funcall func-type args-type)))
           (cond
-           ((et-match-result-success output-result) (et-match-result-value output-result))
+           ((et:match-result->success output-result) (et:match-result->value output-result))
            ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
            ;; which means the true error was in the arguments, not this call
            ((et-result-failed?) nil)
@@ -206,12 +206,12 @@ determine the output type."
             ;; Find the stack frame corresponding to the position
             (cl-loop
              with (arg-pos arg-type param-name param-repr) = nil
-             for (_ mrepr type) in (et-match-result-stack output-result)
+             for (_ mrepr type) in (et:match-result->stack output-result)
              ;; Collect the argument position
-             for pos = (plist-get (et-type-label type) :position)
+             for pos = (plist-get (et:type->label type) :position)
              when pos do (setq arg-pos pos arg-type type)
              ;; Collect the parameter type
-             for name = (plist-get (et-repr-label mrepr) :field)
+             for name = (plist-get (et:repr->label mrepr) :field)
              when name do (setq param-name name param-repr mrepr)
              ;; Display the error message
              finally do
@@ -219,9 +219,9 @@ determine the output type."
                  (et-err arg-pos "[%s] Expected %s, found %s" param-name
                          (et-repr-to-string param-repr) arg-type)
                (pcase (et-type-single func-type)
-                 ((or (cl-struct et-datatype (name 'Function) (args `(,input ,_)))
-                      (and (cl-struct et-datatype (name 'DynFunction) (args `(,matcher ,_)))
-                           (let input (et-repr-to-string (et-matcher-repr matcher)))))
+                 ((or (cl-struct et:type--dt (name 'Function) (args `(,input ,_)))
+                      (and (cl-struct et:type--dt (name 'DynFunction) (args `(,matcher ,_)))
+                           (let input (et-repr-to-string (et:match--matcher->repr matcher)))))
                   (et-err (or arg-pos 0) "Expected %s, got %s" input args-type))
                  (_ (et-err (or arg-pos 0) "`%s' has type %s\\nInvalid arguments: %s" func func-type args-type)))))))))
 
@@ -253,21 +253,21 @@ determine the output type."
 
 This assumes that the child will ALWAYS run, and thus that the resulting
 narrows should ALWAYS be applied."
-  (et-declare (path TreeR<Integer>) (recommendation Nil|*et-type)
-              (@return *et-type))
+  (et-declare (path TreeR<Integer>) (recommendation Nil|*et:type)
+              (@return *et:type))
 
   (let* ((flat (flatten-tree path))
          (expr (et--traverse-tree et--checker-expr flat))
          (checked (et-at flat (et--check expr et--checker-narrows recommendation))))
-    (setq et--checker-narrows (et--check-result-narrows checked))
-    (et--check-result-type checked)))
+    (setq et--checker-narrows (et--check-result->narrows checked))
+    (et--check-result->type checked)))
 
 (defun et-checker-remaining (&rest first-path)
   "Check a sequence of expressions, returning all of their types.
 
 This is useful for functions like `list'. If you only need the last
 type, use `et-checker-tail'."
-  (et-declare (first-path TreeR<Integer>) (@return List<*et-type>))
+  (et-declare (first-path TreeR<Integer>) (@return List<*et:type>))
 
   (cl-assert et--checker-expr)
   (cl-assert first-path)
@@ -282,7 +282,7 @@ type, use `et-checker-tail'."
 
 (defun et-checker-tail (&rest first-path)
   "Check a sequence of expressions, returning the type of the last one."
-  (et-declare (first-path TreeR<Integer>) (@return *et-type))
+  (et-declare (first-path TreeR<Integer>) (@return *et:type))
   (or (car (last (et-checker-remaining first-path))) (et Nil)))
 
 
@@ -302,9 +302,9 @@ of the parent function, one or more of the branches must execute. For
 example, for a non-exaustive pcase, a case MUST be added which just
 returns nil. This is to ensure the correctness of the resulting type AND
 the resulting `et--checker-narrows'."
-  (et-declare (branches (ListR fn<Nil~*et-type>)) (@return *et-type))
+  (et-declare (branches (ListR fn<Nil~*et:type>)) (@return *et:type))
 
-  (let* ((all-types (et: List<*et-type> nil))
+  (let* ((all-types (et: List<*et:type> nil))
          (all-narrows (et: List<EtNarrows> nil)))
 
     (dolist (fn branches)
@@ -331,8 +331,8 @@ the resulting `et--checker-narrows'."
            collect (cons var (if t1 (if t2 (et-supersect t1 t2) t1) t2))))
 
 (defun et-checker-sub-cond (cond-type then else)
-  (et-declare (cond-type *et-type) (then fn) (else fn)
-              (@return *et-type))
+  (et-declare (cond-type *et:type) (then fn) (else fn)
+              (@return *et:type))
   (et-checker-branches
    (lambda ()
      (cl-callf et--narrows-and et--checker-narrows
@@ -411,7 +411,7 @@ do not escape into the current flow."
   "Should be called whenever VAR is assigned to TYPE.
 
 This should be called anytime a variable is set."
-  (et-declare (var *et-var) (type *et-type) (@return Nil))
+  (et-declare (var *et:type--var) (type *et:type) (@return Nil))
 
   (setq et--checker-narrows
         (cons (cons var type)
@@ -421,16 +421,16 @@ This should be called anytime a variable is set."
 ;;;; Tests
 
 (defun et-root-check-type (expr)
-  (et-declare (expr Sexp) (@return *et-type))
-  (let* ((result (et-result-boundary (et--check-result-type (et--check expr nil nil)))))
-    (when (et-result-failed result) (error "Type-checking failed"))
-    (et-result-value result)))
+  (et-declare (expr Sexp) (@return *et:type))
+  (let* ((result (et-result-boundary (et--check-result->type (et--check expr nil nil)))))
+    (when (et:result->failed result) (error "Type-checking failed"))
+    (et:result->value result)))
 
 (defmacro et-assert-resolve (type expr &optional not)
   (declare (indent 1))
   `(et-result-boundary
     (let* ((t-type (et-at 1 (et ,type)))
-           (r-type (et-at 2 (et--check-result-type (et--check ',expr nil nil)))))
+           (r-type (et-at 2 (et--check-result->type (et--check ',expr nil nil)))))
       (or (,(if not #'not #'identity) (et-subtype? r-type t-type))
           (et-err 0 "Expected %s, got %s" t-type r-type)))))
 
@@ -440,7 +440,7 @@ This should be called anytime a variable is set."
 
 (defmacro et-assert-resolve-errors (expr)
   `(et-result-boundary
-    (or (et-result-failed (et-result-boundary (et--check-result-type (et--check ',expr nil nil))))
+    (or (et:result->failed (et-result-boundary (et--check-result->type (et--check ',expr nil nil))))
         (et-err 0 "Didn't fail"))))
 
 (et-test
@@ -550,7 +550,7 @@ RETURN is a parsable expression for the return type.
   (let* ((func-type
           (if gen-vec
               (let* ((matcher (et-parse-matcher arglist-spec gen-vec))
-                     (output-repr (et-parse-repr return-spec (et-matcher-generics matcher))))
+                     (output-repr (et-parse-repr return-spec (et:match--matcher->generics matcher))))
                 (et-dt 'DynFunction matcher output-repr))
             (et-dt 'Function (et-parse-type arglist-spec) (et-parse-type return-spec)))))
     (dolist (func (if (symbolp funcs) (list funcs) funcs))
@@ -568,7 +568,7 @@ RETURN is a parsable expression for the return type.
 TYPE is a type or an expression parseable to a type.
 
 PATH is the path to the subexpression."
-  (unless (et-type-p type) (setq type (et-parse-type type)))
+  (unless (et:type-p type) (setq type (et-parse-type type)))
   (let* ((expr-type (et-checker-sub path)))
     (unless (et-subtype? expr-type type)
       (et-err path "Expected %s, found %s" type expr-type))
@@ -584,24 +584,24 @@ PATH is the path to the subexpression."
 
 (defun et--checker-infer (type gens constraints matcher-spec output-spec)
   (let* ((result
-          (et-infer (make-et-matcher
+          (et-infer (et:match--matcher-new
                      :generics gens
                      :constraints constraints
                      :repr (et-parse-repr matcher-spec gens))
                     type
                     (et-parse-repr output-spec gens))))
-    (when (et-match-result-success result)
-      (et-match-result-value result))))
+    (when (et:match-result->success result)
+      (et:match-result->value result))))
 
 
 ;;;; Nicer funcall
 
 (defun et-checker-funcall (func-type arglist-type)
-  (declare (et (func-type *et-type) (arglist-type *et-type)
-               (@return *et-type)))
+  (declare (et (func-type *et:type) (arglist-type *et:type)
+               (@return *et:type)))
   (let* ((result (et-funcall func-type arglist-type)))
-    (when (et-match-result-success result)
-      (et-match-result-value result))))
+    (when (et:match-result->success result)
+      (et:match-result->value result))))
 
 
 ;;; ============================================================
@@ -743,8 +743,8 @@ rare event that the identifier is declaring some custom type."
                   (et-at (list pos test-idx)
                     (pcase (eval test)
                       ('nil (et-warn nil "Evaluated to nil"))
-                      ((and result (pred et-result-p))
-                       (when (et-result-failed result)
+                      ((and result (pred et:result-p))
+                       (when (et:result->failed result)
                          (et-propagate-result result)))))))))))
 
 
@@ -772,9 +772,9 @@ rare event that the identifier is declaring some custom type."
          (PList :parameters EtFuncParameters<Var>
                 :props KVPList<Var~Any>
                 ;; Either a function type or a custom checker
-                :definition (or Nil *et-type (fn Nil *et-type))))
- (@symbol-property et-checker (fn Nil *et-type))
- (@symbol-property et-function-type *et-type)
+                :definition (or Nil *et:type (fn Nil *et:type))))
+ (@symbol-property et-checker (fn Nil *et:type))
+ (@symbol-property et-function-type *et:type)
  (@symbol-property et-function-parameters EtFuncParameters<Var>)
  (@symbol-property et-function-props KVPList<Var~Any>))
 
@@ -830,7 +830,7 @@ element."
 
   (if generics
       (et-dt 'DynFunction
-             (make-et-matcher :generics generics
+             (et:match--matcher-new :generics generics
                               :constraints constraints
                               :repr input-repr)
              output-repr)
@@ -867,14 +867,14 @@ This assumes that the current path points to DECLARES."
               (declares ListR<Any>))
 
   (let* ((param-list (apply #'append params))
-         (param-alist (et: AListR<Var~*et-repr> nil))
+         (param-alist (et: AListR<Var~*et:repr> nil))
          (generics (et: ListR<EtGeneric> nil))
          (constraints (et: ListR<EtTypeConstraint> nil))
          (props (et: KVPList<Var~Any> nil))
 
-         (return-repr (et: Nil|*et-repr nil))
-         (function-type (et: Nil|*et-type nil))
-         (checker (et: (or Nil (fn Nil *et-type)) nil))
+         (return-repr (et: Nil|*et:repr nil))
+         (function-type (et: Nil|*et:type nil))
+         (checker (et: (or Nil (fn Nil *et:type)) nil))
 
          (strategy (et: Nil|@return|@function|@checker nil))
          (use-strategy
@@ -951,7 +951,7 @@ This assumes that the current path points to DECLARES."
 ;;;;; Construct input repr
 
 (defun et--func-params-untyped-input (params)
-  (et-declare (params EtFuncParameters<T>) (@return *et-type))
+  (et-declare (params EtFuncParameters<T>) (@return *et:type))
   (et-repr-to-type
    (et--func-params-to-input nil params (lambda (_) (et Any)) #'identity)))
 
@@ -994,7 +994,7 @@ FN converts a parameter (T) to the repr that should be used for it, and"
          ;; Nil rather than Never.
          (cl-loop for repr in (append opt (list rest-repr))
                   ;; Only if the repr is JUST a generic
-                  when (pcase repr ((cl-struct et-repr (dnf `(((S:GENERIC ,_))))) t))
+                  when (pcase repr ((cl-struct et:repr (dnf `(((S:GENERIC ,_))))) t))
                   collect repr into gen-params
                   finally return
                   (let* ((tail (loop nil rest)))
@@ -1014,8 +1014,8 @@ If the function has generics, then this MUST be called with the
 polymorphic types defined, as those polymorphic types probably appear in
 FUNC-INPUT-TYPE."
   (et-declare (params EtFuncParameters<Var>)
-              (func-input-type *et-type)
-              (@return AList<Var~*et-type>))
+              (func-input-type *et:type)
+              (@return AList<Var~*et:type>))
 
   ;; First, we want to construct a matcher representing the parameters
   (let* ((params-with-gens
@@ -1031,9 +1031,9 @@ FUNC-INPUT-TYPE."
            param-gens params-with-gens
            (lambda (p) (et-parse-repr (cdr p) param-gens))
            #'car))
-         (params-matcher (make-et-matcher :generics param-gens :repr params-repr))
+         (params-matcher (et:match--matcher-new :generics param-gens :repr params-repr))
          (match-result (et-sub-match params-matcher func-input-type))
-         (matches (if (et-match-result-success match-result) (et-match-result-value match-result)
+         (matches (if (et:match-result->success match-result) (et:match-result->value match-result)
                     (error "Function type is not compatible with parameters"))))
     (cl-loop for (param . _sym) in param-gens-alist
              for type in matches
@@ -1049,7 +1049,7 @@ FUNC-INPUT-TYPE."
   (put name 'et-function-props (plist-get decls :props))
   (put name 'et-function-parameters (plist-get decls :parameters))
   (pcase (plist-get decls :definition)
-    ((and type (pred et-type-p)) (put name 'et-function-type type))
+    ((and type (pred et:type-p)) (put name 'et-function-type type))
     ((and chk (pred functionp)) (put name 'et-checker chk))))
 
 (defun et--identify-defun (name arglist &rest rest)
@@ -1107,8 +1107,8 @@ FUNC-INPUT-TYPE."
   "The path should point to the function expr.
 
 Returns the type of the last expression in the body."
-  (et-declare (func-type *et-type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
-              (@return *et-type))
+  (et-declare (func-type *et:type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
+              (@return *et:type))
 
   (cl-loop
    with overloads = (et--func-destructure func-type et-func-check-overloads)
@@ -1159,7 +1159,7 @@ Returns the type of the last expression in the body."
          (func-type
           (or (when-let* ((decls (et-at-offset 2 (et--func-find-and-parse-decls params body)))
                           (func-type (plist-get decls :definition)))
-                (when (et-type-p func-type) func-type))
+                (when (et:type-p func-type) func-type))
               ;; From recommendation
               et--checker-recommendation
               ;; All params are Any
@@ -1174,7 +1174,7 @@ Returns the type of the last expression in the body."
 
 (defun et--declare-variable-type (name type)
   (put name 'et-variable-type type)
-  (put name 'et-variable-var (make-et-var :name name :type type)))
+  (put name 'et-variable-var (et:type--var-new :name name :type type)))
 
 (defun et--identify-variable-directive (form)
   "Identify a variable definition, returning a processing plist.
@@ -1447,7 +1447,7 @@ Returns a plist with :declare to set the symbol type."
 
 (et-define-pcase-checker :narrows `()
   (cl-loop for (var . type) in (reverse et--checker-narrows)
-           collect (format "%s: %s" (et-var-name var) (et-pp type)) into strs
+           collect (format "%s: %s" (et:type--var->name var) (et-pp type)) into strs
            finally do
            (et-hint nil (string-join strs "\\n")))
   (setq et--checker-expr nil)
@@ -1607,8 +1607,8 @@ onto the original expression."
          (result
           (et-with-sticky-path
             (et--check expanded et--checker-narrows recommendation))))
-    (setq et--checker-narrows (et--check-result-narrows result))
-    (et--check-result-type result)))
+    (setq et--checker-narrows (et--check-result->narrows result))
+    (et--check-result->type result)))
 
 (defun et-macroexpand-checker ()
   "Type checker which expands a macro and type-checks the expansion."
