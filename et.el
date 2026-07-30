@@ -44,7 +44,7 @@
  (@alias EtDiagnostic (Tuple EtPath EtSeverity String)))
 
 (et-declare
- (@alias EtBinds AList<*et:type--var~*et:type>))
+ (@alias EtBinds AList<*et:type-var~*et:type>))
 
 (et-declare
  (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO))
@@ -91,7 +91,7 @@
  (@alias EtMatchFunctionConstraint
          (Tuple @R:FN
                 ;; The DynFunction matcher and output (sub)
-                *et:match--matcher EtRepr
+                *et:match-matcher EtRepr
                 ;; The Function input and output (super)
                 EtRepr EtRepr))
  (@alias EtMatchConstraint
@@ -138,7 +138,7 @@
 
 
 ;;; ============================================================
-;;; Results - et:result
+;;; Results - `et:result'
 ;;;; Explanation
 
 ;; When type-checking an expression, it is important to know where
@@ -201,7 +201,7 @@ expression that is not actually in the buffer, ensure that
 
 (et-defvar et:result--failed Boolean nil)
 
-(et-defun et-result-failed? () Boolean et:result--failed)
+(et-defun et-cur-result-failed? () Boolean et:result--failed)
 
 
 ;;;; Struct
@@ -237,7 +237,7 @@ expression that is not actually in the buffer, ensure that
       et:result--path)))
 
 (defmacro et-at (rel &rest body)
-  (declare (indent 1) (et (@with EtRel)))
+  (declare (indent 1) (et (@progn EtRel)))
   (let* ((orig-var (gensym 'orig)))
     ;; On error, we want the path to stay where it is, hence using setq instead of let
     `(let ((,orig-var et:result--path))
@@ -246,7 +246,7 @@ expression that is not actually in the buffer, ensure that
          (setq et:result--path ,orig-var)))))
 
 (defmacro et-at-offset (offset &rest body)
-  (declare (indent 1) (et (@with Integer)))
+  (declare (indent 1) (et (@progn Integer)))
   ;; On error, we want the path to stay where it is, hence using setq instead of let
   `(let ((et:result--path-offset (+ et:result--path-offset ,offset)))
      ,@body))
@@ -313,12 +313,12 @@ expression that is not actually in the buffer, ensure that
 
 (defmacro et-wrap-errors (format &rest body)
   "Add context to errors thrown in BODY."
-  (declare (indent 1) (et (@with String)))
+  (declare (indent 1) (et (@progn String)))
   `(condition-case-unless-debug err (progn . ,body)
      (error (error ,format (error-message-string err)))))
 
 (defmacro et-error-boundary (relative &rest body)
-  (declare (indent 1) (et (@with EtRel)))
+  (declare (indent 1) (et (@progn EtRel)))
   `(et-at ,relative
      (condition-case-unless-debug err (progn . ,body)
        (error (et-err nil (error-message-string err))))))
@@ -359,18 +359,8 @@ be non-nil."
      (car value-and-failed)))
 
 
-;;;; Utils
-
-(defun et-result-map (func exprs)
-  (et-declare (@generics [I O]) (func (fn (Args I) O)) (exprs ListR<I>)
-              (@return List<O>))
-  (cl-loop for expr in exprs
-           for idx upfrom 0
-           collect (et-at idx (funcall func expr))))
-
-
 ;;; ============================================================
-;;; Utils - et:util
+;;; Utils - `et:util'
 ;;;; Modify struct
 
 ;; TODO: Create a custom checker
@@ -472,25 +462,81 @@ variable."
          ,@body))))
 
 
+;;;; Props and body
+
+(eval-and-compile
+  (et-defun et-props-and-body (body: ListR<Any>) Cons<Any~ListR<Any>>
+    (let* ((props nil))
+      (while (keywordp (car body))
+        (setq props (nconc props (list (pop body) (pop body)))))
+      (or body (error "Empty body"))
+      (or (eq 1 (length body)) (error "Body can only contain one expression"))
+      (cons props (car body)))))
+
+
+;;;; Gen vec parsing
+
+(et-defun et-genvec-generics (genvec: Nil|EtGenVec) List<EtGeneric>
+  (when genvec
+    (cl-loop for gen-spec across genvec
+             for gen =
+             (pcase gen-spec
+               (`(,(or '= '<= '>=) ,(and gen (pred symbolp)) ,_type-spec) gen)
+               ((pred symbolp) gen-spec)
+               (_ (error "Invalid generic entry: %s" gen-spec)))
+             unless (memq gen generics) collect gen into generics
+             finally return generics)))
+
+(et-defun et-genvec-constraints (genvec: Nil|EtGenVec) List<EtTypeConstraint>
+  "Parse a generic vector to a list of generics and constraints."
+  (when genvec
+    (cl-loop for gen-spec across genvec
+             nconc
+             (pcase gen-spec
+               (`(,(or (and '<= (let op 'Q:LEQ))
+                       (and '>= (let op 'Q:GEQ)))
+                  ,(and gen (pred symbolp)) ,type-spec)
+                (list (list op gen (et-parse-type type-spec))))))))
+
+
+;;;; Traverse tree
+
+(et-defun et:util-traverse-tree ([T] tree: TreeR<T> path: ListR<Integer>) T
+  (if (null path) tree
+    (when (>= (car path) (length tree))
+      (error "Index out of bounds: %s %s" (car path) tree))
+    (et:util-traverse-tree (nth (car path) tree) (cdr path))))
+
+
+;;;; With advice
+
+(defmacro et-with-advice (symbol how fn &rest body)
+  (declare (indent 3) (et (@progn Var Var AnyFn)))
+  `(let* ((sym ,symbol) (fn ,fn))
+     (advice-add symbol ,how fn)
+     (unwind-protect (progn ,@body)
+       (advice-remove symbol fn))))
+
+
 ;;; ============================================================
-;;; Types - et:type
+;;; Types - `et:type'
 ;;;; Type structs
 
-(et-defstruct et:type--var
+(et-defstruct et:type-var
   "A variable currently in scope."
   name type)
 
-(et-defstruct et:type--dt
+(et-defstruct et:type-dt
   "A datatype factor of an `et-type'."
   (name nil :et Var)
   (args nil :et List<*et:type|Any>))
 
-(et-defstruct et:type--alias
+(et-defstruct et:type-alias
   "A type alias factor of an `et-type'."
   (name nil :et Var)
   (args nil :et List<*et:type>))
 
-(et-defstruct et:type--case
+(et-defstruct et:type-case
   "Struct representing a case of an `et-type'.
 
 BINDS is a list of (`et-var' . `et-type').
@@ -498,9 +544,9 @@ BINDS is a list of (`et-var' . `et-type').
 TYPEOFS is a list of `et-var'.
 
 VALUE is an instance of either `et-datatype' or `et-alias'."
-  (value nil :et *et:type--dt|*et:type--alias)
+  (value nil :et *et:type-dt|*et:type-alias)
   (binds nil :et EtBinds)
-  (typeofs nil :et List<*et:type--var>)
+  (typeofs nil :et List<*et:type-var>)
   ;; List of polymorphic types
   (polymorphs nil :et List<EtGeneric>))
 
@@ -508,7 +554,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
   "Struct representing a root-level et type.
 
   CASES is a list of `et-type-case' instances being unioned."
-  (cases nil :et List<*et:type--case>)
+  (cases nil :et List<*et:type-case>)
   (label nil :et Nil|EtLabel))
 
 (et-defun et:type--validate ([] type: *et:type) *et:type
@@ -518,20 +564,20 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 
   (when et-debug
     (dolist (case (et:type->cases type))
-      (let* ((val (et:type--case->value case)))
+      (let* ((val (et:type-case->value case)))
         (cond
-         ((et:type--dt-p val)
+         ((et:type-dt-p val)
           ;; Check that all of the arguments have the correct role
-          (et:dt-map-type-args (et:type--dt->name val) (et:type--dt->args val) #'et:type--validate))
-         ((et:type--alias-p val) (mapc #'et:type--validate (et:type--alias->args val)))
+          (et:dt-map-type-args (et:type-dt->name val) (et:type-dt->args val) #'et:type--validate))
+         ((et:type-alias-p val) (mapc #'et:type--validate (et:type-alias->args val)))
          (t (error "Expected datatype or alias, found %s" val))))
 
-      (dolist (x (et:type--case->binds case))
-        (or (and (consp x) (et:type--var-p (car x)) (et:type--validate (cdr x)))
+      (dolist (x (et:type-case->binds case))
+        (or (and (consp x) (et:type-var-p (car x)) (et:type--validate (cdr x)))
             (error "Expected bind, found %s" x)))
-      (dolist (x (et:type--case->typeofs case))
-        (or (et:type--var-p x) (error "Expected typeof var, found %s" x)))
-      (dolist (x (et:type--case->polymorphs case))
+      (dolist (x (et:type-case->typeofs case))
+        (or (et:type-var-p x) (error "Expected typeof var, found %s" x)))
+      (dolist (x (et:type-case->polymorphs case))
         (or (symbolp x) (error "Expected polymorphic type, found %s" x)))))
 
   type)
@@ -545,18 +591,18 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
   "Polymorphic types in scope.")
 
 (defun et:type--make-polymorphs (matcher)
-  (declare (et (matcher *et:match--matcher) (@return EtPolymorphicTypes)))
+  (declare (et (matcher *et:match-matcher) (@return EtPolymorphicTypes)))
 
-  (cl-loop for name in (et:match--matcher->generics matcher)
+  (cl-loop for name in (et:match-matcher->generics matcher)
            when (assq name et:type--polymorphs)
            do (error "Polymorphic type `%s' is already defined" name)
-           for qs = (cl-loop for (op gen q-type) in (et:match--matcher->constraints matcher)
+           for qs = (cl-loop for (op gen q-type) in (et:match-matcher->constraints matcher)
                              when (eq gen name)
                              collect (list (pcase op ('Q:LEQ 'P:LEQ) ('Q:GEQ 'P:GEQ))
                                            q-type))
            collect (cons name qs)))
 
-(defmacro et:type--with-polymorphic-types (polys &rest body)
+(defmacro et:type--with-polymorphs (polys &rest body)
   (declare (indent 1) (et (@expand)))
   `(let* ((et:type--polymorphs (append ,polys et:type--polymorphs)))
      ,@body))
@@ -569,9 +615,30 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
            (error "Polymorphic type `%s' not defined" name))))
 
 
-;;;; Destructuring a function
+;;;; In function body
 
-(defun et--func-destructure (func-type &optional overloads)
+(defmacro et-with-function-polymorphs (func-type overload &rest body)
+  "Evaluate BODY inside the typing context of FUNC-TYPE.
+
+This will bind all of the polymorphic types implied by FUNC-TYPE.
+
+If OVERLOAD is non-nil, then evaluate BODY multiple times, once for each
+of the possible overloads of FUNC-TYPE.
+
+Returns a list of results of BODY: if OVERLOAD is nil, this list will
+always have one element."
+  (declare (indent 2))
+
+  `(cl-loop
+    with overloads = (et:type--destructure-function ,func-type ,overload)
+    for (polys input-type expected-ret) in overloads
+    for overload-idx upfrom 1
+    collect
+    (et-with-diagnostic-prefix (when (cdr overloads) (format "Overload %s" overload-idx))
+      (et--with-polymorphic-types polys
+        ,@body))))
+
+(defun et:type--destructure-function (func-type &optional overloads)
   "Destructure FUNC-TYPE into its input and output types.
 
 Converting the input of a DynFunction to a type requires concrete types
@@ -600,28 +667,28 @@ This is a common pattern for functions that have a `noerror' argument."
               (@return (List (Tuple EtPolymorphicTypes *et:type *et:type))))
 
   (pcase (et-type-single (et-expand-all-aliases func-type))
-    ((cl-struct et:type--dt (name 'DynFunction) (args `(,i-matcher ,o-repr)))
+    ((cl-struct et:type-dt (name 'DynFunction) (args `(,i-matcher ,o-repr)))
      (let* ((make-gen-repls
-             ;; Must be called within et:type--with-polymorphic-types
+             ;; Must be called within et:type--with-polymorphs
              (lambda ()
-               (cl-loop for gen in (et:match--matcher->generics i-matcher)
+               (cl-loop for gen in (et:match-matcher->generics i-matcher)
                         collect (cons gen (et-parse-type gen)))))
             (base-polys (et:type--make-polymorphs i-matcher))
             (all-polys
-             (et:type--with-polymorphic-types base-polys
+             (et:type--with-polymorphs base-polys
                (if (not overloads) (list base-polys)
                  (et:type--indeterminates-to-overloads
                   ;; Calculate the indeterminates by parsing o-repr
                   base-polys (cdr (et-repr-to-type-and-indes o-repr (funcall make-gen-repls))))))))
        (cl-loop for polys in all-polys
                 collect
-                (et:type--with-polymorphic-types polys
+                (et:type--with-polymorphs polys
                   (let* ((gen-repls (funcall make-gen-repls))
-                         (in (et-repr-to-type (et:match--matcher->repr i-matcher) gen-repls))
+                         (in (et-repr-to-type (et:match-matcher->repr i-matcher) gen-repls))
                          (out (et-repr-to-type o-repr gen-repls)))
                     (list polys in out))))))
 
-    ((cl-struct et:type--dt (name 'Function) (args `(,i-type ,o-type)))
+    ((cl-struct et:type-dt (name 'Function) (args `(,i-type ,o-type)))
      (list (list nil i-type o-type)))
     (_ (error "Invalid function type: %s" func-type))))
 
@@ -671,40 +738,18 @@ Source: gpt-5.6.sol high."
     `(put ',name 'et-alias
           (list :custom (lambda ,arglist ,@body) ,@props))))
 
-(et-defun et:type-gen-vec-generics (gen-vec: Nil|EtGenVec) List<EtGeneric>
-  (when gen-vec
-    (cl-loop for gen-spec across gen-vec
-             for gen =
-             (pcase gen-spec
-               (`(,(or '= '<= '>=) ,(and gen (pred symbolp)) ,_type-spec) gen)
-               ((pred symbolp) gen-spec)
-               (_ (error "Invalid generic entry: %s" gen-spec)))
-             unless (memq gen generics) collect gen into generics
-             finally return generics)))
-
-(et-defun et--gen-vec-constraints (gen-vec: Nil|EtGenVec) List<EtTypeConstraint>
-  "Parse a generic vector to a list of generics and constraints."
-  (when gen-vec
-    (cl-loop for gen-spec across gen-vec
-             nconc
-             (pcase gen-spec
-               (`(,(or (and '<= (let op 'Q:LEQ))
-                       (and '>= (let op 'Q:GEQ)))
-                  ,(and gen (pred symbolp)) ,type-spec)
-                (list (list op gen (et-parse-type type-spec))))))))
-
-(et-defun et:type--define-alias (name: EtAliasName gen-vec: EtGenVec spec: EtTypeSpec &rest props: Any) Nil
+(et-defun et:type--define-alias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec &rest props: Any) Nil
   "First declare an alias, then initialize it."
-  (apply #'et:type--declare-alias name gen-vec spec props)
+  (apply #'et:type-declare-alias name genvec spec props)
   (et:type--initialize-alias name))
 
-(et-defun et:type--declare-alias (name: EtAliasName gen-vec: EtGenVec spec: EtTypeSpec &rest props: Any) Nil
+(et-defun et:type-declare-alias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec &rest props: Any) Nil
   (when (plist-get (get name 'et-alias) :read-only)
     (error "Alias %s is already defined, and is read-only" name))
 
   (let* ((plist (cl-list*
-                 :gen-vec gen-vec
-                 :generics (et:type-gen-vec-generics gen-vec)
+                 :genvec genvec
+                 :generics (et-genvec-generics genvec)
                  :spec spec
                  props)))
     (put name 'et-alias plist)
@@ -715,17 +760,8 @@ Source: gpt-5.6.sol high."
             (spec (plist-get props :spec)))
       (ignore
        (plist-put props :repr (et-parse-repr spec (plist-get props :generics)))
-       (plist-put props :constraints (et--gen-vec-constraints (plist-get props :gen-vec))))
+       (plist-put props :constraints (et-genvec-constraints (plist-get props :genvec))))
     (error "Alias `%s' not declared" name)))
-
-(eval-and-compile
-  (et-defun et:type--props-and-body (body: ListR<Any>) Cons<Any~ListR<Any>>
-    (let* ((props nil))
-      (while (keywordp (car body))
-        (setq props (nconc props (list (pop body) (pop body)))))
-      (or body (error "Empty body"))
-      (or (eq 1 (length body)) (error "Body can only contain one expression"))
-      (cons props (car body)))))
 
 (defmacro et-defalias (name &rest body)
   "Alias NAME types to return the specific type.
@@ -733,22 +769,22 @@ Source: gpt-5.6.sol high."
 \(fn NAME [GENERIC-VECTOR] [PROPS...] BODY...)"
   (declare (indent 2))
 
-  (let* ((gen-vec (when (vectorp (car body)) (pop body)))
-         (pb (et:type--props-and-body body)))
-    `(et:type--define-alias ',name ,gen-vec ',(cdr pb) ,@(car pb))))
+  (let* ((genvec (when (vectorp (car body)) (pop body)))
+         (pb (et-props-and-body body)))
+    `(et:type--define-alias ',name ,genvec ',(cdr pb) ,@(car pb))))
 
 
 ;;;; Expanding aliases
 
-(et-defun et:type--alias-expand (alias: *et:type--alias) *et:type
+(et-defun et:type--alias-expand (alias: *et:type-alias) *et:type
   "Expand an alias to a type."
 
-  (et:type--alias-call (et:type--alias->name alias) (et:type--alias->args alias) 'TYPE))
+  (et:type--alias-call (et:type-alias->name alias) (et:type-alias->args alias) 'TYPE))
 
 (et-defun et-expand-all-aliases (type: *et:type) *et:type
   (cl-loop for case in (et:type->cases type)
-           for val = (et:type--case->value case)
-           append (if (et:type--alias-p val)
+           for val = (et:type-case->value case)
+           append (if (et:type-alias-p val)
                       (apply #'list (et:type->cases (et-expand-all-aliases (et:type--alias-expand val))))
                     (list case))
            into new-cases
@@ -798,22 +834,22 @@ produced into. It is only relevant when OUTPUT is `MATCHER'."
 
 ;;;; Helpers
 
-(et-defun et-type (&rest cases: ListR<*et:type--case|*et:type--dt|*et:type--alias>) *et:type
+(et-defun et-type (&rest cases: ListR<*et:type-case|*et:type-dt|*et:type-alias>) *et:type
   "Construct a new `et-type' out of CASES.
 
 Each of CASES should be an instance of `et-type-case', or alternatively
-a valid `et:type--case->value'."
+a valid `et:type-case->value'."
   (cl-loop for c in cases
-           collect (if (et:type--case-p c) c
+           collect (if (et:type-case-p c) c
                      ;; Checking is done inside of `et:type-new'
-                     (et:type--case-new :value c))
+                     (et:type-case-new :value c))
            into cases
            finally return (et:type-new :cases cases)))
 
-(et-defun et-type-single (type: *et:type) *et:type--dt|*et:type--alias
+(et-defun et-type-single (type: *et:type) *et:type-dt|*et:type-alias
   "Assume type is a single case, and extract the case value."
   (when (eq 1 (length (et:type->cases type)))
-    (et:type--case->value (car (et:type->cases type)))))
+    (et:type-case->value (car (et:type->cases type)))))
 
 
 ;;;; Parse/print type
@@ -834,25 +870,25 @@ a valid `et:type--case->value'."
 
 (et-test
  (equal (et Cons<1~@abc>)
-        (et-type (et:type--alias-new :name 'Cons :args (list (et-literal 1) (et-literal 'abc)))))
+        (et-type (et:type-alias-new :name 'Cons :args (list (et-literal 1) (et-literal 'abc)))))
 
  (equal (et Number)
-        (et-type (et:type--dt-new :name 'Number)))
+        (et-type (et:type-dt-new :name 'Number)))
 
  (equal (et {$a::5}&4)
-        (et-type (et:type--case-new
-                  :value (et:type--dt-new :name 'Literal :args (list 4))
+        (et-type (et:type-case-new
+                  :value (et:type-dt-new :name 'Literal :args (list 4))
                   :binds (list (cons (alist-get '$a et:repr--test-variables) (et-literal 5))))))
 
  (equal (et {::$a}&{$b::6}&Integer)
-        (et-type (et:type--case-new
-                  :value (et:type--dt-new :name 'Integer)
+        (et-type (et:type-case-new
+                  :value (et:type-dt-new :name 'Integer)
                   :binds (list (cons (alist-get '$b et:repr--test-variables) (et-literal 6)))
                   :typeofs (list (alist-get '$a et:repr--test-variables)))))
 
  (equal (et bindsof<{::$a}&{$a::2|3}&{1|2}>)
-        (et-type (et:type--case-new
-                  :value (et:type--dt-new :name 'Any)
+        (et-type (et:type-case-new
+                  :value (et:type-dt-new :name 'Any)
                   :binds (list (cons (alist-get '$a et:repr--test-variables) (et-literal 2))))))
 
  ;; Test that bindsof never is never
@@ -895,19 +931,19 @@ a valid `et:type--case->value'."
                123 (et-literal 4.56))))
 
 
-;;;; Public
+;;;; Utils
 
 (defun et-never-p (type)
   (null (et:type->cases type)))
 
 (defun et-dt (name &rest args)
   (cl-assert (et:dt-name? name))
-  (et-type (et:type--dt-new :name name :args args)))
+  (et-type (et:type-dt-new :name name :args args)))
 
 (defun et-alias (name &rest args)
   (cl-assert (symbolp name))
   (cl-assert (string-match-p "^[A-Z]" (symbol-name name)))
-  (et-type (et:type--alias-new :name name :args args)))
+  (et-type (et:type-alias-new :name name :args args)))
 
 (defun et-any () (et-dt 'Any))
 (defun et-never () (et:type-new :cases nil))
@@ -915,7 +951,7 @@ a valid `et:type--case->value'."
 
 
 ;;; ============================================================
-;;; Datatypes - et:dt
+;;; Datatypes - `et:dt'
 ;;;; Datatypes
 
 (defvar et:dt--datatypes
@@ -1097,8 +1133,8 @@ language (a type or a matcher repr); see `et:dt-constraints'."
   (let ((car-read (et-expand-all-aliases (nth 0 cons-args)))
         (cdr-read (nth 2 cons-args)))
     (pcase (et:type->cases car-read)
-      (`(,(cl-struct et:type--case
-                     (value (cl-struct et:type--dt (name 'Literal) (args `(,prop))))))
+      (`(,(cl-struct et:type-case
+                     (value (cl-struct et:type-dt (name 'Literal) (args `(,prop))))))
        (let* ((pval (plist-get plist-args prop))
               (rest-plist (copy-tree plist-args)))
          (when pval (cl-remf rest-plist prop))
@@ -1129,13 +1165,13 @@ of `et:dt--cons-is-plist' when matching against matchers."
 
 ;;;; Overlapping
 
-(et-defun et:dt-might-overlap-nontrivial? (a-dt: *et:type--dt b-dt: *et:type--dt) Boolean
+(et-defun et:dt-might-overlap-nontrivial? (a-dt: *et:type-dt b-dt: *et:type-dt) Boolean
   "Return whether datatypes A and B might overlap.
 
 This function assumes that neither A nor B is a subtype of the other.
 This is what is meant by \"nontrivial\"."
-  (let* ((a (et:type--dt->name a-dt))
-         (b (et:type--dt->name b-dt)))
+  (let* ((a (et:type-dt->name a-dt))
+         (b (et:type-dt->name b-dt)))
 
     (when (< (cl-position b et:dt--datatypes :key #'car) (cl-position a et:dt--datatypes :key #'car))
       (cl-rotatef a b)
@@ -1145,10 +1181,10 @@ This is what is meant by \"nontrivial\"."
       ('t t)
       ;; A cons can only be a function if its car is `lambda'
       ((guard (and (memq a '(ConsFull ConsFresh)) (memq b '(Function DynFunction))))
-       (et-subtype? (et @lambda) (car (et:type--dt->args a-dt))))
+       (et-subtype? (et @lambda) (car (et:type-dt->args a-dt))))
       ;; Is an emacs internal datatype a function
       ((guard (and (memq a '(Function DynFunction)) (eq b 'Emacs)))
-       (memq (car (et:type--dt->args b-dt)) '(interpreted-function byte-code-function subr)))
+       (memq (car (et:type-dt->args b-dt)) '(interpreted-function byte-code-function subr)))
 
       (overlap (not (not (memq b overlap)))))))
 
@@ -1316,7 +1352,7 @@ check (see the `R:FN' constraint)."
 
 
 ;;; ============================================================
-;;; Reprs - et:repr
+;;; Reprs - `et:repr'
 ;;;; Struct
 
 (et-defstruct et:repr
@@ -1388,15 +1424,15 @@ never be read for any purpose other than assertions."
    (when-let* ((handler (get name 'et-spec-parse)))
      (if (eq :full (car handler))
          (et:repr-new :generics et:repr--parsing-generics
-                       :dnf (apply (cdr handler) args))
+                      :dnf (apply (cdr handler) args))
        ;; Base case: wrap a factor in a list of lists
        (et:repr-new :generics et:repr--parsing-generics
-                     :dnf (list (list (cons (car handler) (apply (cdr handler) args)))))))
+                    :dnf (list (list (cons (car handler) (apply (cdr handler) args)))))))
 
    ;; Parse a generic
    (when (memq name et:repr--parsing-generics)
      (et:repr-new :generics et:repr--parsing-generics
-                   :dnf (list (list (list 'S:GENERIC name)))))
+                  :dnf (list (list (list 'S:GENERIC name)))))
 
    ;; Parse a datatype
    (when (et:dt-name? name)
@@ -1405,7 +1441,7 @@ never be read for any purpose other than assertions."
    ;; Parse a polymorphic type
    (when (et:type-is-polymorph? name)
      (et:repr-new :generics et:repr--parsing-generics
-                   :dnf (list (list (list 'S:POLY name)))))
+                  :dnf (list (list (list 'S:POLY name)))))
 
    ;; Parse a custom op
    (when-let* ((op (get name 'et-op)))
@@ -1420,10 +1456,10 @@ never be read for any purpose other than assertions."
 
 ;;;; Parse string
 
-(et-defvar et:repr--test-variables AList<Symbol~*et:type--var>
-           (list (cons '$a (et:type--var-new :name '$a :type (et-dt 'Any)))
-                 (cons '$b (et:type--var-new :name '$b :type (et-dt 'Any)))
-                 (cons '$c (et:type--var-new :name '$c :type (et-dt 'Any)))))
+(et-defvar et:repr--test-variables AList<Symbol~*et:type-var>
+           (list (cons '$a (et:type-var-new :name '$a :type (et-dt 'Any)))
+                 (cons '$b (et:type-var-new :name '$b :type (et-dt 'Any)))
+                 (cons '$c (et:type-var-new :name '$c :type (et-dt 'Any)))))
 
 (et-defun et:repr--parse-string (s: String) EtRepr
   (when (string-empty-p s) (error "Empty type expression"))
@@ -1440,7 +1476,7 @@ never be read for any purpose other than assertions."
            into or-parts
            finally return
            (et:repr-new :generics et:repr--parsing-generics
-                         :dnf (apply #'nconc or-parts))))
+                        :dnf (apply #'nconc or-parts))))
 
 (et-defun et:repr--parse-atom (s: String) EtRepr
   "Parse a single type atom into an `et-type'."
@@ -1536,7 +1572,7 @@ Depth tracks < > and { } nesting."
                                      (error "Invalid type repr: %s" name))
                     for out = (apply totype args)
                     for type = (cond ((et:type-p out) out)
-                                     ((et:type--case-p out) (et:type-new :cases (list out)))
+                                     ((et:type-case-p out) (et:type-new :cases (list out)))
                                      (t (et:type-new :cases out)))
                     collect type into and-types
                     finally return (apply #'et-supersect and-types))
@@ -1594,7 +1630,7 @@ in GEN-REPLS, if it exists."
                                         collect (cons g (funcall sub r))))))))
       (`(S:OP . ,_)
        (et-q (((S:NOINFER ,(et:repr-new :generics (mapcar #'car gen-repls)
-                                         :dnf (list (list factor)))
+                                        :dnf (list (list factor)))
                           ,gen-repls)))))
       (_ (error "Invalid matcher repr factor: %s" factor)))))
 
@@ -1741,13 +1777,13 @@ in GEN-REPLS, if it exists."
 (et:repr--defspec True S:DT () (list 'Literal t))
 
 (et:repr--defspec fn S:DT (&rest args)
-  (let* ((gen-vec (when (vectorp (car args)) (pop args)))
+  (let* ((genvec (when (vectorp (car args)) (pop args)))
          (in (or (pop args) 'Nil))
          (out (or (pop args) 'Any)))
     (or (null args) (error "Too many arguments for `fn'"))
-    (if gen-vec
-        (list 'DynFunction (et-parse-matcher in gen-vec et:repr--parsing-generics)
-              (et-parse-repr out (append (et:type-gen-vec-generics gen-vec) et:repr--parsing-generics)))
+    (if genvec
+        (list 'DynFunction (et-parse-matcher in genvec et:repr--parsing-generics)
+              (et-parse-repr out (append (et-genvec-generics genvec) et:repr--parsing-generics)))
       (list 'Function (et:repr--parse-0 in) (et:repr--parse-0 out)))))
 
 (et:repr--defspec Never :full () nil)
@@ -1764,7 +1800,7 @@ in GEN-REPLS, if it exists."
   :parse (cons name (et:dt-map-type-args name args #'et:repr--parse-0))
   :to-type
   (let* ((new-args (et:dt-map-type-args name args #'et:repr--totype-0)))
-    (list (et:type--case-new :value (et:type--dt-new :name name :args new-args))))
+    (list (et:type-case-new :value (et:type-dt-new :name name :args new-args))))
   :print (et:repr--tostring-named name args))
 
 (et:repr--deffactor S:ALIAS alias (name &rest args)
@@ -1778,7 +1814,7 @@ in GEN-REPLS, if it exists."
     (cons name (mapcar #'et:repr--parse-0 args)))
   :to-type
   (let* ((new-args (mapcar #'et:repr--totype-0 args)))
-    (list (et:type--case-new :value (et:type--alias-new :name name :args new-args))))
+    (list (et:type-case-new :value (et:type-alias-new :name name :args new-args))))
   :print (et:repr--tostring-named name args))
 
 (et:repr--deffactor S:POLY poly (name)
@@ -1787,7 +1823,7 @@ in GEN-REPLS, if it exists."
   (let* ((constrs (cl-remove 'P:LEQ (et:type-polymorph-constraints name)
                              :key #'car :test-not #'eq)))
     (cl-loop for case in (et:type->cases (apply #'et-supersect (mapcar #'cadr constrs)))
-             collect (et-copy-with case :polymorphs (cons name (et:type--case->polymorphs case)))))
+             collect (et-copy-with case :polymorphs (cons name (et:type-case->polymorphs case)))))
   :print (format "^%s" name))
 
 (et:repr--deffactor S:GENERIC generic (var)
@@ -1950,10 +1986,8 @@ this, but the alternatives are either:
 the correct option, but I am too lazy at the moment.) A clean eventual
 solution would involve modifying `et-match-result' to have an
 indeterminates slot."
-  `(unwind-protect
-       (progn (advice-add #'et-subtype? :override #'et:repr--op-subtype?)
-              ,@body)
-     (advice-remove #'et-subtype? #'et:repr--op-subtype?)))
+  `(et-with-advice #'et-subtype? :override #'et:repr--op-subtype?
+     ,@body))
 
 (et:repr--defop subtract (a b)
   :to-string (format "{%s - %s}" (et:repr--tostring-0 a) (et:repr--tostring-0 b))
@@ -1964,27 +1998,27 @@ indeterminates slot."
   type)
 
 (et:repr--defop bind ([var :const] type)
-  :to-string (format "{%s : %s}" (et:type--var->name var) (et:repr--tostring-0 type))
-  (et:type--case-new
-   :value (et:type--dt-new :name 'Any)
+  :to-string (format "{%s : %s}" (et:type-var->name var) (et:repr--tostring-0 type))
+  (et:type-case-new
+   :value (et:type-dt-new :name 'Any)
    :binds (list (cons var type))))
 
 (et:repr--defop typeof ([var :const])
-  :to-string (format "{= %s}" (et:type--var->name var))
-  (et:type--case-new :value (et:type--dt-new :name 'Any) :typeofs (list var)))
+  :to-string (format "{= %s}" (et:type-var->name var))
+  (et:type-case-new :value (et:type-dt-new :name 'Any) :typeofs (list var)))
 
 (et:repr--defop bindsof (type)
   (if (et-never-p type) nil
-    (list (et:type--case-new
-           :value (et:type--dt-new :name 'Any)
-           :binds (et:algebra-type-binds type)))))
+    (list (et:type-case-new
+           :value (et:type-dt-new :name 'Any)
+           :binds (et-type-binds type)))))
 
-(et:repr--defop infer (type [gen-vec :generics] [matcher :matcher] [yes :repr] [no :repr])
+(et:repr--defop infer (type [genvec :generics] [matcher :matcher] [yes :repr] [no :repr])
   :parse
   (list (et:repr--parse-0 type)
-        gen-vec
-        (et-parse-matcher matcher gen-vec et:repr--parsing-generics)
-        (et:repr--parse-0 yes (et:type-gen-vec-generics gen-vec))
+        genvec
+        (et-parse-matcher matcher genvec et:repr--parsing-generics)
+        (et:repr--parse-0 yes (et-genvec-generics genvec))
         (et:repr--parse-0 no))
   :to-string (format "{if %s matches %s then %s else %s}"
                      (et:repr--tostring-0 type) (et-pp-matcher matcher)
@@ -2027,35 +2061,35 @@ indeterminates slot."
 (et-defun et-type-to-repr (type: *et:type) EtRepr
   "Convert an `et-type' to a repr."
   (cl-loop for case in (et:type->cases type)
-           for value = (et:type--case->value case)
+           for value = (et:type-case->value case)
            collect
            (cons
             (pcase value
-              ((cl-struct et:type--dt name args)
-               (et-ql S:DT ,(et:type--dt->name value)
+              ((cl-struct et:type-dt name args)
+               (et-ql S:DT ,(et:type-dt->name value)
                       ,@(et:dt-map-type-args name args #'et-type-to-repr)))
-              ((cl-struct et:type--alias name args)
+              ((cl-struct et:type-alias name args)
                (et-ql S:ALIAS ,name ,@(mapcar #'et-type-to-repr args)))
               (_ (error "Unsupported type case value: %s" value)))
 
             (nconc
-             (cl-loop for name in (et:type--case->polymorphs case)
+             (cl-loop for name in (et:type-case->polymorphs case)
                       collect (et-ql S:POLY ,name))
-             (cl-loop for (var . type) in (et:type--case->binds case)
+             (cl-loop for (var . type) in (et:type-case->binds case)
                       collect (et-ql S:OP bind ,var ,(et-type-to-repr type)))
-             (cl-loop for var in (et:type--case->typeofs case)
+             (cl-loop for var in (et:type-case->typeofs case)
                       collect (et-ql S:OP typeof ,var))))
            into repr-dnf
            finally return
            (et:repr-new :dnf repr-dnf
-                         :label (et:type->label type))))
+                        :label (et:type->label type))))
 
 
 ;;; ============================================================
-;;; Matching - et:match
+;;; Matching - `et:match'
 ;;;; Struct
 
-(et-defstruct et:match--matcher
+(et-defstruct et:match-matcher
   "A type pattern which is matched against by a concrete type.
 
 DNF is the struct representing the matcher."
@@ -2063,21 +2097,21 @@ DNF is the struct representing the matcher."
   (repr nil :et EtRepr)
   (constraints nil :et List<EtTypeConstraint>))
 
-(et-defun et:match--validate (matcher: *et:match--matcher) *et:match--matcher
+(et-defun et:match--validate (matcher: *et:match-matcher) *et:match-matcher
   "Check that a matcher is valid."
-  (or (et:match--matcher-p matcher)
+  (or (et:match-matcher-p matcher)
       (error "Not a matcher: %s" matcher))
 
   (when et-debug
-    (let* ((generics (et:match--matcher->generics matcher)))
+    (let* ((generics (et:match-matcher->generics matcher)))
       (dolist (generic generics)
         (or (symbolp generic) (error "Generics must be a list of symbols")))
 
-      (unless (cl-subsetp (et:repr->generics (et:match--matcher->repr matcher)) generics)
+      (unless (cl-subsetp (et:repr->generics (et:match-matcher->repr matcher)) generics)
         (error "Matcher repr generics %s exceed matcher generics %s"
-               (et:repr->generics (et:match--matcher->repr matcher)) generics))
+               (et:repr->generics (et:match-matcher->repr matcher)) generics))
 
-      (cl-loop for q in (et:match--matcher->constraints matcher)
+      (cl-loop for q in (et:match-matcher->constraints matcher)
                do (pcase q
                     (`(,(or 'Q:LEQ 'Q:GEQ)
                        ,(and gen (guard (memq gen generics)))
@@ -2086,7 +2120,7 @@ DNF is the struct representing the matcher."
 
       (cl-flet ((genericp (var) (or (and (symbolp var) (memq var generics))
                                     (error "Not a generic: %s" var))))
-        (dolist (case (et:repr->dnf (et:match--matcher->repr matcher)))
+        (dolist (case (et:repr->dnf (et:match-matcher->repr matcher)))
           (dolist (factor case)
             (pcase factor
               (`(S:DT ,(and name (pred symbolp)) . ,args)
@@ -2095,10 +2129,10 @@ DNF is the struct representing the matcher."
                 (lambda (arg role)
                   (pcase role
                     ('CONST nil)
-                    ((or 'CO 'CONTRA 'ISO) (et:match--matcher-new :generics generics :repr arg))
+                    ((or 'CO 'CONTRA 'ISO) (et:match-matcher-new :generics generics :repr arg))
                     (_ (error "Unknown role type: %s" role))))))
               (`(S:ALIAS ,(pred symbolp) . ,args)
-               (dolist (arg args) (et:match--matcher-new :generics generics :repr arg)))
+               (dolist (arg args) (et:match-matcher-new :generics generics :repr arg)))
               (`(S:GENERIC ,(pred genericp)))
               (`(S:POLY ,(pred symbolp)))
               (`(S:SET ,_ ,(pred et:type-p)))
@@ -2108,22 +2142,22 @@ DNF is the struct representing the matcher."
 
   matcher)
 
-(advice-add #'et:match--matcher-new :filter-return #'et:match--validate)
+(advice-add #'et:match-matcher-new :filter-return #'et:match--validate)
 
 
 ;;;; Parse/print matcher
 
-(defmacro et-matcher (gen-vec &rest args)
+(defmacro et-matcher (genvec &rest args)
   (declare (indent 1) (et (@expand)))
-  (or (vectorp gen-vec) (error "Write the generics as a vector"))
+  (or (vectorp genvec) (error "Write the generics as a vector"))
   `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
-                     ,gen-vec))
+                     ,genvec))
 
-(et-defun et-parse-matcher (spec: Any gen-vec: VectorR<Any> &optional extra-gens: List<EtGeneric>)
-          *et:match--matcher
-  "Parse SPEC as an `et-matcher' with GEN-VEC.
+(et-defun et-parse-matcher (spec: Any genvec: VectorR<Any> &optional extra-gens: List<EtGeneric>)
+          *et:match-matcher
+  "Parse SPEC as an `et-matcher' with GENVEC.
 
-GEN-VEC is a list of symbols and constraint specs. A constraint
+GENVEC is a list of symbols and constraint specs. A constraint
 spec is one of:
   (= GEN TYPE-SPEC)
   (>= GEN TYPE-SPEC)
@@ -2132,19 +2166,19 @@ spec is one of:
 A generic can be implicitly defined by just providing a constraint
 involving that generic. For example, the spec [(<= T Number)] is the
 same as [T (<= T Number)]."
-  (let* ((generics (et:type-gen-vec-generics gen-vec)))
-    (et:match--matcher-new
+  (let* ((generics (et-genvec-generics genvec)))
+    (et:match-matcher-new
      :generics generics
-     :constraints (et--gen-vec-constraints gen-vec)
+     :constraints (et-genvec-constraints genvec)
      :repr (et-parse-repr spec (append generics extra-gens)))))
 
-(et-defun et-pp-matcher (matcher: *et:match--matcher) String
+(et-defun et-pp-matcher (matcher: *et:match-matcher) String
   "Format an `et-matcher' into a human-readable string."
-  (let* ((generics (et:match--matcher->generics matcher))
-         (body (et-repr-to-string (et:match--matcher->repr matcher))))
+  (let* ((generics (et:match-matcher->generics matcher))
+         (body (et-repr-to-string (et:match-matcher->repr matcher))))
     (format "[%s] %s" (mapconcat #'symbol-name generics " ") body)))
 
-(cl-defmethod cl-print-object ((matcher et:match--matcher) stream)
+(cl-defmethod cl-print-object ((matcher et:match-matcher) stream)
   (princ (format "#<%s>" (et-pp-matcher matcher)) stream))
 
 
@@ -2186,12 +2220,12 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 ;;;; Expand matcher aliases
 
 (defun et:match--expand-aliases (matcher)
-  (declare (et (matcher *et:match--matcher) (@return *et:match--matcher)))
+  (declare (et (matcher *et:match-matcher) (@return *et:match-matcher)))
 
-  (et:match--matcher-new :repr (et:match--expand-repr-aliases (et:match--matcher->repr matcher)
-                                                        (et:match--matcher->generics matcher))
-                   :generics (et:match--matcher->generics matcher)
-                   :constraints (et:match--matcher->constraints matcher)))
+  (et:match-matcher-new :repr (et:match--expand-repr-aliases (et:match-matcher->repr matcher)
+                                                             (et:match-matcher->generics matcher))
+                        :generics (et:match-matcher->generics matcher)
+                        :constraints (et:match-matcher->constraints matcher)))
 
 (defun et:match--expand-repr-aliases (repr scope)
   (declare (et (repr EtRepr)
@@ -2215,12 +2249,12 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 ;;;; Iso match
 
-(et-defun et:match--iso-constraints (matcher: *et:match--matcher type: *et:type) EtConstrainResult
+(et-defun et:match--iso-constraints (matcher: *et:match-matcher type: *et:type) EtConstrainResult
   "Entrypoint for calculating constraints."
   (let* ((et:match--constraints-stack nil))
     (et:match--iso-constraints-0 matcher type)))
 
-(et-defun et:match--iso-constraints-0 (matcher: *et:match--matcher type: *et:type) EtConstrainResult
+(et-defun et:match--iso-constraints-0 (matcher: *et:match-matcher type: *et:type) EtConstrainResult
   (et:match-result-and
    (et:match--sub-constraints-0 matcher type)
    (et:match--super-constraints-0 matcher type)))
@@ -2228,24 +2262,24 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 ;;;; Sub constraints
 
-(et-defun et:match-sub-constraints (matcher: *et:match--matcher type: *et:type) EtConstrainResult
+(et-defun et:match-sub-constraints (matcher: *et:match-matcher type: *et:type) EtConstrainResult
   "Entrypoint for calculating constraints."
   (let* ((et:match--constraints-stack nil))
     (et:match--sub-constraints-0 matcher type)))
 
-(et-defun et:match--sub-constraints-0 (matcher: *et:match--matcher type: *et:type) EtConstrainResult
-  (et-stop-recursion et:match--constraints-stack (list 'sub (et:match--matcher->repr matcher) type)
+(et-defun et:match--sub-constraints-0 (matcher: *et:match-matcher type: *et:type) EtConstrainResult
+  (et-stop-recursion et:match--constraints-stack (list 'sub (et:match-matcher->repr matcher) type)
                      (et:match-succeeded nil)
     (et:match--sub-constraints-1 matcher type)))
 
-(et-defun et:match--sub-constraints-1 (matcher: *et:match--matcher type: *et:type) EtConstrainResult
+(et-defun et:match--sub-constraints-1 (matcher: *et:match-matcher type: *et:type) EtConstrainResult
   (setq matcher (et:match--expand-aliases matcher))
 
   (cl-loop for case in (et:type->cases type)
            for result-no-binds = (et:match--sub-constraints-2 matcher case)
            ;; For GEQ constraints, add in binds
-           for binds = (append (et:type--case->binds case)
-                               (cl-loop for var in (et:type--case->typeofs case)
+           for binds = (append (et:type-case->binds case)
+                               (cl-loop for var in (et:type-case->typeofs case)
                                         collect (cons var (et:algebra-remove-binds (et-type case)))))
            for result-with-binds =
            (if (or (not binds) (not (et:match-result->success result-no-binds))) result-no-binds
@@ -2259,26 +2293,26 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
            collect result-with-binds into results
            finally return (apply #'et:match-result-and results)))
 
-(et-defun et:match--sub-constraints-2 (matcher: *et:match--matcher case: *et:type--case) EtConstrainResult
-  (cl-loop for match-case in (et:repr->dnf (et:match--matcher->repr matcher))
+(et-defun et:match--sub-constraints-2 (matcher: *et:match-matcher case: *et:type-case) EtConstrainResult
+  (cl-loop for match-case in (et:repr->dnf (et:match-matcher->repr matcher))
            for result-1 =
            (cl-loop for match-factor in match-case
-                    for gens = (et:match--matcher->generics matcher)
+                    for gens = (et:match-matcher->generics matcher)
                     collect (et:match--sub-or-super-constraints-3 match-factor case gens) into results
                     finally return (apply #'et:match-result-and results))
            when (et:match-result->success result-1) return result-1
            ;; If all cases failed, fallback to 2.2 (expand aliases) or 2.3 (fail)
            finally return
-           (let* ((val (et:type--case->value case)))
-             (if (et:type--alias-p val)
+           (let* ((val (et:type-case->value case)))
+             (if (et:type-alias-p val)
                  (et:match--sub-constraints-0
                   matcher
                   (cl-loop with exp = (et:type--alias-expand val)
                            for c in (et:type->cases exp)
-                           collect (et:type--case-new
-                                    :value (et:type--case->value c)
-                                    :binds (et:type--case->binds case)
-                                    :typeofs (et:type--case->typeofs case))
+                           collect (et:type-case-new
+                                    :value (et:type-case->value c)
+                                    :binds (et:type-case->binds case)
+                                    :typeofs (et:type-case->typeofs case))
                            into cases finally return (et:type-new :label (et:type->label exp) :cases cases)))
                ;; result-1 has the stack trace we want
                result-1))))
@@ -2286,7 +2320,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (defun et:match--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
   "sub-3 and super-3 are similar enough that combining them is simpler."
   (declare (et (match-factor EtReprFactor)
-               (case *et:type--case)
+               (case *et:type-case)
                (generics List<EtGeneric>)
                (@return EtConstrainResult)))
 
@@ -2296,21 +2330,21 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
        (et:match-succeeded (list q))))
     (`(S:SET ,mr ,type)
      (funcall (if is-super #'et:match--super-constraints-0 #'et:match--sub-constraints-0)
-              (et:match--matcher-new :repr mr :generics generics) type))
+              (et:match-matcher-new :repr mr :generics generics) type))
     (`(,(or 'S:NOINFER 'S:OP 'S:POLY) . ,_)
      (let* ((req (list (if is-super 'R:LEQ 'R:GEQ)
                        (et:repr-new :generics generics :dnf (list (list match-factor)))
                        (et-type case))))
        (et:match-succeeded (list req))))
     (`(S:DT ,mdt-name . ,mdt-args)
-     (pcase (et:type--case->value case)
-       ((and alias (pred et:type--alias-p))
+     (pcase (et:type-case->value case)
+       ((and alias (pred et:type-alias-p))
         (if (not is-super) (et:match-failed)
-          (et:match--super-constraints-0 (et:match--matcher-new :generics generics :repr (et:repr-new :generics generics :dnf (list (list match-factor))))
+          (et:match--super-constraints-0 (et:match-matcher-new :generics generics :repr (et:repr-new :generics generics :dnf (list (list match-factor))))
                                          (et:type--alias-expand alias))))
-       ((and dt (pred et:type--dt-p))
+       ((and dt (pred et:type-dt-p))
         (et:match--sub-or-super-constraints-4
-         mdt-name mdt-args (et:type--dt->name dt) (et:type--dt->args dt)
+         mdt-name mdt-args (et:type-dt->name dt) (et:type-dt->args dt)
          generics is-super))
        (_ (error "Unsupported matching datatype"))))
     (_ (error "Invalid match factor"))))
@@ -2321,7 +2355,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                (generics List<EtGeneric>)
                (@return EtConstrainResult)))
 
-  (cl-flet ((make-matcher (mr) (et:match--matcher-new :repr mr :generics generics)))
+  (cl-flet ((make-matcher (mr) (et:match-matcher-new :repr mr :generics generics)))
     (if (not is-super)
         ;; subtype matching (super=MATCHER > sub=TYPE)
         (et:dt-constraints
@@ -2354,17 +2388,17 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 ;;;; Super constraints
 
-(et-defun et:match--super-constraints-0 (matcher: *et:match--matcher type: *et:type) EtConstrainResult
+(et-defun et:match--super-constraints-0 (matcher: *et:match-matcher type: *et:type) EtConstrainResult
   ;; The 'super' version of scoped constraint checking
-  (et-stop-recursion et:match--constraints-stack (list 'super (et:match--matcher->repr matcher) type)
+  (et-stop-recursion et:match--constraints-stack (list 'super (et:match-matcher->repr matcher) type)
                      (et:match-succeeded nil)
     (et:match--super-constraints-1 matcher type)))
 
-(et-defun et:match--super-constraints-1 (matcher: *et:match--matcher type: *et:type) EtConstrainResult
+(et-defun et:match--super-constraints-1 (matcher: *et:match-matcher type: *et:type) EtConstrainResult
   (setq matcher (et:match--expand-aliases matcher))
 
-  (cl-loop for m-case in (et:repr->dnf (et:match--matcher->repr matcher))
-           collect (et:match--super-constraints-2 m-case type (et:match--matcher->generics matcher))
+  (cl-loop for m-case in (et:repr->dnf (et:match-matcher->repr matcher))
+           collect (et:match--super-constraints-2 m-case type (et:match-matcher->generics matcher))
            into results
            finally return (apply #'et:match-result-and results)))
 
@@ -2392,37 +2426,37 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 (et-defun et:match--type-contains-binds? (type: *et:type) Boolean
   (cl-loop for c in (et:type->cases type)
            thereis
-           (or (et:type--case->binds c) (et:type--case->typeofs c)
-               (pcase (et:type--case->value c)
-                 ((cl-struct et:type--alias args)
+           (or (et:type-case->binds c) (et:type-case->typeofs c)
+               (pcase (et:type-case->value c)
+                 ((cl-struct et:type-alias args)
                   (cl-loop for arg in args thereis (et:match--type-contains-binds? arg)))
-                 ((cl-struct et:type--dt args)
+                 ((cl-struct et:type-dt args)
                   (cl-loop for arg in args
                            thereis (and (et:type-p arg) (et:match--type-contains-binds? arg))))))))
 
-(et-defun et-sub-match (matcher: *et:match--matcher type: *et:type) EtMatchResult
+(et-defun et-sub-match (matcher: *et:match-matcher type: *et:type) EtMatchResult
   (let* ((result (et:match-sub-constraints matcher type)))
     (if (not (et:match-result->success result)) result
       ;; If matching succeeded, try to determine the optimal generic types
-      (let* ((qs (append (et:match-result->value result) (et:match--matcher->constraints matcher)))
-             (type (et--match-satisfy-constraints-smallest (et:match--matcher->generics matcher) qs)))
+      (let* ((qs (append (et:match-result->value result) (et:match-matcher->constraints matcher)))
+             (type (et--match-satisfy-constraints-smallest (et:match-matcher->generics matcher) qs)))
         (if (eq type 'INVALID) (et:match-failed)
           (et:match-result-new :success t :value type))))))
 
-(et-defun et-iso-match (matcher: *et:match--matcher type: *et:type) EtMatchResult
+(et-defun et-iso-match (matcher: *et:match-matcher type: *et:type) EtMatchResult
   "Like `et-sub-match', but require MATCHER and TYPE to be equivalent.
 
 Uses `et:match--iso-constraints' (both sub- and super-constraints) instead of
 `et:match-sub-constraints', so a successful match means TYPE is isomorphic to
 MATCHER under the inferred generics, not merely a subtype of it."
-  (declare (et (matcher *et:match--matcher) (type *et:type)
+  (declare (et (matcher *et:match-matcher) (type *et:type)
                (@return *et:match-result<List<*et:type>>)))
 
   (let* ((result (et:match--iso-constraints matcher type)))
     (if (not (et:match-result->success result)) result
       ;; If matching succeeded, try to determine the optimal generic types
-      (let* ((qs (append (et:match-result->value result) (et:match--matcher->constraints matcher)))
-             (type (et--match-satisfy-constraints-smallest (et:match--matcher->generics matcher) qs)))
+      (let* ((qs (append (et:match-result->value result) (et:match-matcher->constraints matcher)))
+             (type (et--match-satisfy-constraints-smallest (et:match-matcher->generics matcher) qs)))
         (if (eq type 'INVALID) (et:match-failed)
           (et:match-result-new :success t :value type))))))
 
@@ -2442,7 +2476,7 @@ types to be the never type."
            (cl-loop for (fact g type) in constraints
                     when (and (eq g gen) (eq fact 'Q:GEQ))
                     collect type into types
-                    finally return (et:algebra-simplify-type (apply #'et-union types)))))
+                    finally return (apply #'et-union types))))
      (if (cl-loop for (fact g type) in constraints
                   always
                   (or (not (eq g gen))
@@ -2501,7 +2535,7 @@ Returns the final list of generic types, or `INVALID'."
          ;; inferred output, rechecking its upper bounds
          (`(((S:GENERIC ,var)))
           (let* ((entry (or (assq var gen-repls) (cl-return 'INVALID)))
-                 (enlarged (et:algebra-simplify-type (et-union (cdr entry) (et:match-result->value result)))))
+                 (enlarged (et-union (cdr entry) (et:match-result->value result))))
             (unless (cl-loop for (fact g type) in constraints
                              always (or (not (eq g var))
                                         (not (eq fact 'Q:LEQ))
@@ -2519,16 +2553,19 @@ Returns the final list of generic types, or `INVALID'."
 
 
 ;;; ============================================================
-;;; Type algebra - et:algebra
+;;; Type algebra - `et:algebra'
 ;;;; Union
 
-(et-defun et-union (&rest types: List<*et:type>) *et:type
+(et-defun et:algebra-union (&rest types: List<*et:type>) *et:type
   "Return the exact type union of TYPES."
   (cl-loop with label = nil
            for type in types
            when (et:type->label type) do (setq label (et:type->label type))
            nconc (apply #'list (et:type->cases type)) into cases
            finally return (et:type-new :label label :cases cases)))
+
+(et-defun et-union (&rest types: List<*et:type>) *et:type
+  (et:algebra-simplify-type (apply #'et:algebra-union types)))
 
 
 ;;;; Subtype
@@ -2582,14 +2619,14 @@ non-empty list => Might be subtype depending on the conditions."
         (et:match-succeeded
          (apply #'append (mapcar #'et:match-result->value or-results))))))
 
-(et-defun et:algebra-sub-dt? (sub: *et:type--dt super: *et:type--dt) Boolean
+(et-defun et:algebra-sub-dt? (sub: *et:type-dt super: *et:type-dt) Boolean
   (et:match-result->success (et:algebra--sub-dt sub super)))
 
-(et-defun et:algebra--sub-dt (sub: *et:type--dt super: *et:type--dt)
+(et-defun et:algebra--sub-dt (sub: *et:type-dt super: *et:type-dt)
           EtSubtypeResult
   (et:dt-constraints
-   (et:type--dt->name sub) (et:type--dt->args sub)
-   (et:type--dt->name super) (et:type--dt->args super)
+   (et:type-dt->name sub) (et:type-dt->args sub)
+   (et:type-dt->name super) (et:type-dt->args super)
    (lambda (a b) (et:algebra--subtype-0 a b))
    (lambda (a b) (et:algebra--subtype-0 b a))
    (lambda (a b) (et:match-result-and (et:algebra--subtype-0 a b) (et:algebra--subtype-0 b a)))
@@ -2605,18 +2642,18 @@ non-empty list => Might be subtype depending on the conditions."
            into results
            finally return (apply #'et:match-result-and results)))
 
-(et-defun et:algebra--sub-case (sub: *et:type--case super: *et:type--case) EtSubtypeResult
+(et-defun et:algebra--sub-case (sub: *et:type-case super: *et:type-case) EtSubtypeResult
   (let* ((result
           (et:match-result-and
-           (if (cl-subsetp (et:type--case->typeofs super) (et:type--case->typeofs sub))
+           (if (cl-subsetp (et:type-case->typeofs super) (et:type-case->typeofs sub))
                (et:match-succeeded nil) (et:match-failed))
 
            ;; For all polymorphs in the super-type,
            ;; the subtype must have the same polymorphs,
            ;; or be guaranteed smaller than all of the polymorphs
-           (cl-loop for poly in (et:type--case->polymorphs super)
+           (cl-loop for poly in (et:type-case->polymorphs super)
                     collect
-                    (if (memq poly (et:type--case->polymorphs sub)) (et:match-succeeded nil)
+                    (if (memq poly (et:type-case->polymorphs sub)) (et:match-succeeded nil)
                       ;; Look for a lower bound on the polymorph
                       ;; which guarantees that it will be larger than sub,
                       ;; or that guarantees that it will NOT be larger than sub
@@ -2640,11 +2677,11 @@ non-empty list => Might be subtype depending on the conditions."
                     finally return (apply #'et:match-result-and results))
 
            ;; Macro expansion in `et:algebra--subtype-0' means that the value should always be a datatype
-           (et:algebra--sub-dt (et:type--case->value sub) (et:type--case->value super))
-           (et:algebra--sub-binds (et:type--case->binds sub) (et:type--case->binds super))))
+           (et:algebra--sub-dt (et:type-case->value sub) (et:type-case->value super))
+           (et:algebra--sub-binds (et:type-case->binds sub) (et:type-case->binds super))))
          (success (et:match-result->success result))
          (indes (et:match-result->value result))
-         (sub-polys (et:type--case->polymorphs sub)))
+         (sub-polys (et:type-case->polymorphs sub)))
 
     (if (or (and success (null indes)) (null sub-polys)) result
       ;; If the above failed, and there are polymorphs in the subtype,
@@ -2787,7 +2824,7 @@ non-empty list => Might be subtype depending on the conditions."
               into all-cases
               finally return
               (let ((result (et:type-new :cases all-cases
-                                          :label (or (et:type->label a) (et:type->label b)))))
+                                         :label (or (et:type->label a) (et:type->label b)))))
                 ;; This assertion should pass if there are no bugs
                 (when (and et-debug subsect?)
                   (or (and (et-subtype? result a) (et-subtype? result b))
@@ -2799,49 +2836,49 @@ non-empty list => Might be subtype depending on the conditions."
   (cl-loop for (var . binds) in (seq-group-by #'car (append a-binds b-binds))
            collect (cons var (apply #'et:algebra--intersect subsect? (mapcar #'cdr binds)))))
 
-(et-defun et:algebra--case-expand-alias (case: *et:type--case alias: *et:type--alias) List<*et:type--case>
+(et-defun et:algebra--case-expand-alias (case: *et:type-case alias: *et:type-alias) List<*et:type-case>
   (cl-loop for exp-case in (et:type->cases (et:type--alias-expand alias))
            collect
-           (et:type--case-new
-            :value (et:type--case->value exp-case)
-            :binds (append (et:type--case->binds case)
-                           (et:type--case->binds exp-case))
-            :typeofs (append (et:type--case->typeofs case)
-                             (et:type--case->typeofs exp-case))
-            :polymorphs (append (et:type--case->polymorphs case)
-                                (et:type--case->polymorphs exp-case)))))
+           (et:type-case-new
+            :value (et:type-case->value exp-case)
+            :binds (append (et:type-case->binds case)
+                           (et:type-case->binds exp-case))
+            :typeofs (append (et:type-case->typeofs case)
+                             (et:type-case->typeofs exp-case))
+            :polymorphs (append (et:type-case->polymorphs case)
+                                (et:type-case->polymorphs exp-case)))))
 
-(et-defun et:algebra--intersect-cases (subsect?: Boolean a-case: *et:type--case b-case: *et:type--case)
-          List<*et:type--case>
+(et-defun et:algebra--intersect-cases (subsect?: Boolean a-case: *et:type-case b-case: *et:type-case)
+          List<*et:type-case>
   "Return a list of cases resulting from intersecting A-CASE and B-CASE."
-  (let* ((a (et:type--case->value a-case))
-         (b (et:type--case->value b-case))
-         (a-val-type (et-type (et:type--case-new :value a)))
-         (b-val-type (et-type (et:type--case-new :value b)))
+  (let* ((a (et:type-case->value a-case))
+         (b (et:type-case->value b-case))
+         (a-val-type (et-type (et:type-case-new :value a)))
+         (b-val-type (et-type (et:type-case-new :value b)))
          ;; Check if one of the values is a subtype of the other
          (sub-val (cond ((et-subtype? a-val-type b-val-type) a)
                         ((et-subtype? b-val-type a-val-type) b)))
          (make-case
           (lambda (val)
-            (et:type--case-new
+            (et:type-case-new
              :value val
              :binds (et:algebra--intersect-binds
                      subsect?
-                     (et:type--case->binds a-case) (et:type--case->binds b-case))
-             :typeofs (seq-uniq (append (et:type--case->typeofs a-case) (et:type--case->typeofs b-case)) #'eq)
-             :polymorphs (seq-uniq (append (et:type--case->polymorphs a-case) (et:type--case->polymorphs b-case)))))))
+                     (et:type-case->binds a-case) (et:type-case->binds b-case))
+             :typeofs (seq-uniq (append (et:type-case->typeofs a-case) (et:type-case->typeofs b-case)) #'eq)
+             :polymorphs (seq-uniq (append (et:type-case->polymorphs a-case) (et:type-case->polymorphs b-case)))))))
 
     (cond
      (sub-val (list (funcall make-case sub-val)))
 
-     ((et:type--alias-p a)
+     ((et:type-alias-p a)
       (cl-loop for exp-case in (et:algebra--case-expand-alias a-case a)
                nconc (et:algebra--intersect-cases subsect? exp-case b-case)))
-     ((et:type--alias-p b)
+     ((et:type-alias-p b)
       (cl-loop for exp-case in (et:algebra--case-expand-alias b-case b)
                nconc (et:algebra--intersect-cases subsect? a-case exp-case)))
 
-     ((and (et:type--dt-p a) (et:type--dt-p b))
+     ((and (et:type-dt-p a) (et:type-dt-p b))
       (let ((dt (et:algebra--intersect-datatypes subsect? a b)))
         (if (not (eq dt 'INVALID)) (list (funcall make-case dt))
           ;; This is where subsect and supersect differ
@@ -2852,13 +2889,13 @@ non-empty list => Might be subtype depending on the conditions."
 
      (t (error "Invalid type values")))))
 
-(et-defun et:algebra--intersect-datatypes (subsect?: Boolean a: *et:type--dt b: *et:type--dt)
-          (or *et:type--dt @INVALID)
+(et-defun et:algebra--intersect-datatypes (subsect?: Boolean a: *et:type-dt b: *et:type-dt)
+          (or *et:type-dt @INVALID)
   "Returns the datatype resulting from intersecting A and B, or `INVALID'."
-  (let* ((a-name (et:type--dt->name a))
-         (b-name (et:type--dt->name b))
-         (a-args (et:type--dt->args a))
-         (b-args (et:type--dt->args b)))
+  (let* ((a-name (et:type-dt->name a))
+         (b-name (et:type-dt->name b))
+         (a-args (et:type-dt->args a))
+         (b-args (et:type-dt->args b)))
     (cond
      ((et:algebra-sub-dt? a b) a)
      ((et:algebra-sub-dt? b a) b)
@@ -2870,7 +2907,7 @@ non-empty list => Might be subtype depending on the conditions."
               (lambda (a b) (et:algebra--intersect subsect? a b)) #'et-union)))
 
         (if (eq arg-intersection 'INVALID) 'INVALID
-          (et:type--dt-new :name a-name :args arg-intersection))))
+          (et:type-dt-new :name a-name :args arg-intersection))))
 
      (t 'INVALID))))
 
@@ -2896,27 +2933,27 @@ returning A itself is a valid approximation."
            for b-type = (alist-get var b-binds)
            collect (cons var (if b-type (et-subtract a-type b-type) a-type))))
 
-(et-defun et:algebra--subtract-cases (a-case: *et:type--case b-case: *et:type--case) List<*et:type--case>
-  (let* ((a (et:type--case->value a-case))
-         (b (et:type--case->value b-case))
-         (a-val-type (et-type (et:type--case-new :value a)))
-         (b-val-type (et-type (et:type--case-new :value b)))
+(et-defun et:algebra--subtract-cases (a-case: *et:type-case b-case: *et:type-case) List<*et:type-case>
+  (let* ((a (et:type-case->value a-case))
+         (b (et:type-case->value b-case))
+         (a-val-type (et-type (et:type-case-new :value a)))
+         (b-val-type (et-type (et:type-case-new :value b)))
          (make-case
           (lambda (val)
-            (et:type--case-new
+            (et:type-case-new
              :value val
-             :binds (et:algebra--subtract-binds (et:type--case->binds a-case) (et:type--case->binds b-case))
-             :typeofs (et:type--case->typeofs a-case)
-             :polymorphs (et:type--case->polymorphs a-case)))))
+             :binds (et:algebra--subtract-binds (et:type-case->binds a-case) (et:type-case->binds b-case))
+             :typeofs (et:type-case->typeofs a-case)
+             :polymorphs (et:type-case->polymorphs a-case)))))
 
     (cond
      ;; Subtracting gives never
      ((et-subtype? a-val-type b-val-type) nil)
 
-     ((et:type--alias-p a) (cl-loop for exp-case in (et:algebra--case-expand-alias a-case a)
-                              nconc (et:algebra--subtract-cases exp-case b-case)))
-     ((et:type--alias-p b) (cl-loop for exp-case in (et:algebra--case-expand-alias b-case b)
-                              nconc (et:algebra--subtract-cases a-case exp-case)))
+     ((et:type-alias-p a) (cl-loop for exp-case in (et:algebra--case-expand-alias a-case a)
+                                   nconc (et:algebra--subtract-cases exp-case b-case)))
+     ((et:type-alias-p b) (cl-loop for exp-case in (et:algebra--case-expand-alias b-case b)
+                                   nconc (et:algebra--subtract-cases a-case exp-case)))
 
      ;; Todo: Handle more complex cases
      (t (list (funcall make-case a))))))
@@ -2933,19 +2970,19 @@ returning A itself is a valid approximation."
 
 (defun et:algebra--transform-type (type type-fn case-fn)
   (et-declare (type *et:type)
-              (type-fn (or Nil (fn (Args *et:type ListR<*et:type--case>) *et:type)))
-              (case-fn (or Nil (fn (Args *et:type *et:type--case *et:type--alias|*et:type--dt) *et:type--case)))
+              (type-fn (or Nil (fn (Args *et:type ListR<*et:type-case>) *et:type)))
+              (case-fn (or Nil (fn (Args *et:type *et:type-case *et:type-alias|*et:type-dt) *et:type-case)))
               (@return *et:type))
 
   (let* ((sub-fn (lambda (sub) (et:algebra--transform-type sub type-fn case-fn)))
          (map-case-fn
           (lambda (case)
-            (let* ((val (pcase (et:type--case->value case)
-                          ((cl-struct et:type--alias name args)
-                           (et:type--alias-new :name name :args (mapcar sub-fn args)))
-                          ((cl-struct et:type--dt name args)
+            (let* ((val (pcase (et:type-case->value case)
+                          ((cl-struct et:type-alias name args)
+                           (et:type-alias-new :name name :args (mapcar sub-fn args)))
+                          ((cl-struct et:type-dt name args)
                            (let* ((new-args (et:dt-map-type-args name args sub-fn)))
-                             (et:type--dt-new :name name :args new-args)))
+                             (et:type-dt-new :name name :args new-args)))
                           (v (error "Invalid case val: %s" v)))))
               (if case-fn (funcall case-fn type case val)
                 (et-copy-with case :value val)))))
@@ -2956,11 +2993,11 @@ returning A itself is a valid approximation."
 
 ;;;; Binds utils
 
-(et-defun et-add-typeof (type: *et:type var: *et:type--var) *et:type
+(et-defun et-add-typeof (type: *et:type var: *et:type-var) *et:type
   (et-supersect
    type
-   (et-type (et:type--case-new :value (et:type--dt-new :name 'Any)
-                               :typeofs (list var)))))
+   (et-type (et:type-case-new :value (et:type-dt-new :name 'Any)
+                              :typeofs (list var)))))
 
 (et-defun et-remove-type-binds-and-polys (type: *et:type polys: ListR<EtGeneric>) *et:type
   (et:algebra--transform-type
@@ -2969,7 +3006,7 @@ returning A itself is a valid approximation."
      (et-copy-with case :value value :binds nil :typeofs nil
                    :polymorphs
                    (cl-remove-if (lambda (x) (memq x polys))
-                                 (et:type--case->polymorphs case))))))
+                                 (et:type-case->polymorphs case))))))
 
 (et-defun et:algebra-remove-binds (type: *et:type) *et:type
   "Recursively remove bindings/typeofs from TYPE."
@@ -2978,12 +3015,12 @@ returning A itself is a valid approximation."
    (lambda (_ case value)
      (et-copy-with case :value value :binds nil :typeofs nil))))
 
-(et-defun et:algebra-type-binds (type: *et:type) EtBinds
+(et-defun et-type-binds (type: *et:type) EtBinds
   ;; binds is an alist of `et-var' to a list of types (which will be `et-union'ed)
   (let* ((binds-alist nil))
     (dolist (case (et:type->cases type))
-      (let* ((binds (et:type--case->binds case))
-             (typeofs (et:type--case->typeofs case)))
+      (let* ((binds (et:type-case->binds case))
+             (typeofs (et:type-case->typeofs case)))
         (dolist (var (delete-dups (append (mapcar #'car binds) typeofs nil)))
           (let* ((b-type (alist-get var binds))
                  (ti-type (when (memq var typeofs)
@@ -2992,15 +3029,15 @@ returning A itself is a valid approximation."
                     (or b-type ti-type))
                   (alist-get var binds-alist))))))
     (cl-loop for (var . types) in (nreverse binds-alist)
-             collect (cons var (et:algebra-simplify-type (apply #'et-union (nreverse types)))))))
+             collect (cons var (apply #'et-union (nreverse types))))))
 
 (et-test
  (equal (list (cons (alist-get '$a et:repr--test-variables) (et 2|3)))
-        (et:algebra-type-binds (et $a::{2|3}&{1|2})))
+        (et-type-binds (et $a::{2|3}&{1|2})))
  (equal (list (cons (alist-get '$a et:repr--test-variables) (et 1|2)))
-        (et:algebra-type-binds (et {::$a}&{1|2})))
+        (et-type-binds (et {::$a}&{1|2})))
  (equal (list (cons (alist-get '$a et:repr--test-variables) (et 2)))
-        (et:algebra-type-binds (et {::$a}&{$a::{2|3}}&{1|2}))))
+        (et-type-binds (et {::$a}&{$a::{2|3}}&{1|2}))))
 
 
 (et-defun et:algebra-replace-binds (type: *et:type binds: EtBinds) *et:type
@@ -3021,17 +3058,17 @@ returning A itself is a valid approximation."
   (cl-assert (et:type-p type))
 
   (cl-loop for case in (et:type->cases type)
-           for val = (et:type--case->value case)
+           for val = (et:type-case->value case)
            collect
            (et-copy-with
             case
             :value
             (pcase val
-              ((cl-struct et:type--alias name args)
-               (et:type--alias-new :name name :args (mapcar #'et:algebra--remove-labels args)))
-              ((cl-struct et:type--dt name args)
+              ((cl-struct et:type-alias name args)
+               (et:type-alias-new :name name :args (mapcar #'et:algebra--remove-labels args)))
+              ((cl-struct et:type-dt name args)
                (let ((new-args (et:dt-map-type-args name args #'et:algebra--remove-labels)))
-                 (et:type--dt-new :name name :args new-args)))
+                 (et:type-dt-new :name name :args new-args)))
               (_ (error "Invalid case val: %s" val))))
            into cases
            finally return (et:type-new :cases cases)))
@@ -3049,14 +3086,14 @@ with the value determined by `et-sub-match', as well as EXTRA-REPLS if
 provided.
 
 This returns an `et-match-result' in case matching fails."
-  (declare (et (matcher *et:match--matcher) (type *et:type) (output-repr EtRepr)
+  (declare (et (matcher *et:match-matcher) (type *et:type) (output-repr EtRepr)
                (extra-repls AList<EtGeneric~*et:type>)
                (@return *et:match-result<*et:type>)))
 
   (let* ((gens-result (et-sub-match matcher type)))
     (if (not (et:match-result->success gens-result)) gens-result
 
-      (cl-loop for gen in (et:match--matcher->generics matcher)
+      (cl-loop for gen in (et:match-matcher->generics matcher)
                for gen-type in (et:match-result->value gens-result)
                collect (cons gen gen-type) into new-repls
                finally return
@@ -3074,14 +3111,14 @@ This returns an `et-match-result' in case matching fails."
   (setq func-type (et-expand-all-aliases func-type))
 
   (cl-loop for case in (et:type->cases func-type)
-           for val = (et:type--case->value case)
+           for val = (et:type-case->value case)
            for result =
            (pcase val
-             ((cl-struct et:type--dt (name 'Function) (args `(,param-type ,return-type)))
+             ((cl-struct et:type-dt (name 'Function) (args `(,param-type ,return-type)))
               (if (et-subtype? arglist-type param-type)
                   (et:match-result-new :success t :value return-type)
                 (et:match-failed)))
-             ((cl-struct et:type--dt (name 'DynFunction) (args `(,matcher ,output-repr)))
+             ((cl-struct et:type-dt (name 'DynFunction) (args `(,matcher ,output-repr)))
               (et-infer matcher arglist-type output-repr))
              (_ (et:match-failed)))
            unless (et:match-result->success result) return result
@@ -3131,25 +3168,25 @@ uninterned names are rewritten by the wrapper."
                      (let* ((idx (length et:algebra--rec-transform-datatypes-loops))
                             (sym (make-symbol (format "Loop%d" idx))))
                        (push (cons sym nil) et:algebra--rec-transform-datatypes-loops)
-                       (et-type (et:type--alias-new :name sym :args nil)))
+                       (et-type (et:type-alias-new :name sym :args nil)))
 
     (cl-loop for case in (et:type->cases type)
-             for val = (et:type--case->value case)
+             for val = (et:type-case->value case)
              nconc
              (pcase val
-               ((cl-struct et:type--alias)
-                (let* ((binds (et:type--case->binds case))
-                       (typeofs (et:type--case->binds case))
-                       (polys (et:type--case->polymorphs case))
+               ((cl-struct et:type-alias)
+                (let* ((binds (et:type-case->binds case))
+                       (typeofs (et:type-case->binds case))
+                       (polys (et:type-case->polymorphs case))
                        (expanded (et:type--alias-expand val))
                        (expanded-transformed (et:algebra--rec-transform-datatypes-inner expanded transform)))
                   (if (equal expanded expanded-transformed) (list case)
                     (if (not (or binds typeofs polys)) (et:type->cases expanded-transformed)
                       ;; Add the binds from TYPE
                       (cl-loop for exp-case in (et:type->cases expanded-transformed)
-                               collect (et-copy-with case :value (et:type--case->value exp-case)))))))
+                               collect (et-copy-with case :value (et:type-case->value exp-case)))))))
 
-               ((cl-struct et:type--dt name args)
+               ((cl-struct et:type-dt name args)
                 (list (et-copy-with case :value (funcall transform name args)))))
              into new-cases
              finally return
@@ -3157,8 +3194,8 @@ uninterned names are rewritten by the wrapper."
                     (no-binds (et:algebra-remove-binds type))
                     (alias-type (cdar et:algebra--rec-transform-stack)))
                (if (not (et-stop-recursion-unset? alias-type))
-                   (let* ((alias (et:type--case->value (car (et:type->cases alias-type))))
-                          (sym (et:type--alias->name alias)))
+                   (let* ((alias (et:type-case->value (car (et:type->cases alias-type))))
+                          (sym (et:type-alias->name alias)))
                      (setcdr (assq sym et:algebra--rec-transform-datatypes-loops) no-binds)
                      (et:type--define-alias sym [] no-binds)
                      alias-type)
@@ -3186,11 +3223,11 @@ SUBS is an alist of (NAME . REPLACEMENT-TYPE)."
   (let* ((changed nil)
          (new-cases
           (cl-loop for case in (et:type->cases type)
-                   for val = (et:type--case->value case)
+                   for val = (et:type-case->value case)
                    nconc
                    (pcase val
                      ;; A loop reference: splice in its replacement cases.
-                     ((and (cl-struct et:type--alias (name name) (args args))
+                     ((and (cl-struct et:type-alias (name name) (args args))
                            (guard (null args))
                            (let repl (assq name subs))
                            (guard repl))
@@ -3207,12 +3244,12 @@ SUBS is an alist of (NAME . REPLACEMENT-TYPE)."
 (defun et:algebra--rec-subst-value (val subs)
   "Substitute loop references nested in type-case VALUE's arguments."
   (pcase val
-    ((cl-struct et:type--alias name args)
+    ((cl-struct et:type-alias name args)
      (let ((new-args (et:algebra--rec-subst-list args subs)))
-       (if (eq new-args args) val (et:type--alias-new :name name :args new-args))))
-    ((cl-struct et:type--dt name args)
+       (if (eq new-args args) val (et:type-alias-new :name name :args new-args))))
+    ((cl-struct et:type-dt name args)
      (let ((new-args (et:algebra--rec-subst-dt-args name args subs)))
-       (if (eq new-args args) val (et:type--dt-new :name name :args new-args))))
+       (if (eq new-args args) val (et:type-dt-new :name name :args new-args))))
     (_ (error "Invalid case val: %s" val))))
 
 (defun et:algebra--rec-subst-list (types subs)
@@ -3233,11 +3270,11 @@ Return ARGS itself when nothing changed."
   "Non-nil if TYPE references any alias whose name is in NAMES."
   (cl-loop for case in (et:type->cases type)
            thereis
-           (pcase (et:type--case->value case)
-             ((cl-struct et:type--alias name args)
+           (pcase (et:type-case->value case)
+             ((cl-struct et:type-alias name args)
               (or (memq name names)
                   (cl-some (lambda (a) (et:algebra--type-mentions-alias? a names)) args)))
-             ((cl-struct et:type--dt args)
+             ((cl-struct et:type-dt args)
               (cl-some (lambda (a) (and (et:type-p a) (et:algebra--type-mentions-alias? a names)))
                        args)))))
 
@@ -3271,7 +3308,7 @@ instead."
                      (cl-loop for (matcher . repr) in canonical-loops
                               for res = (et-iso-match matcher def)
                               when (et:match-result->success res)
-                              return (list (et:match--matcher->generics matcher)
+                              return (list (et:match-matcher->generics matcher)
                                            repr (et:match-result->value res)))
                      when hit collect (cons sym hit)))
            (collapsed nil)
@@ -3346,8 +3383,8 @@ structural key -- a stale result is never served, only a cache miss."
                    (subs (append collapsed
                                  (cl-loop for (sym . new-name) in renames
                                           collect (cons sym (et:type-new
-                                                             :cases (list (et:type--case-new
-                                                                           :value (et:type--alias-new :name new-name)))))))))
+                                                             :cases (list (et:type-case-new
+                                                                           :value (et:type-alias-new :name new-name)))))))))
               ;; Redefine each kept loop alias under its stable name.
               (cl-loop for (old . new) in renames
                        for new-def = (et:algebra--rec-subst (alist-get old kept) subs)
@@ -3378,9 +3415,9 @@ lazily because `List' is not yet defined when this file loads.")
     type
     (lambda (name args)
       (pcase name
-        ('ConsFresh (et:type--alias-new :name 'Cons :args (mapcar #'et-unfreshen-type args)))
-        ('VectorFresh (et:type--alias-new :name 'Vector :args (mapcar #'et-unfreshen-type args)))
-        (_ (et:type--dt-new :name name :args args))))
+        ('ConsFresh (et:type-alias-new :name 'Cons :args (mapcar #'et-unfreshen-type args)))
+        ('VectorFresh (et:type-alias-new :name 'Vector :args (mapcar #'et-unfreshen-type args)))
+        (_ (et:type-dt-new :name name :args args))))
     (et:algebra--unfreshen-canonical-loops))))
 
 (et-defun et-freshen-type (type: *et:type) *et:type
@@ -3391,9 +3428,9 @@ lazily because `List' is not yet defined when this file loads.")
       (pcase name
         ('ConsFull
          (let* ((new-args (list (et-freshen-type (car args)) (et-freshen-type (caddr args)))))
-           (et:type--dt-new :name 'ConsFresh :args new-args)))
-        ('VectorFull (et:type--alias-new :name 'VectorFresh :args (list (et-freshen-type (car args)))))
-        (_ (et:type--dt-new :name name :args args)))))))
+           (et:type-dt-new :name 'ConsFresh :args new-args)))
+        ('VectorFull (et:type-alias-new :name 'VectorFresh :args (list (et-freshen-type (car args)))))
+        (_ (et:type-dt-new :name name :args args)))))))
 
 (et-defun et-freshen-type-shallow (type: *et:type) *et:type
   (et:algebra-remove-binds
@@ -3403,8 +3440,8 @@ lazily because `List' is not yet defined when this file loads.")
       (pcase name
         ('ConsFull
          (let* ((new-args (list (car args) (et-freshen-type-shallow (caddr args)))))
-           (et:type--dt-new :name 'ConsFresh :args new-args)))
-        (_ (et:type--dt-new :name name :args args)))))))
+           (et:type-dt-new :name 'ConsFresh :args new-args)))
+        (_ (et:type-dt-new :name name :args args)))))))
 
 
 ;;;; Deep expand aliases
@@ -3412,12 +3449,12 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defun et-expand-aliases-at-depth (type: *et:type depth: Integer) *et:type
   (if (<= depth 0) type
     (cl-loop for case in (et:type->cases (et-expand-all-aliases type))
-             for dt = (et:type--case->value case)
+             for dt = (et:type-case->value case)
              for new-dt =
-             (et:type--dt-new
-              :name (et:type--dt->name dt)
+             (et:type-dt-new
+              :name (et:type-dt->name dt)
               :args (et:dt-map-type-args
-                     (et:type--dt->name dt) (et:type--dt->args dt)
+                     (et:type-dt->name dt) (et:type-dt->args dt)
                      (lambda (type) (et-expand-aliases-at-depth type (1- depth)))))
              collect (et-copy-with case :value new-dt) into new-cases
              finally return (et:type-new :label (et:type->label type) :cases new-cases))))
@@ -3502,6 +3539,7 @@ lazily because `List' is not yet defined when this file loads.")
   (or Symbol String Number
       (ConsR Sexp Sexp)
       (VectorR Sexp)))
+(et-defalias Sexps [] ListR<Sexp>)
 
 
 ;;;; Emacs aliases
