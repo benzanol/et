@@ -35,15 +35,12 @@
  (@alias EtRec Nil|*et:type)
  (@alias EtIdentifyPlist (KVPList @:constrain|@:populate|@:declare Nil|fn))
  (@alias EtIdentifyFn (fn Nil EtIdentifyPlist))
- (@alias EtChecked Nil|*et:type)
- (@alias EtCheckerFnOf [T] (fn T EtChecked))
- (@alias EtChecker (or EtCheckFn
-                       (Cons EtCheckerFnOf<ListR<Any>> List<Any>)))
 
+ (@alias EtChecked Nil|*et:type)
  (@alias EtCheckFn (fn Nil *et:type|Nil))
 
  (@symbol-property et-identify EtIdentifyFn)
- (@symbol-property et-checker EtChecker))
+ (@symbol-property et-checker EtCheckFn))
 
 (et-declare
  (@alias EtFuncParameters [T]
@@ -116,7 +113,7 @@
   (put sym 'et-checker fn)
   nil)
 
-(et-defun et-symbol-checker (sym: Var) Nil|EtChecker
+(et-defun et-symbol-checker (sym: Var) Nil|EtCheckFn
   (get sym 'et-checker))
 
 
@@ -240,6 +237,19 @@ only be read by functions in this file.")
 
 ;;;; Narrows helpers
 
+(et-defun et-cur-narrows () EtNarrows
+  et:check--context-narrows)
+
+;; Setting narrows
+
+(et-defun et-set-narrows ([(<= T EtNarrows)] narrows: T) T
+  (setq et:check--context-narrows narrows))
+
+(et-defun et-apply-type-narrows (type: *et:type) Nil
+  "Load bindings implied by TYPE into the current narrows scope."
+  (cl-callf et:check--narrows-and et:check--context-narrows
+    (et-type-binds type)))
+
 (et-defun et-kill-all-narrows () Nil
   (setq et:check--context-narrows nil))
 
@@ -249,25 +259,16 @@ only be read by functions in this file.")
           (if (null type) removed (cons (cons var type) removed)))
     nil))
 
-(et-defun et-cur-narrows () EtNarrows
-  et:check--context-narrows)
-
 (defmacro et-with-narrows (narrows &rest body)
   (declare (indent 1) (et (@expand)))
   `(let* ((et:check--context-narrows ,narrows)) ,@body))
+
+;; Accessing narrows
 
 (et-defun et:check--narrows-and (a: EtNarrows b: EtNarrows) EtNarrows
   (cl-loop for var in (seq-uniq (mapcar #'car (append a b)) #'eq)
            for t1 = (alist-get var a) for t2 = (alist-get var b)
            collect (cons var (if t1 (if t2 (et-supersect t1 t2) t1) t2))))
-
-(et-defun et-apply-type-narrows (type: *et:type) Nil
-  "Load bindings implied by TYPE into the current narrows scope."
-  (cl-callf et:check--narrows-and et:check--context-narrows
-    (et-type-binds type)))
-
-(et-defun et-set-narrows ([(<= T EtNarrows)] narrows: T) T
-  (setq et:check--context-narrows narrows))
 
 (et-defun et:check-var-type (var: *et:type-var) *et:type
   "Get the current narrowed type of a variable."
@@ -285,7 +286,7 @@ only be read by functions in this file.")
 
 ;;;; Check
 
-(et-defun et-checker-for (sym: Symbol) EtChecker|Nil
+(et-defun et-checker-for (sym: Symbol) EtCheckFn|Nil
   (if (et-get-fbind sym) #'et:check--function
     (et-symbol-checker sym)))
 
@@ -342,7 +343,7 @@ determine the output type."
 
      ;; Call the checker
      (if-let* ((checker (et-checker-for func)))
-         (let* ((output (if (functionp checker) (funcall checker) (apply checker))))
+         (let* ((output (funcall checker)))
            (if (or (null output) (et:type-p output)) output
              (et-fatal nil "Checker for `%s' had invalid return: %s" func output)))
        (et-err 0 "No type for `%s'" func)))
@@ -422,6 +423,18 @@ onto the original expression."
   (let* ((ht (make-hash-table :test #'eq)))
     (et:check--put-cons-paths ht nil expansion)
     (et:check--path-mappings-1 ht nil orig)))
+
+
+;;;; "Checkable"
+
+(et-declare
+ (@alias EtCheckable
+         (or *et:type EtCheckFn EtRel)))
+
+(et-defun et-check (chk: EtCheckable) *et:type
+  (cond ((et:type-p chk) chk)
+        ((functionp chk) (funcall chk))
+        (t (et-check-at chk))))
 
 
 ;;;; Tests
@@ -563,6 +576,26 @@ element."
           (when rest-param (list rest-param)))))
 
 
+;;;; Checker macros
+
+(et-defvar et:func--checker-macros AList<Sym~fn<Any~EtCheckFn>> nil)
+
+(defmacro et-define-checker-macro (abbrev arglist &rest body)
+  "Define a checker macro.
+
+A checker macro isn't itself a checker. Instead, a checker macro is a
+function that takes zero or more arguments, and generates a checker
+function based on those arguments.
+
+The BODY of the checker macro should return a lisp expression that will
+be used as the body of the checker function."
+  (declare (indent 2) (doc-string 3))
+  `(setf (alist-get ',abbrev et:func--checker-macros)
+         (cl-defun ,(intern (format "et--checker-macro-%s" abbrev)) ,arglist
+           ,@(when (stringp (car body)) (list (pop body)))
+           (eval (list #'lambda () (progn ,@body))))))
+
+
 ;;;; Finding/parsing declarations
 
 (et-defun et:func--declares-path (expr: Sexp) List<Integer>
@@ -580,12 +613,6 @@ element."
       (et-at declare-path
         (et-at-offset 1
           (et-parse-func-decls params declares))))))
-
-(et-defvar et:func--checker-abbrevs AList<Sym~EtCheckerFnOf<Any>>)
-
-(et-defun et-define-checker-abbrev (abbrev: Sym checker: EtCheckerFnOf<Any>) Nil
-  (setf (alist-get abbrev et:func--checker-abbrevs)
-        checker))
 
 (et-defun et-parse-func-decls (params: EtFuncParameters<Var> declares: ListR<Any>)
           Nil|EtFuncDeclarations
@@ -640,7 +667,7 @@ This assumes that the current path points to DECLARES."
             ;; The checker can be either FUNC or (FUNC ARGS...)
             `(@checker . ,fn-and-args)
             (and `(,abbrev . ,args)
-                 (let fn (alist-get abbrev et:func--checker-abbrevs))
+                 (let fn (alist-get abbrev et:func--checker-macros))
                  (guard fn)
                  (let fn-and-args (cons fn args))))
            (funcall use-strategy 'checker)
@@ -968,7 +995,7 @@ fresh types."
 
 ;;;; Check branches
 
-(et-defun et-check-branches (&rest branches: ListR<EtCheckFn>) *et:type
+(et-defun et-check-branches (&rest branches: ListR<EtCheckable>) *et:type
   "Type check parallel code paths, one of which must execute.
 
 In order to ensure the correctness of this function, on every execution
@@ -982,12 +1009,12 @@ be expressed as a sequence of parallel checkers in sequence."
   (let* ((all-types (et: List<*et:type> nil))
          (all-narrows (et: List<EtNarrows> nil)))
 
-    (dolist (fn branches)
+    (dolist (chk branches)
       ;; Limit narrows modifications to this block
       (et-with-narrows (et-cur-narrows)
-        (let* ((type (funcall fn)))
+        (let* ((type (et-check chk)))
           ;; If the case returns never, assume that it will never exit
-          (unless (or (null type) (et-never-p type))
+          (unless (et-never-p type)
             (push type all-types)
             (push (et-cur-narrows) all-narrows)))))
 
@@ -1003,7 +1030,7 @@ be expressed as a sequence of parallel checkers in sequence."
 
 ;;;; Check loop
 
-(et-defun et-check-loop (body-fn: fn) *et:type
+(et-defun et-check-loop (chk: EtCheckable) *et:type
   "Check BODY-FN, a block that may execute zero or more times.
 
 Pass 1 (diagnostics discarded via `et-result-boundary') discovers the
@@ -1015,10 +1042,10 @@ zero-iteration path and the after-an-iteration path.
 Returns the body's type (from the real pass)."
   (let* ((entry (et-cur-narrows))
          (dirty (et-with-narrows entry
-                  (ignore (et-result-boundary (funcall body-fn)))
+                  (ignore (et-result-boundary (et-check chk)))
                   (et:flow--narrows-changed-vars entry (et-cur-narrows)))))
     (et-set-narrows (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
-    (prog1 (funcall body-fn)
+    (prog1 (et-check chk)
       ;; Exit: 0 iterations (entry) OR >=1 iterations (current narrows).
       (et-set-narrows (et:flow--narrows-or entry (et-cur-narrows))))))
 
@@ -1031,7 +1058,7 @@ Returns the body's type (from the real pass)."
 
 ;;;; Check escapable
 
-(et-defun et-check-escapable (body-fn: fn) *et:type
+(et-defun et-check-escapable (chk: EtCheckable) *et:type
   "Check BODY-FN, a block that may be exited nonlocally at any point.
 
 Code after the enclosing form (e.g. `catch', `with-local-quit') runs
@@ -1043,7 +1070,7 @@ change.
 
 Returns the body's type."
   (let* ((entry (et-cur-narrows))
-         (type (funcall body-fn))
+         (type (et-check chk))
          (dirty (et:flow--narrows-changed-vars entry (et-cur-narrows))))
     (et-set-narrows (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
     type))
@@ -1073,14 +1100,14 @@ functions."
   (binds nil :et AList<Var~*et:type>)
   (fbinds nil :et AList<Var~*et:type>))
 
-(et-defun et-check-with-env (env: *et-env fn: EtCheckFn) EtChecked
+(et-defun et-check-with-env (env: *et-env chk: EtCheckable) *et:type
   "Perform a check inside of the environment specified by ENV."
   (et-with-binds (et-env->binds env)
     (et-with-fbinds (et-env->fbinds env)
       (et-with-narrows (et-env->narrows env)
-        (funcall fn)))))
+        (et-check chk)))))
 
-(et-defun et-check-env-branches (envs: ListR<*et-env> &rest branches: ListR<EtCheckFn>) EtChecked
+(et-defun et-check-env-branches (envs: ListR<*et-env> &rest branches: ListR<EtCheckable>) *et:type
   "Check BRANCHES, with each in its own environment determined by ENVS."
   (or (= (length envs) (length branches))
       (et-fatal "Expected %s branches, found %s" (length envs) (length branches)))
@@ -1093,6 +1120,11 @@ functions."
 
 ;;; ============================================================
 ;;; Control flow helpers - `et:helpers'
+
+;; All of the core types of control flow are defined in `et:check' and `et:flow'.
+;; These are simply applications of those control flows.
+
+
 ;;;; Check tail
 
 (et-defun et-check-tail (rec: EtRec &rest first-path: EtRel) *et:type
@@ -1108,31 +1140,52 @@ functions."
              finally return (or ret (et Nil)))))
 
 
-;;;; Check conditional
+;;;; Check conditionals
 
-(et-defun et-check-conditional (cond-type: *et:type then: EtCheckFn else: EtCheckFn) *et:type
-  (et-check-branches
-   (lambda ()
-     (et-apply-type-narrows (et-non-nil-of cond-type))
-     (funcall then))
-   (lambda ()
-     (et-apply-type-narrows (et-nil-of cond-type))
-     (funcall else))))
+(et-defun et-check-if (cond: EtCheckable then: EtCheckable else: EtCheckable) *et:type
+  (let* ((cond-type (et-check cond)))
+    (et-check-branches
+     (lambda ()
+       (et-apply-type-narrows (et-non-nil-of cond-type))
+       (et-check then))
+     (lambda ()
+       (et-apply-type-narrows (et-nil-of cond-type))
+       (et-check else)))))
+
+(et-defun et-check-or (first: EtCheckable second: EtCheckable) *et:type
+  (et-check-if first first second))
+
+(et-defun et-check-and (first: EtCheckable second: EtCheckable) *et:type
+  (et-check-if first second (et Nil)))
 
 
 ;;;; Check cases
 
-(et-defun et-check-cases (cases: AList<EtCheckFn~EtCheckFn> else: EtCheckFn) EtChecked
+(et-defun et-check-cases (cases: AList<EtCheckable~EtCheckable> else: EtCheckable) *et:type
   "Check a series of cases.
 
 Each case has a conditional fn (which runs if all previous case
 conditions failed,) and a body fn (which runs if its condition
 succeeds.)"
-  (if (null cases) (funcall else)
-    (et-check-conditional
+  (if (null cases) (et-check else)
+    (et-check-if
      (caar cases) (cdar cases)
      (lambda ()
        (et-check-cases (cdr cases) else)))))
+
+
+;;;; Simple checker macros
+
+(et-define-checker-macro @pcase (&rest repls)
+  "Replace the expression, then typecheck the replacement.
+
+The replacement can also be just a single type, in which case that type
+will be the result."
+  `(let* ((cur (et-cur-expr))
+          (result (pcase (cdr cur) ,@repls
+                         (_ (et-fatal nil "Invalid `%s' format" (car cur))))))
+     (if (et:type-p result) result
+       (et-check-expansion (et-cur-recommendation) result))))
 
 
 ;;; ============================================================
