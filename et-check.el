@@ -169,6 +169,45 @@
   `(let* ((et:check--fbinds (append ,fbinds et:check--fbinds)))
      ,@body))
 
+(et-defun et:check--function () EtChecked
+  (let* ((func (car (et-cur-expr)))
+         (func-type (et-get-fbind func)))
+
+    (let* ((arg-types (cl-loop for pos upfrom 1 below (length (et-cur-expr))
+                               for type = (et-check-at pos)
+                               collect (et-copy-with type :label (list :position pos))))
+           (args-type (et-tuple 'Cons arg-types))
+           (output-result (et-funcall func-type args-type)))
+      (cond
+       ((et:match-result->success output-result) (et:match-result->value output-result))
+       ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
+       ;; which means the true error was in the arguments, not this call
+       ((et-cur-result-failed?) nil)
+       ;; The stack in OUTPUT-RESULT is a list of (`sub'/`super' MATCHER TYPE)
+       (t
+        ;; Find the stack frame corresponding to the position
+        (cl-loop
+         with (arg-pos arg-type param-name param-repr) = nil
+         for (_ mrepr type) in (et:match-result->stack output-result)
+         ;; Collect the argument position
+         for pos = (plist-get (et:type->label type) :position)
+         when pos do (setq arg-pos pos arg-type type)
+         ;; Collect the parameter type
+         for name = (plist-get (et:repr->label mrepr) :field)
+         when name do (setq param-name name param-repr mrepr)
+         ;; Display the error message
+         finally do
+         (if (and arg-type param-repr)
+             (et-err arg-pos "[%s] Expected %s, found %s" param-name
+                     (et-repr-to-string param-repr) arg-type)
+           (pcase (et-type-single func-type)
+             ((or (cl-struct et:type-dt (name 'Function) (args `(,input ,_)))
+                  (and (cl-struct et:type-dt (name 'DynFunction) (args `(,matcher ,_)))
+                       (let input (et-repr-to-string (et:match-matcher->repr matcher)))))
+              (et-err (or arg-pos 0) "Expected %s, got %s" input args-type))
+             (_ (et-err (or arg-pos 0) "`%s' has type %s\\nInvalid arguments: %s"
+                        func func-type args-type))))))))))
+
 
 ;;;; The checking context
 
@@ -246,6 +285,10 @@ only be read by functions in this file.")
 
 ;;;; Check
 
+(et-defun et-checker-for (sym: Symbol) EtChecker|Nil
+  (if (et-get-fbind sym) #'et:check--function
+    (et-symbol-checker sym)))
+
 (et-defstruct et:check--result
   (type nil :et *et:type)
   (narrows nil :et AList<*et:type-var~*et:type>))
@@ -297,51 +340,12 @@ determine the output type."
        (ignore (et-result-boundary (funcall (get func 'et-deferred-declare))))
        (put func 'et-deferred-declare nil))
 
-     (pcase nil
-       ;; Custom checker
-       ((and (let checker (et-symbol-checker func)) (guard checker)
-             (let output (if (functionp checker) (funcall checker) (apply checker))))
-        (if (or (null output) (et:type-p output)) output
-          (et-fatal nil "Checker for `%s' had invalid return: %s" func output)))
-
-       ;; Function type property
-       ((and (let func-type (et-symbol-func-type func)) (guard func-type))
-        (let* ((arg-types (cl-loop for pos upfrom 1
-                                   for type = (et-check-at pos)
-                                   collect (et-copy-with type :label (list :position pos))))
-               (args-type (et-tuple 'Cons arg-types))
-               (output-result (et-funcall func-type args-type)))
-          (cond
-           ((et:match-result->success output-result) (et:match-result->value output-result))
-           ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
-           ;; which means the true error was in the arguments, not this call
-           ((et-cur-result-failed?) nil)
-           ;; The stack in OUTPUT-RESULT is a list of (`sub'/`super' MATCHER TYPE)
-           (t
-            ;; Find the stack frame corresponding to the position
-            (cl-loop
-             with (arg-pos arg-type param-name param-repr) = nil
-             for (_ mrepr type) in (et:match-result->stack output-result)
-             ;; Collect the argument position
-             for pos = (plist-get (et:type->label type) :position)
-             when pos do (setq arg-pos pos arg-type type)
-             ;; Collect the parameter type
-             for name = (plist-get (et:repr->label mrepr) :field)
-             when name do (setq param-name name param-repr mrepr)
-             ;; Display the error message
-             finally do
-             (if (and arg-type param-repr)
-                 (et-err arg-pos "[%s] Expected %s, found %s" param-name
-                         (et-repr-to-string param-repr) arg-type)
-               (pcase (et-type-single func-type)
-                 ((or (cl-struct et:type-dt (name 'Function) (args `(,input ,_)))
-                      (and (cl-struct et:type-dt (name 'DynFunction) (args `(,matcher ,_)))
-                           (let input (et-repr-to-string (et:match-matcher->repr matcher)))))
-                  (et-err (or arg-pos 0) "Expected %s, got %s" input args-type))
-                 (_ (et-err (or arg-pos 0) "`%s' has type %s\\nInvalid arguments: %s"
-                            func func-type args-type)))))))))
-
-       (_ (et-err 0 "No type for `%s'" func))))
+     ;; Call the checker
+     (if-let* ((checker (et-checker-for func)))
+         (let* ((output (if (functionp checker) (funcall checker) (apply checker))))
+           (if (or (null output) (et:type-p output)) output
+             (et-fatal nil "Checker for `%s' had invalid return: %s" func output)))
+       (et-err 0 "No type for `%s'" func)))
 
     ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
     ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
