@@ -293,7 +293,7 @@ only be read by functions in this file.")
   (type nil :et *et:type)
   (narrows nil :et AList<*et:type-var~*et:type>))
 
-(et-defun et:check--check-0 (expr: Sexp narrows: EtNarrows recommendation: Nil|*et:type)
+(et-defun et:check-check (expr: Sexp narrows: EtNarrows recommendation: Nil|*et:type)
           *et:check--result
   "Generates an `et-result' resulting from typechecking EXPR.
 
@@ -354,65 +354,7 @@ determine the output type."
     (expr (et-literal expr))))
 
 
-;;;; Macroexpansion handling
-
-(defvar et:check--expansion-expr nil
-  "An expression which got macroexpanded in an `et:check-check'.")
-
-(et-defvar et:check--expansion-waiting Boolean nil
-  "We are in a macroexpand, waiting to find a matching expr.")
-
-(et-defun et:check-check (expr: Sexp narrows: EtNarrows recommendation: Nil|*et:type)
-          *et:check--result
-  "Adjust the path based on a macro expansion if necessary.
-
-When macroexpanding an expression, the inner expressions will end up at
-different paths than the original expression. It is impossible to
-deterministically decide where the subexpressions ended up, but the best
-heuristic is by searching (using `equal') for each nested call to
-`et:check-check' inside of the original expression.
-
-This is a thin wrapper around `et:check--check-0' which checks if there
-was a past macroexpansion, checks if EXPR appeared in the original
-expanded expression, and adjusts the path if so."
-
-  (if (not et:check--expansion-waiting)
-      (et:check--check-0 expr narrows recommendation)
-
-    (let* ((path (et:check--path-in-tree expr et:check--expansion-expr)))
-      (if (not (listp path)) (et:check--check-0 expr narrows recommendation)
-        (let* ((et:check--expansion-waiting nil))
-          (et-without-sticky-path
-            (et-at path
-              (et:check--check-0 expr narrows recommendation))))))))
-
-(defun et-check-expansion (expanded &optional recommendation)
-  "Type check EXPANSION, an expr which was built from the current expr.
-
-EXPANSION is not literally present in the current expression, but it was
-built from the current expression, so parts of the current expression
-probably exist somewhere inside of EXPANSION, and should be mapped back
-onto the original expression."
-  (let* (;; Only the very first expanded expr exists in the actual code.
-         ;; If we get an expansion inside an expansion, keep the original expr
-         (et:check--expansion-expr (or et:check--expansion-expr (et-cur-expr)))
-         (result
-          (et-with-sticky-path
-            (et:check-check expanded et:check--context-narrows recommendation))))
-    (setq et:check--context-narrows (et:check--result->narrows result))
-    (et:check--result->type result)))
-
-(defun et:check--path-in-tree (expr tree)
-  "If EXPR exists in TREE, return its path, or return `NO' otherwise."
-  (if (equal expr tree) nil
-    (cl-loop for subtree in tree ; safe even if tree is not a list
-             for idx upfrom 0
-             for path = (et:check--path-in-tree expr subtree)
-             unless (eq path 'NO) return (cons idx path)
-             finally return 'NO)))
-
-
-;;;; Sub-check
+;;;; Check at
 
 (et-defun et-check-at (rec: EtRec &rest path: EtRel) *et:type
   "Type check the sub expression at PATH, returning the type or never.
@@ -429,6 +371,57 @@ the current checking expr."
          (checked (et-at flat (et:check-check expr et:check--context-narrows rec))))
     (setq et:check--context-narrows (et:check--result->narrows checked))
     (et:check--result->type checked)))
+
+
+;;;; Check expr
+
+(et-defun et-check-expr (rec: EtRec expr: Sexp mappings: AList<EtPath~EtPath>) EtChecked
+  "Check EXPR, mapping paths in EXPR back into the current expr."
+  (et-propagate-result
+   (et-result-boundary
+    (et:check-check expr et:check--context-narrows rec))
+   (lambda (path)
+     (cl-loop for (from . to) in mappings
+              when (and (>= (length path) (length from))
+                        (equal from (seq-subseq path 0 (length from))))
+              return (append to (seq-subseq path (length from)))
+              ;; If none match, map to nil
+              finally return nil))))
+
+
+;;;; Check expansion
+
+(et-defun et-check-expansion (rec: EtRec expansion: Sexp) *et:type
+  "Type check EXPANSION, an expr which was built from the current expr.
+
+EXPANSION is not literally present in the current expression, but it was
+built from the current expression, so parts of the current expression
+probably exist somewhere inside of EXPANSION, and should be mapped back
+onto the original expression."
+  (let* ((mappings (et:check--expansion-path-mappings (et-cur-expr) expansion)))
+    (et-check-expr rec expansion mappings)))
+
+(et-defun et:check--put-cons-paths (ht: Hashmap<Sexp~EtPath> path: EtPath expr: Sexp) Nil
+  (when (consp expr)
+    (puthash expr path ht)
+    (cl-loop for item in expr
+             for idx upfrom 0
+             do (et:check--put-cons-paths ht (append path (list idx)) item))))
+
+(et-defun et:check--path-mappings-1 (ht: Hashmap<Sexp~EtPath> path: EtPath expr: Sexp)
+          AList<EtPath~EtPath>
+  (when (consp expr)
+    (if-let* ((p (gethash expr ht)))
+        (list (cons p path))
+      (cl-loop for item in expr
+               for idx upfrom 0
+               append (et:check--path-mappings-1 ht (append path (list idx)) item)))))
+
+(et-defun et:check--expansion-path-mappings (orig: Sexp expansion: Sexp) AList<EtPath~EtPath>
+  "Determine a collection of path mappings from EXPANSION into ORIG."
+  (let* ((ht (make-hash-table :test #'eq)))
+    (et:check--put-cons-paths ht nil expansion)
+    (et:check--path-mappings-1 ht nil orig)))
 
 
 ;;;; Tests

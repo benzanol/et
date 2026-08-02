@@ -338,13 +338,13 @@ expression that is not actually in the buffer, ensure that
       :failed et:result--failed
       :diagnostics et:result--diagnostics)))
 
-(defun et-propagate-result (result)
-  (et-declare (result *et:result<Any>) (@return Nil))
+(et-defun et-propagate-result ([T] result: *et:result<T> &optional map-path: Nil|fn<EtPath~EtPath>) T
   (cl-assert et:result--active?)
   (cl-loop for (path severity msg) in (et:result->diagnostics result)
-           do (et:result--make-diagnostic path severity msg))
+           for new-path = (if map-path (funcall map-path path) path)
+           do (et:result--make-diagnostic new-path severity msg))
   (when (et:result->failed result) (setq et:result--failed t))
-  nil)
+  (et:result->value result))
 
 (defmacro et-failed-boundary (&rest body)
   "Evaluate BODY with `et:result--failed' temporarily bound to nil.
