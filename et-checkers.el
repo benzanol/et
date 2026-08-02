@@ -284,130 +284,6 @@ Returns a plist with :declare to set the symbol type."
 
 
 ;;; ============================================================
-;;; Sub checkers - `et:sub'
-;;;; Branches
-
-(et-defun et:sub--narrows-or (a: EtNarrows b: EtNarrows) EtNarrows
-  (cl-loop for (var . t1) in a
-           for t2 = (alist-get var b)
-           when t2 collect (cons var (et:algebra-simplify-type (et-union t1 t2)))))
-
-(et-defun et-check-branches (&rest branches: (ListR fn<Nil~*et:type>)) *et:type
-  "Type check parallel code paths, one of which must execute.
-
-In order to ensure the correctness of this function, on every execution
-of the parent function, one or more of the branches must execute. For
-example, for a non-exaustive pcase, a case MUST be added which just
-returns nil. This is to ensure the correctness of the resulting type AND
-the resulting narrows.
-
-This is the mother-of-all sub-checkers, as all sequences of checks can
-be expressed as a sequence of parallel checkers in sequence."
-  (let* ((all-types (et: List<*et:type> nil))
-         (all-narrows (et: List<EtNarrows> nil)))
-
-    (dolist (fn branches)
-      ;; Temporarily bind et:check--context-narrows to itself so that modifications
-      ;; are scoped to this block
-      (et-with-narrows (et-cur-narrows)
-        (let* ((type (funcall fn)))
-          ;; If the case returns never, assume that it will never exit
-          (unless (et-never-p type)
-            (push type all-types)
-            (push (et-cur-narrows) all-narrows)))))
-
-    (et-set-narrows (when all-narrows (cl-reduce #'et:sub--narrows-or all-narrows)))
-    (if (null (cdr all-types)) (car all-types)
-      (apply #'et-union all-types))))
-
-
-;;;; Tail
-
-(et-defun et-check-tail (rec: EtRec &rest first-path: EtRel) List<*et:type>
-  "Check a sequence of expressions, returning the type of the last one."
-  (setq first-path (flatten-tree first-path))
-  (let* ((parent-path (butlast first-path))
-         (parent-expr (et-cur-expr parent-path))
-         (start (car (last first-path))))
-
-    (cl-loop for idx upfrom start below (length parent-expr)
-             for sub-rec = (when (eq idx (1- (length parent-expr))) rec)
-             for ret = (et-check-at sub-rec (append parent-path (list idx)))
-             finally return ret)))
-
-
-;;;; Conditional
-
-(et-defun et-check-conditional (cond-type: *et:type then: fn else: fn) *et:type
-  (et-check-branches
-   (lambda ()
-     (et-apply-type-narrows (et-non-nil-of cond-type))
-     (funcall then))
-   (lambda ()
-     (et-apply-type-narrows (et-nil-of cond-type))
-     (funcall else))))
-
-
-;;;; Loop
-
-(et-defun et:sub--narrows-changed-vars (before: EtNarrows after: EtNarrows) List<*et:type-var>
-  "Vars whose narrow entry differs between BEFORE and AFTER."
-  (cl-loop for var in (seq-uniq (mapcar #'car (append before after)) #'eq)
-           unless (equal (alist-get var before) (alist-get var after))
-           collect var))
-
-(et-defun et-check-loop (body-fn: fn) *et:type
-  "Check BODY-FN, a block that may execute zero or more times.
-
-Pass 1 (diagnostics discarded via `et-result-boundary') discovers the
-vars the body can change. Pass 2 checks the body for real, with those
-vars' narrows dropped, so iteration N never trusts a narrow iteration
-N-1 may have broken. Afterward `et:check--context-narrows' holds the join of
-the zero-iteration path and the after-an-iteration path.
-
-Returns the body's type (from the real pass)."
-  (let* ((entry (et-cur-narrows))
-         (dirty (et-with-narrows entry
-                  (ignore (et-result-boundary (funcall body-fn)))
-                  (et:sub--narrows-changed-vars entry (et-cur-narrows)))))
-    (et-set-narrows (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
-    (prog1 (funcall body-fn)
-      ;; Exit: 0 iterations (entry) OR >=1 iterations (current narrows).
-      (et-set-narrows (et:sub--narrows-or entry (et-cur-narrows))))))
-
-
-;;;; Escapable
-
-(et-defun et-check-escapable (body-fn: fn) *et:type
-  "Check BODY-FN, a block that may be exited nonlocally at any point.
-
-Code after the enclosing form (e.g. `catch', `with-local-quit') runs
-whether BODY-FN completed or aborted partway through, so the only narrows
-that survive are the entry narrows on vars the body never touches: a
-narrow the body created (or an entry narrow on a var the body assigns)
-cannot be trusted, since the exit may have happened before or after the
-change.
-
-Returns the body's type."
-  (let* ((entry (et-cur-narrows))
-         (type (funcall body-fn))
-         (dirty (et:sub--narrows-changed-vars entry (et-cur-narrows))))
-    (et-set-narrows (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
-    type))
-
-
-;;;; Deferred
-
-(defmacro et-check-deferred (&rest body)
-  "Check BODY as code that runs at some later, unknown time.
-
-It sees none of the current flow's narrows, and the narrows it produces
-do not escape into the current flow."
-  (declare (indent 0))
-  `(et-with-narrows nil ,@body))
-
-
-;;; ============================================================
 ;;; Useful helpers
 ;;;; Print narrows
 
@@ -483,7 +359,7 @@ PATH is the path to the subexpression."
   "Type checker which expands a macro and type-checks the expansion."
   (unless (macrop (car (et-cur-expr)))
     (et-fatal 0 "Macro not defined: %s" (car (et-cur-expr))))
-  (et-check-expansion (macroexpand-1 et:check--context-expr)))
+  (et-check-expansion (macroexpand-1 (et-cur-expr))))
 
 (et-define-checker-abbrev '@expand #'et-macroexpand-checker)
 
@@ -507,6 +383,8 @@ Returns the type of the last expression in the body."
                 (et-remove-type-binds-and-polys actual-ret (mapcar #'car polys)))))))
     (apply #'et-union returns)))
 
+(et-defvar et-checking-defun Var|Nil nil
+  "The defun currently being processed.")
 
 (et-set-checker #'defun #'et:checker--defun)
 (et-set-checker #'cl-defun #'et:checker--defun)
@@ -540,7 +418,7 @@ Returns the type of the last expression in the body."
                           (func-type (plist-get decls :definition)))
                 (when (et:type-p func-type) func-type))
               ;; From recommendation
-              et:check--context-recommendation
+              (et-cur-recommendation)
               ;; All params are Any
               (progn (setq untyped-input (et-untyped-func-input params))
                      (et-dt 'Function untyped-input (et Any)))))

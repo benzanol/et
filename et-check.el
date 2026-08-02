@@ -35,9 +35,12 @@
  (@alias EtRec Nil|*et:type)
  (@alias EtIdentifyPlist (KVPList @:constrain|@:populate|@:declare Nil|fn))
  (@alias EtIdentifyFn (fn Nil EtIdentifyPlist))
- (@alias EtCheckerFn [T] (fn T Nil|*et:type))
- (@alias EtChecker (or EtCheckerFn<Nil>
-                       (Cons EtCheckerFn<ListR<Any>> List<Any>)))
+ (@alias EtChecked Nil|*et:type)
+ (@alias EtCheckerFnOf [T] (fn T EtChecked))
+ (@alias EtChecker (or EtCheckFn
+                       (Cons EtCheckerFnOf<ListR<Any>> List<Any>)))
+
+ (@alias EtCheckFn (fn Nil *et:type|Nil))
 
  (@symbol-property et-identify EtIdentifyFn)
  (@symbol-property et-checker EtChecker))
@@ -132,16 +135,24 @@
   (or (alist-get sym et:check--binds)
       (et-global-var sym)))
 
+(defmacro et-with-vars (vars &rest body)
+  (declare (indent 1) (et (@progn ListR<*et:type-var>)))
+  (let* ((loop `(cl-loop for var in ,vars
+                         do (cl-assert (et:type-var-p var))
+                         collect (cons (et:type-var->name var) var))))
+    `(let* ((et:check--binds (append ,loop et:check--binds)))
+       ,@body)))
+
 (defmacro et-with-binds (binds &rest body)
   "VARS can contain nil values."
   (declare (indent 1) (et (@progn (ListR (or Nil (ConsR Var *et:type))))))
-  `(let* ((vs (cl-loop for entry in ,binds
-                       when entry collect
-                       (let* ((name (car entry)) (type (cdr entry)))
-                         (cl-assert (symbolp name)) (cl-assert (et:type-p name))
-                         (cons name (et:type-var-new :name name :type type)))))
-          (et:check--binds (append vs et:check--binds)))
-     ,@body))
+  (let* ((loop `(cl-loop for entry in ,binds
+                         when entry collect
+                         (let* ((name (car entry)) (type (cdr entry)))
+                           (cl-assert (symbolp name)) (cl-assert (et:type-p name))
+                           (cons name (et:type-var-new :name name :type type))))))
+    `(let* ((et:check--binds (append ,loop et:check--binds)))
+       ,@body)))
 
 
 ;;;; The checking context
@@ -166,17 +177,23 @@ This should ONLY be modified by `et:check-check', the existing sub-checker
 functions, and the existing narrows modification functions. It should
 only be read by functions in this file.")
 
-(et-defun et-cur-recommendation () *et:type|Nil
-  et:check--context-recommendation)
-
 (et-defun et-cur-expr (&rest path: EtRel) Sexp|Nil
   (et:util-traverse-tree et:check--context-expr (flatten-list path)))
+
+(et-defun et-cur-recommendation () *et:type|Nil
+  et:check--context-recommendation)
 
 
 ;;;; Narrows helpers
 
 (et-defun et-kill-all-narrows () Nil
   (setq et:check--context-narrows nil))
+
+(et-defun et-update-var-narrow (var: *et:type-var &optional type: *et:type|Nil) Nil
+  (let* ((removed (cl-remove var et:check--context-narrows :key #'car)))
+    (setq et:check--context-narrows
+          (if (null type) removed (cons (cons var type) removed)))
+    nil))
 
 (et-defun et-cur-narrows () EtNarrows
   et:check--context-narrows)
@@ -313,12 +330,7 @@ determine the output type."
 
     ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
     ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
-     (pcase nil
-       ;; Check if there is a variable (local OR global scoped) associated with it
-       ((and (let var (et-get-symbol-var sym)) (guard var))
-        (et-add-typeof (et:check-var-type var) var))
-
-       (_ (et-err nil "Free variable: %s" sym))))
+     (et-check-var sym))
 
     (expr (et-literal expr))))
 
@@ -348,7 +360,7 @@ expanded expression, and adjusts the path if so."
   (if (not et:check--expansion-waiting)
       (et:check--check-0 expr narrows recommendation)
 
-    (let* ((path (et:sub--path-in-tree expr et:check--expansion-expr)))
+    (let* ((path (et:check--path-in-tree expr et:check--expansion-expr)))
       (if (not (listp path)) (et:check--check-0 expr narrows recommendation)
         (let* ((et:check--expansion-waiting nil))
           (et-without-sticky-path
@@ -371,12 +383,12 @@ onto the original expression."
     (setq et:check--context-narrows (et:check--result->narrows result))
     (et:check--result->type result)))
 
-(defun et:sub--path-in-tree (expr tree)
+(defun et:check--path-in-tree (expr tree)
   "If EXPR exists in TREE, return its path, or return `NO' otherwise."
   (if (equal expr tree) nil
     (cl-loop for subtree in tree ; safe even if tree is not a list
              for idx upfrom 0
-             for path = (et:sub--path-in-tree expr subtree)
+             for path = (et:check--path-in-tree expr subtree)
              unless (eq path 'NO) return (cons idx path)
              finally return 'NO)))
 
@@ -387,25 +399,17 @@ onto the original expression."
   "Type check the sub expression at PATH, returning the type or never.
 
 This assumes that the child will ALWAYS run, and thus that the resulting
-narrows should ALWAYS be applied."
+narrows should ALWAYS be applied.
+
+Unlike `et-at' and the like, PATH must be relative to the current
+checking expr root, not the current `et-at' root. This function should
+not be called within `et-at', it should always be called at the root of
+the current checking expr."
   (let* ((flat (flatten-tree path))
          (expr (et:util-traverse-tree et:check--context-expr flat))
          (checked (et-at flat (et:check-check expr et:check--context-narrows rec))))
     (setq et:check--context-narrows (et:check--result->narrows checked))
     (et:check--result->type checked)))
-
-
-;;;; Narrows modifiers
-
-(defun et-checker-on-set-var (var type)
-  "Should be called whenever VAR is assigned to TYPE.
-
-This should be called anytime a variable is set."
-  (et-declare (var *et:type-var) (type *et:type) (@return Nil))
-
-  (setq et:check--context-narrows
-        (cons (cons var type)
-              (cl-remove var et:check--context-narrows :key #'car))))
 
 
 ;;;; Tests
@@ -565,9 +569,9 @@ element."
         (et-at-offset 1
           (et-parse-func-decls params declares))))))
 
-(et-defvar et:func--checker-abbrevs AList<Sym~EtCheckerFn<Any>>)
+(et-defvar et:func--checker-abbrevs AList<Sym~EtCheckerFnOf<Any>>)
 
-(et-defun et-define-checker-abbrev (abbrev: Sym checker: EtCheckerFn<Any>) Nil
+(et-defun et-define-checker-abbrev (abbrev: Sym checker: EtCheckerFnOf<Any>) Nil
   (setf (alist-get abbrev et:func--checker-abbrevs)
         checker))
 
@@ -662,7 +666,7 @@ This assumes that the current path points to DECLARES."
 
 ;;;; Construct input repr
 
-(et-defun et-untyped-func-input (params: EtFuncParameters<T) *et:repr
+(et-defun et-untyped-func-input (params: EtFuncParameters<T>) *et:type
   "Guess an input type based only on the (untyped) parameters."
   (et-repr-to-type
    (et:func--params-to-input nil params (lambda (_) (et Any)) #'identity)))
@@ -879,6 +883,213 @@ FUNC-INPUT-TYPE."
 
 (et-defun et-process-file-exprs (file: String) Sexps
   (with-temp-buffer (insert-file-contents file) (et-process-buffer-exprs)))
+
+
+;;; ============================================================
+;;; Core control flow - `et:flow'
+;;;; Check reading/setting a variable
+
+(et-defun et-check-var (sym: Var) EtChecked
+  (if-let* ((var (et-get-symbol-var sym)))
+      (et-add-typeof (et:check-var-type var) var)
+    (et-err nil "Variable not in scope: %s" sym)))
+
+(et-defun et-check-var-at (&rest rel: EtRel) EtChecked
+  (et-at rel
+    (let* ((sym (symbolp (et-cur-expr rel))))
+      (if (symbolp sym) (et-check-var sym)
+        (et-err nil "Expected variable")))))
+
+(et-defun et-check-set-var (var: *et:type-var type: *et:type) EtChecked
+  "Should be called whenever VAR is assigned to TYPE."
+  (if (not (et-subtype? type (et:type-var->type var)))
+      (et-err nil "Variable %s is not assignable to type %s" var type)
+    (et-update-var-narrow var type)
+    type))
+
+(et-defun et-check-set-var-at (var: *et:type-var &rest rel: EtRel) EtChecked
+  (et-at rel
+    (et-check-set-var var (et-check-at (et:type-var->type var) rel))))
+
+
+;;;; Check a variable binding, determining the variable type
+
+(defvar et:flow--guessing-var-type nil)
+
+(et-defun et-check-lets (inits: AList<Var~*et:type> fn: EtCheckFn) EtChecked
+  "Check an expression with a variable bound to the best estimated type.
+
+This will first perform a trial run of FN to determine a good guess for
+what SYM should be bound to. Then, it will evaluate FN again with SYM
+bound to that type.
+
+TODO: Only perform estimation for certain types, such as literals and
+fresh types."
+  (et-with-binds (et:flow--guess-var-types inits fn)
+    (funcall fn)))
+
+(et-defun et:flow--guess-var-types (inits: AList<Var~*et:type> fn: EtCheckFn>) AList<Var~*et:type>
+  ;; Prevent an exponential blow-up in time complexity due to nested variables
+  (if et:flow--guessing-var-type
+      (cl-loop for (sym . init) in inits
+               collect (cons sym (et-reify-type init)))
+
+    (let* ((var-recs
+            (cl-loop for (sym . init) in inits
+                     for var = (et:type-var-new :name sym :type (et-reify-type init))
+                     collect (cons var nil)))
+           (advice (lambda (v)
+                     (when-let* ((entry (assq v var-recs)))
+                       (push (et-cur-recommendation) (cdr entry)))))
+           (et:flow--guessing-var-type t))
+      (et-with-advice #'et-check-var :before advice
+        (et-with-vars (mapcar #'car var-recs)
+          (funcall fn)))
+
+      (cl-loop for (var . recs) in var-recs
+               for reified = (et:type-var->type var)
+               for union = (apply #'et-union recs)
+               for type = (if (et-subtype? reified union) union
+                            (et-union union reified))
+               collect (cons (et:type-var->name var) type)))))
+
+
+;;;; Check branches
+
+(et-defun et-check-branches (&rest branches: ListR<EtCheckFn>) *et:type
+  "Type check parallel code paths, one of which must execute.
+
+In order to ensure the correctness of this function, on every execution
+of the parent function, one or more of the branches must execute. For
+example, for a non-exaustive pcase, a case MUST be added which just
+returns nil. This is to ensure the correctness of the resulting type AND
+the resulting narrows.
+
+This is the mother-of-all sub-checkers, as all sequences of checks can
+be expressed as a sequence of parallel checkers in sequence."
+  (let* ((all-types (et: List<*et:type> nil))
+         (all-narrows (et: List<EtNarrows> nil)))
+
+    (dolist (fn branches)
+      ;; Limit narrows modifications to this block
+      (et-with-narrows (et-cur-narrows)
+        (let* ((type (funcall fn)))
+          ;; If the case returns never, assume that it will never exit
+          (unless (or (null type) (et-never-p type))
+            (push type all-types)
+            (push (et-cur-narrows) all-narrows)))))
+
+    (et-set-narrows (when all-narrows (cl-reduce #'et:flow--narrows-or all-narrows)))
+    (if (null (cdr all-types)) (car all-types)
+      (apply #'et-union all-types))))
+
+(et-defun et:flow--narrows-or (a: EtNarrows b: EtNarrows) EtNarrows
+  (cl-loop for (var . t1) in a
+           for t2 = (alist-get var b)
+           when t2 collect (cons var (et:algebra-simplify-type (et-union t1 t2)))))
+
+
+;;;; Check loop
+
+(et-defun et-check-loop (body-fn: fn) *et:type
+  "Check BODY-FN, a block that may execute zero or more times.
+
+Pass 1 (diagnostics discarded via `et-result-boundary') discovers the
+vars the body can change. Pass 2 checks the body for real, with those
+vars' narrows dropped, so iteration N never trusts a narrow iteration
+N-1 may have broken. Afterward, the active narrows holds the join of the
+zero-iteration path and the after-an-iteration path.
+
+Returns the body's type (from the real pass)."
+  (let* ((entry (et-cur-narrows))
+         (dirty (et-with-narrows entry
+                  (ignore (et-result-boundary (funcall body-fn)))
+                  (et:flow--narrows-changed-vars entry (et-cur-narrows)))))
+    (et-set-narrows (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
+    (prog1 (funcall body-fn)
+      ;; Exit: 0 iterations (entry) OR >=1 iterations (current narrows).
+      (et-set-narrows (et:flow--narrows-or entry (et-cur-narrows))))))
+
+(et-defun et:flow--narrows-changed-vars (before: EtNarrows after: EtNarrows) List<*et:type-var>
+  "Vars whose narrow entry differs between BEFORE and AFTER."
+  (cl-loop for var in (seq-uniq (mapcar #'car (append before after)) #'eq)
+           unless (equal (alist-get var before) (alist-get var after))
+           collect var))
+
+
+;;;; Check escapable
+
+(et-defun et-check-escapable (body-fn: fn) *et:type
+  "Check BODY-FN, a block that may be exited nonlocally at any point.
+
+Code after the enclosing form (e.g. `catch', `with-local-quit') runs
+whether BODY-FN completed or aborted partway through, so the only narrows
+that survive are the entry narrows on vars the body never touches: a
+narrow the body created (or an entry narrow on a var the body assigns)
+cannot be trusted, since the exit may have happened before or after the
+change.
+
+Returns the body's type."
+  (let* ((entry (et-cur-narrows))
+         (type (funcall body-fn))
+         (dirty (et:flow--narrows-changed-vars entry (et-cur-narrows))))
+    (et-set-narrows (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
+    type))
+
+
+;;;; Check deferred
+
+(defmacro et-check-deferred (&rest body)
+  "Check BODY as code that runs at some later, unknown time.
+
+It sees none of the current flow's narrows, and the narrows it produces
+do not escape into the current flow."
+  (declare (indent 0))
+  `(et-with-narrows nil ,@body))
+
+
+;;; ============================================================
+;;; Control flow helpers - `et:helpers'
+;;;; Check tail
+
+(et-defun et-check-tail (rec: EtRec &rest first-path: EtRel) *et:type
+  "Check a sequence of expressions, returning the type of the last one."
+  (setq first-path (flatten-tree first-path))
+  (let* ((parent-path (butlast first-path))
+         (parent-expr (et-cur-expr parent-path))
+         (start (car (last first-path))))
+
+    (cl-loop for idx upfrom start below (length parent-expr)
+             for sub-rec = (when (eq idx (1- (length parent-expr))) rec)
+             for ret = (et-check-at sub-rec (append parent-path (list idx)))
+             finally return (or ret (et Nil)))))
+
+
+;;;; Check conditional
+
+(et-defun et-check-conditional (cond-type: *et:type then: EtCheckFn else: EtCheckFn) *et:type
+  (et-check-branches
+   (lambda ()
+     (et-apply-type-narrows (et-non-nil-of cond-type))
+     (funcall then))
+   (lambda ()
+     (et-apply-type-narrows (et-nil-of cond-type))
+     (funcall else))))
+
+
+;;;; Check cases
+
+(et-defun et-check-cases (cases: AList<EtCheckFn~EtCheckFn> else: EtCheckFn) EtChecked
+  "Check a series of cases.
+
+Each case has a conditional fn (which runs if all previous case
+conditions failed,) and a body fn (which runs if its condition
+succeeds.)"
+  (if (null cases) (funcall else)
+    (et-check-conditional
+     (caar cases) (cdar cases)
+     (lambda ()
+       (et-check-cases (cdr cases) else)))))
 
 
 ;;; ============================================================
