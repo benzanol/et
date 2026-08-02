@@ -124,7 +124,7 @@
 ;;; Checking - `et:check'
 ;;;; Symbol bindings
 
-(defvar et:check--binds nil
+(et-defvar et:check--binds AList<Var~*et:type-var> nil
   "Stack of (SYMBOL . `et:type-var').")
 
 (et-defun et-new-var (name: Var type: *et:type) *et:type
@@ -153,6 +153,21 @@
                            (cons name (et:type-var-new :name name :type type))))))
     `(let* ((et:check--binds (append ,loop et:check--binds)))
        ,@body)))
+
+
+;;;; Function bindings/checking
+
+(et-defvar et:check--fbinds AList<Symbol~*et:type> nil
+  "Stack of (SYMBOL . `et:type').")
+
+(et-defun et-get-fbind (name: Symbol) *et:type|Nil
+  (or (alist-get name et:check--fbinds)
+      (et-symbol-func-type name)))
+
+(defmacro et-with-fbinds (fbinds &rest body)
+  (declare (indent 1) (et (@progn AList<Symbol~*et:type>)))
+  `(let* ((et:check--fbinds (append ,fbinds et:check--fbinds)))
+     ,@body))
 
 
 ;;;; The checking context
@@ -1046,6 +1061,37 @@ It sees none of the current flow's narrows, and the narrows it produces
 do not escape into the current flow."
   (declare (indent 0))
   `(et-with-narrows nil ,@body))
+
+
+;;;; Custom environments
+
+(et-defstruct et-env
+  "An environment in which to check an expression.
+
+Contains things like binds, function binds, and narrows in which an
+expression can be evaluated. This is used for defining checkers like
+let, cl-flet, pcase, and anything else that binds variables or
+functions."
+  (narrows nil :et EtNarrows)
+  (binds nil :et AList<Var~*et:type>)
+  (fbinds nil :et AList<Var~*et:type>))
+
+(et-defun et-check-with-env (env: *et-env fn: EtCheckFn) EtChecked
+  "Perform a check inside of the environment specified by ENV."
+  (et-with-binds (et-env->binds env)
+    (et-with-fbinds (et-env->fbinds env)
+      (et-with-narrows (et-env->narrows env)
+        (funcall fn)))))
+
+(et-defun et-check-env-branches (envs: ListR<*et-env> &rest branches: ListR<EtCheckFn>) EtChecked
+  "Check BRANCHES, with each in its own environment determined by ENVS."
+  (or (= (length envs) (length branches))
+      (et-fatal "Expected %s branches, found %s" (length envs) (length branches)))
+
+  (cl-loop for env in envs
+           for b in branches
+           collect (lambda () (et-check-with-env env b)) into wrapped
+           finally return (apply #'et-check-branches wrapped)))
 
 
 ;;; ============================================================
