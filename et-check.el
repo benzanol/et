@@ -32,15 +32,23 @@
 
 (et-declare
  (@alias EtNarrows AList<*et:type-var~*et:type>)
- (@alias EtRec Nil|*et:type)
+ ;; True = keep the current recommendation
+ (@alias EtRec Nil|True|*et:type)
  (@alias EtIdentifyPlist (KVPList @:constrain|@:populate|@:declare Nil|fn))
  (@alias EtIdentifyFn (fn Nil EtIdentifyPlist))
 
  (@alias EtChecked Nil|*et:type)
  (@alias EtCheckFn (fn Nil *et:type|Nil))
 
+ (@alias EtCheckable
+         (or *et:type EtCheckFn
+             ;; car=t => then use the current recommendation
+             ;; car=* => check the tail AND use the current recommendation
+             (ConsR Symbol ListR<Any>)))
+
  (@symbol-property et-identify EtIdentifyFn)
- (@symbol-property et-checker EtCheckFn))
+ (@symbol-property et-checker EtCheckFn)
+ (@symbol-property et-check-macro fn<Any~*et:type>))
 
 (et-declare
  (@alias EtFuncParameters [T]
@@ -234,6 +242,9 @@ only be read by functions in this file.")
 (et-defun et-cur-recommendation () *et:type|Nil
   et:check--context-recommendation)
 
+(et-defun et-recommendation-type (rec: EtRec) *et:type|Nil
+  (if (eq rec t) (et-cur-recommendation) rec))
+
 
 ;;;; Narrows helpers
 
@@ -355,7 +366,8 @@ determine the output type."
     (expr (et-literal expr))))
 
 
-;;;; Check at
+;;;; Sub checkers
+;;;;; Check at
 
 (et-defun et-check-at (rec: EtRec &rest path: EtRel) *et:type
   "Type check the sub expression at PATH, returning the type or never.
@@ -369,18 +381,35 @@ not be called within `et-at', it should always be called at the root of
 the current checking expr."
   (let* ((flat (flatten-tree path))
          (expr (et:util-traverse-tree et:check--context-expr flat))
-         (checked (et-at flat (et:check-check expr et:check--context-narrows rec))))
+         (recommendation (et-recommendation-type rec))
+         (checked (et-at flat (et:check-check expr et:check--context-narrows recommendation))))
     (setq et:check--context-narrows (et:check--result->narrows checked))
     (et:check--result->type checked)))
 
 
-;;;; Check expr
+;;;;; Check tail
+
+(et-defun et-check-tail (rec: EtRec &rest first-path: EtRel) *et:type
+  "Check a sequence of expressions, returning the type of the last one."
+  (setq first-path (flatten-tree first-path))
+  (let* ((parent-path (butlast first-path))
+         (parent-expr (et-cur-expr parent-path))
+         (start (car (last first-path))))
+
+    (cl-loop for idx upfrom start below (length parent-expr)
+             for sub-rec = (when (eq idx (1- (length parent-expr))) rec)
+             for ret = (et-check-at sub-rec (append parent-path (list idx)))
+             finally return (or ret (et Nil)))))
+
+
+;;;;; Check expr
 
 (et-defun et-check-expr (rec: EtRec expr: Sexp mappings: AList<EtPath~EtPath>) EtChecked
   "Check EXPR, mapping paths in EXPR back into the current expr."
   (et-propagate-result
    (et-result-boundary
-    (et:check-check expr et:check--context-narrows rec))
+    (et:check-check expr et:check--context-narrows
+                    (et-recommendation-type rec)))
    (lambda (path)
      (cl-loop for (from . to) in mappings
               when (and (>= (length path) (length from))
@@ -390,7 +419,7 @@ the current checking expr."
               finally return nil))))
 
 
-;;;; Check expansion
+;;;;; Check expansion
 
 (et-defun et-check-expansion (rec: EtRec expansion: Sexp) *et:type
   "Type check EXPANSION, an expr which was built from the current expr.
@@ -425,95 +454,50 @@ onto the original expression."
     (et:check--path-mappings-1 ht nil orig)))
 
 
-;;;; "Checkable"
-
-(et-declare
- (@alias EtCheckable
-         (or *et:type EtCheckFn EtRel)))
+;;;; et-check macros
 
 (et-defun et-check (chk: EtCheckable) *et:type
-  (cond ((et:type-p chk) chk)
-        ((functionp chk) (funcall chk))
-        (t (et-check-at chk))))
+  (pcase chk
+    ((pred et:type-p) chk)
+    ((pred functionp) (funcall chk))
+    ((and `(,sym . ,args) (let fn (get sym 'et-check-macro)) (guard fn))
+     (apply fn args))
+    ((and `(,(and sym (pred functionp)) . ,args))
+     (apply sym args))
+    (`(,sym . ,_) (et-fatal 0 "Invalid checker macro: %s" sym))
+    (_ (et-fatal nil "Invalid checker expression"))))
+
+(defmacro et-define-check-macro (name arglist &rest body)
+  "Define a checker macro.
+
+A checker macro isn't itself a checker. Instead, a checker macro is a
+function that takes zero or more arguments, and generates a checker
+function based on those arguments.
+
+The BODY of the checker macro should return a lisp expression that will
+be used as the body of the checker function."
+  (declare (indent 2) (doc-string 3))
+  (pcase name
+    ((or `[,abbrev ,fname]
+         (and abbrev (let fname (intern (format "et--checker-macro-%s" abbrev)))))
+     `(put ',abbrev 'et-check-macro (cl-defun ,fname ,arglist ,@body)))))
 
 
-;;;; Tests
+(defmacro et:check--pop-rec (var)
+  `(when (or (eq (car ,var) t) (et:type-p (car ,var)))
+     (pop ,var)))
 
-(defun et-root-check-type (expr)
-  (et-declare (expr Sexp) (@return *et:type))
-  (let* ((result (et-result-boundary (et:check--result->type (et:check-check expr nil nil)))))
-    (when (et:result->failed result) (error "Type-checking failed"))
-    (et:result->value result)))
+(et-define-check-macro $at (&rest path)
+  (et-check-at (et:check--pop-rec path) path))
+(et-define-check-macro $at! (&rest path) (et-check-at t path))
 
-(defmacro et-assert-resolve (type expr &optional not)
-  (declare (indent 1))
-  `(et-result-boundary
-    (let* ((t-type (et-at 1 (et ,type)))
-           (r-type (et-at 2 (et:check--result->type (et:check-check ',expr nil nil)))))
-      (or (,(if not #'not #'identity) (et-subtype? r-type t-type))
-          (et-err 0 "Expected %s, got %s" t-type r-type)))))
+(et-define-check-macro $tail (&rest first-path)
+  (et-check-tail (et:check--pop-rec first-path) first-path))
+(et-define-check-macro $tail! (&rest first-path) (et-check-tail t first-path))
 
-(defmacro et-assert-no-resolve (type expr)
-  (declare (indent 1))
-  `(et-assert-resolve ,type ,expr 'NOT))
-
-(defmacro et-assert-resolve-errors (expr)
-  `(et-result-boundary
-    (or (et:result->failed (et-result-boundary (et:check--result->type (et:check-check ',expr nil nil))))
-        (et-err 0 "Didn't fail"))))
-
-(et-test
- (et-assert-resolve Integer 1)
- (et-assert-resolve Number 1)
- (et-assert-resolve Positive 1)
- (et-assert-resolve Negative -1)
- (et-assert-resolve Number 1.1)
- (et-assert-no-resolve Number "1")
- (et-assert-no-resolve Integer 1.1)
- (et-assert-no-resolve Positive -1)
- (et-assert-no-resolve Positive 0)
- (et-assert-no-resolve Negative 1)
- (et-assert-no-resolve Negative 0)
-
- (et-assert-resolve String "1")
- (et-assert-no-resolve String 1)
-
- (et-assert-resolve Symbol nil)
- (et-assert-resolve Symbol t)
- (et-assert-no-resolve Symbol 1)
- (et-assert-no-resolve Symbol "1")
-
- (et-assert-resolve Boolean t)
- (et-assert-resolve Boolean nil)
- (et-assert-no-resolve Boolean 1)
- (et-assert-no-resolve Boolean "1"))
-
-(et-test
- ;; and - value must satisfy all constituent types
- (et-assert-resolve Boolean&Symbol&True&@t t)
- (et-assert-no-resolve Boolean&Integer t)
- (et-assert-no-resolve Boolean&Integer 1)
- (et-assert-no-resolve Boolean&Integer nil)
-
- ;; Two or types
- (et-assert-resolve Boolean|Integer t)
- (et-assert-resolve Boolean|Integer nil)
- (et-assert-resolve Boolean|Integer 1)
- (et-assert-no-resolve Boolean|Integer "1")
-
- ;; Three or types
- (et-assert-resolve Boolean|Integer|String t)
- (et-assert-resolve Boolean|Integer|String 1)
- (et-assert-resolve Boolean|Integer|String "1")
-
- ;; Nested - and inside or
- (et-assert-resolve Integer|Boolean&Symbol t)
- (et-assert-resolve Integer|Boolean&Symbol 1)
-
- ;; Nested - or inside and
- (et-assert-resolve Boolean&{Symbol|Integer} t)
- (et-assert-resolve Boolean&{Symbol|Integer} nil)
- (et-assert-no-resolve Boolean&{Symbol|Integer} 1))
+(et-define-check-macro $exp (&rest args)
+  (et-check-expansion (et:check--pop-rec args) (car args)))
+(et-define-check-macro $exp! (exp) (et-check-expansion t exp))
 
 
 ;;; ============================================================
@@ -574,26 +558,6 @@ element."
           (nreverse optional)
           (nreverse key-params)
           (when rest-param (list rest-param)))))
-
-
-;;;; Checker macros
-
-(et-defvar et:func--checker-macros AList<Sym~fn<Any~EtCheckFn>> nil)
-
-(defmacro et-define-checker-macro (abbrev arglist &rest body)
-  "Define a checker macro.
-
-A checker macro isn't itself a checker. Instead, a checker macro is a
-function that takes zero or more arguments, and generates a checker
-function based on those arguments.
-
-The BODY of the checker macro should return a lisp expression that will
-be used as the body of the checker function."
-  (declare (indent 2) (doc-string 3))
-  `(setf (alist-get ',abbrev et:func--checker-macros)
-         (cl-defun ,(intern (format "et--checker-macro-%s" abbrev)) ,arglist
-           ,@(when (stringp (car body)) (list (pop body)))
-           (eval (list #'lambda () (progn ,@body))))))
 
 
 ;;;; Finding/parsing declarations
@@ -1125,21 +1089,6 @@ functions."
 ;; These are simply applications of those control flows.
 
 
-;;;; Check tail
-
-(et-defun et-check-tail (rec: EtRec &rest first-path: EtRel) *et:type
-  "Check a sequence of expressions, returning the type of the last one."
-  (setq first-path (flatten-tree first-path))
-  (let* ((parent-path (butlast first-path))
-         (parent-expr (et-cur-expr parent-path))
-         (start (car (last first-path))))
-
-    (cl-loop for idx upfrom start below (length parent-expr)
-             for sub-rec = (when (eq idx (1- (length parent-expr))) rec)
-             for ret = (et-check-at sub-rec (append parent-path (list idx)))
-             finally return (or ret (et Nil)))))
-
-
 ;;;; Check conditionals
 
 (et-defun et-check-if (cond: EtCheckable then: EtCheckable else: EtCheckable) *et:type
@@ -1176,7 +1125,10 @@ succeeds.)"
 
 ;;;; Simple checker macros
 
-(et-define-checker-macro @pcase (&rest repls)
+(et-define-checker-macro $eval (&rest exprs)
+  `(progn ,@exprs))
+
+(et-define-checker-macro $pcase (&rest repls)
   "Replace the expression, then typecheck the replacement.
 
 The replacement can also be just a single type, in which case that type
@@ -1185,7 +1137,7 @@ will be the result."
           (result (pcase (cdr cur) ,@repls
                          (_ (et-fatal nil "Invalid `%s' format" (car cur))))))
      (if (et:type-p result) result
-       (et-check-expansion (et-cur-recommendation) result))))
+       (et-check-expansion t result))))
 
 
 ;;; ============================================================
