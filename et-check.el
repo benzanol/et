@@ -653,7 +653,10 @@ be used as the body of the checker function."
 
 (defvar et:flow--guessing-var-type nil)
 
-(et-define-check-macro $inferred-binds (inits body)
+(et-define-check-shortcut $infer-bind (var bind body)
+  `($infer-binds (list (cons ,var (et-chk ,bind))) ,body))
+
+(et-define-check-macro $infer-binds (inits body)
   "Check an expression with a variable bound to the best estimated type.
 
 This will first perform a trial run of BODY to determine a good guess
@@ -812,8 +815,13 @@ functions."
     `(let* ((,envsym ,env))
        (et-with-binds (et-env->binds ,envsym)
          (et-with-fbinds (et-env->fbinds ,envsym)
-           (et-with-narrows (et-env->narrows ,envsym)
-             (et-chk ,chk)))))))
+           ;; If any of the narrows are the never type, then don't even bother
+           ;; checking the inner expression, and just return never
+           (if (cl-loop for (_ . type) in (et-env->narrows ,envsym)
+                        thereis (et-never-p type))
+               (et-never)
+             (et-with-narrows (et-env->narrows ,envsym)
+               (et-chk ,chk))))))))
 
 (et-define-check-macro [$envs et-check-env-branches] (envs &rest branches)
   (let* ((envs-sym (gensym "env")))
@@ -822,6 +830,46 @@ functions."
         ,@(cl-loop for b in branches
                    for idx upfrom 0
                    collect `($env (nth idx ,envs-sym) ,b))))))
+
+
+;;;; Root check macros
+
+(et-define-check-macro $pcase (&rest repls)
+  "Replace the expression, then typecheck the replacement.
+
+The replacement can also be just a single type, in which case that type
+will be the result."
+  `(pcase (cdr (et-cur-expr))
+     ,@(cl-loop for (pat chk) on repls by #'cddr
+                collect `(,pat (et-chk ,chk)))
+     (_ (et-fatal nil "Invalid `%s' format" (car (et-cur-expr))))))
+
+(et-define-check-macro $expand ()
+  `(if (macrop (car (et-cur-expr)))
+       (et-check-expansion nil (macroexpand-1 (et-cur-expr)))
+     (et-fatal 0 "Macro not defined: %s" (car (et-cur-expr)))))
+
+(et-define-check-shortcut $body (&rest specs)
+  `($progn
+    ,@(cl-loop for spec in specs
+               for pos upfrom 1
+               collect `($expect ,spec ($at ,pos)))
+    ($tail ,(1+ (length specs)))))
+
+
+;;;; Variable macros
+
+(et-define-check-macro $bind (varname chk body)
+  `(et-with-binds (list (cons ,varname (et-chk ,chk)))
+     (et-chk ,body)))
+
+(et-define-check-macro $temp-var (var type body)
+  `(let* ((,var (et:type-var-new :name ',var :type (et-chk ,type))))
+     (et-chk ,body)))
+
+(et-define-check-macro $when-var (var type body)
+  `(et-when-type (et-supersect (et:check-var-type ,var) (et-chk ,type))
+     (et-chk ,body)))
 
 
 ;;;; Utility check macros
@@ -840,6 +888,9 @@ functions."
          (et-fatal "Expected %s, found %s" ,expect ,typesym))
        ,typesym)))
 
+(et-define-check-shortcut $recurse (rest)
+  `($exp (,(car (et-cur-expr)) ,@rest)))
+
 (et-define-check-macro $progn (&rest chks)
   (cl-loop for chk in chks
            for idx upfrom 0
@@ -848,38 +899,22 @@ functions."
            into exprs
            finally return `(progn ,@exprs)))
 
-(et-define-check-macro $pcase (&rest repls)
-  "Replace the expression, then typecheck the replacement.
+(et-define-check-macro $prog1 (&rest chks)
+  (cl-loop for chk in chks
+           for idx upfrom 0
+           collect (if (= idx 0) `(et-chk ,chk)
+                     `(et-chk ($ignore ,chk)))
+           into exprs
+           finally return `(prog1 ,@exprs)))
 
-The replacement can also be just a single type, in which case that type
-will be the result."
-  `(pcase (cdr (et-cur-expr))
-     ,@(cl-loop for (pat chk) in repls
-                collect `(,pat (et-chk ,chk)))
-     (_ (et-fatal nil "Invalid `%s' format" (car (et-cur-expr))))))
-
-(et-define-check-macro $expand ()
-  `(if (macrop (car (et-cur-expr)))
-       (et-check-expansion nil (macroexpand-1 (et-cur-expr)))
-     (et-fatal 0 "Macro not defined: %s" (car (et-cur-expr)))))
-
-(et-define-check-shortcut $body (&rest specs)
-  `($progn
-    ,@(cl-loop for spec in specs
-               for pos upfrom 1
-               collect `($expect ,spec ($at ,pos)))
-    ($tail ,(1+ (length specs)))))
-
-
-;;;; Use a temporary variable
-
-(et-define-check-macro $temp-var (var type body)
-  `(let* ((,var (et:type-var-new :name ',var :type (et-chk ,type))))
-     (et-chk ,body)))
-
-(et-define-check-macro $when-var (var type body)
-  `(et-when-type (et-supersect (et:check-var-type ,var) (et-chk ,type))
-     (et-chk ,body)))
+(et-define-check-macro $infer (genvec match out chk)
+  (let* ((typesym (gensym "type")))
+    `(let* ((,typesym (et-chk ,chk)))
+       (or (et:match-result->value
+            (et-infer ,(et-parse-matcher match genvec)
+                      ,typesym
+                      ,(et-parse-repr out (et-genvec-generics genvec))))
+           (et-fatal "Expected %s, found %s" ',match ,typesym)))))
 
 
 ;;;; Check conditionals
@@ -925,7 +960,7 @@ will be the result."
   (et Nil))
 
 (et:helper--define-utility-checker :var (var: EtVar)
-  (et:type-var->type var))
+  (et:check-var-type var))
 
 ;; Hinting
 
