@@ -294,35 +294,9 @@ Returns a plist with :declare to set the symbol type."
 
 ;;; ============================================================
 ;;; Handy checkers - `et:checker'
-;;;; Macroexpand
-
-(defun et-macroexpand-checker ()
-  "Type checker which expands a macro and type-checks the expansion."
-  (unless (macrop (car (et-cur-expr)))
-    (et-fatal 0 "Macro not defined: %s" (car (et-cur-expr))))
-  (et-check-expansion (macroexpand-1 (et-cur-expr))))
-
-(et-define-checker-abbrev '@expand #'et-macroexpand-checker)
-
-
 ;;;; Function checkers
 
 (et-defvar et:checker--checking-defun Nil|Var nil)
-
-(defun et-check-function-body (params func-type body-path)
-  "The path should point to the function expr.
-
-Returns the type of the last expression in the body."
-  (et-declare (func-type *et:type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
-              (@return *et:type))
-  (let* ((returns
-          (et-in-function-body func-type params
-            (et-check-deferred
-              (let* ((actual-ret (et-check-tail body-path)))
-                (or (et-subtype? actual-ret expected-ret)
-                    (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
-                (et-remove-type-binds-and-polys actual-ret (mapcar #'car polys)))))))
-    (apply #'et-union returns)))
 
 (et-defvar et-checking-defun Var|Nil nil
   "The defun currently being processed.")

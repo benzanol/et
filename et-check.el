@@ -517,10 +517,10 @@ be used as the body of the checker function."
 
 
 (et-define-check-macro $at (&rest path)
-  `(et-check-at (et-cur-recommendation) ',path))
+  `(et-check-at (et-cur-recommendation) (list ,@path)))
 
 (et-define-check-macro $tail (&rest first-path)
-  `(et-check-tail (et-cur-recommendation) ',first-path))
+  `(et-check-tail (et-cur-recommendation) (list ,@first-path)))
 
 (et-define-check-macro $exp (expr)
   `(et-check-expansion (et-cur-recommendation) ,expr))
@@ -659,7 +659,9 @@ This assumes that the current path points to DECLARES."
           (`(@function . ,_) (et-fatal 0 "Expected (@function TYPE)"))
 
           ;; checker strategy
-          (`(@check ,chk)
+          ((or `(@check ,chk)
+               (and `(,(and sym (pred symbolp) (guard (et-check-macro-p sym))) . ,args)
+                    (let chk (cons sym args))))
            (funcall use-strategy 'checker)
            (when checker (et-fatal 0 "Multiple checkers specified"))
            (setq checker `(lambda () (et-chk ,chk))))
@@ -808,6 +810,23 @@ FUNC-INPUT-TYPE."
        (et-with-binds param-types
          ;; The body runs whenever the function is called, not here
          ,@body))))
+
+
+;;;; Check function body
+
+(defun et-check-function-body (params func-type body-path)
+  "The path should point to the function expr.
+
+Returns the type of the last expression in the body."
+  (et-declare (func-type *et:type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
+              (@return *et:type))
+  (let* ((returns
+          (et-in-function-body func-type params
+            (let* ((actual-ret (et-chk ($deferred ($tail body-path)))))
+              (or (et-subtype? actual-ret expected-ret)
+                  (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
+              (et-remove-type-binds-and-polys actual-ret (mapcar #'car polys))))))
+    (apply #'et-union returns)))
 
 
 ;;; ============================================================
@@ -1134,6 +1153,18 @@ will be the result."
      ,@(cl-loop for (pat chk) in repls
                 collect `(,pat (et-chk ,chk)))
      (_ (et-fatal nil "Invalid `%s' format" (car (et-cur-expr))))))
+
+(et-define-check-macro $expand ()
+  `(if (macrop (car (et-cur-expr)))
+       (et-check-expansion nil (macroexpand-1 (et-cur-expr)))
+     (et-fatal 0 "Macro not defined: %s" (car (et-cur-expr)))))
+
+(et-define-check-shortcut $body (&rest specs)
+  `($progn
+    ,@(cl-loop for spec in specs
+               for pos upfrom 1
+               collect `($expect ,spec ($at ,pos)))
+    ($tail ,(1+ (length specs)))))
 
 
 ;;;; Use a temporary variable

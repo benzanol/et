@@ -237,7 +237,7 @@ expression that is not actually in the buffer, ensure that
       et:result--path)))
 
 (defmacro et-at (rel &rest body)
-  (declare (indent 1) (et (@progn EtRel)))
+  (declare (indent 1) (et ($body EtRel)))
   (let* ((orig-var (gensym 'orig)))
     ;; On error, we want the path to stay where it is, hence using setq instead of let
     `(let ((,orig-var et:result--path))
@@ -246,7 +246,7 @@ expression that is not actually in the buffer, ensure that
          (setq et:result--path ,orig-var)))))
 
 (defmacro et-at-offset (offset &rest body)
-  (declare (indent 1) (et (@progn Integer)))
+  (declare (indent 1) (et ($body Integer)))
   ;; On error, we want the path to stay where it is, hence using setq instead of let
   `(let ((et:result--path-offset (+ et:result--path-offset ,offset)))
      ,@body))
@@ -254,12 +254,12 @@ expression that is not actually in the buffer, ensure that
 
 (defmacro et-with-sticky-path (&rest body)
   "Evaluate BODY with a sticky path at path REL."
-  (et-declare (@progn))
+  (et-declare ($body))
   `(let* ((et:result--sticky-path t)) ,@body))
 
 (defmacro et-without-sticky-path (&rest body)
   "Evaluate BODY with a sticky path at path REL."
-  (et-declare (@progn))
+  (et-declare ($body))
   `(let* ((et:result--sticky-path nil)) ,@body))
 
 
@@ -292,7 +292,7 @@ expression that is not actually in the buffer, ensure that
   nil)
 
 (defmacro et:result--define-diagnostics-function (name severity &optional failed)
-  (declare (et (@expand)))
+  (declare (et ($expand)))
   `(defun ,name (relative fmt &rest args)
      ,(format "Create a diagnostic with severity `%s'." severity)
      (apply #'et:result--make-diagnostic relative ',severity fmt args)
@@ -313,18 +313,18 @@ expression that is not actually in the buffer, ensure that
 
 (defmacro et-wrap-errors (format &rest body)
   "Add context to errors thrown in BODY."
-  (declare (indent 1) (et (@progn String)))
+  (declare (indent 1) (et ($body String)))
   `(condition-case-unless-debug err (progn . ,body)
      (error (error ,format (error-message-string err)))))
 
 (defmacro et-error-boundary (relative &rest body)
-  (declare (indent 1) (et (@progn EtRel)))
+  (declare (indent 1) (et ($body EtRel)))
   `(et-at ,relative
      (condition-case-unless-debug err (progn . ,body)
        (error (et-err nil (error-message-string err))))))
 
 (defmacro et-result-boundary (&rest body)
-  (declare (et (@expand)))
+  (declare (et ($expand)))
 
   `(let* ((et:result--active? t)
           (et:result--path nil)
@@ -352,7 +352,7 @@ expression that is not actually in the buffer, ensure that
 Sometimes, we care whether a particular function call failed. Checking
 `et:result--failed' normally isn't sufficient, because it already might
 be non-nil."
-  (declare (et (@progn)))
+  (declare (et ($body)))
   `(let* ((value-and-failed
            (let* ((et:result--failed nil))
              (cons (progn ,@body) et:result--failed))))
@@ -380,7 +380,7 @@ be non-nil."
 ;;;; Repeat
 
 (defmacro et-repeat (var repls &rest body)
-  (declare (indent 2) (et (@expand)))
+  (declare (indent 2) (et ($expand)))
   (cl-assert (vectorp repls))
   (cl-loop for repl across repls
            collect (cl-subst repl var body) into all
@@ -409,11 +409,11 @@ applying `copy-tree' to all list ltierals before they are returned. This
 could be improved in the future by replacing all list literals with
 instances of `list' and `cons', but this is not currently a high
 priority."
-  (declare (et (@expand)))
+  (declare (et ($expand)))
   (et:util--copy-quotes (cdr (backquote-process expr))))
 
 (defmacro et-ql (&rest exprs)
-  (declare (et (@expand)))
+  (declare (et ($expand)))
   (et:util--copy-quotes (cdr (backquote-process exprs))))
 
 
@@ -452,7 +452,7 @@ ever encountered again, this stored value will be returned.
 When execution returns to the original stack frame, the frame will have
 access to the default value that was created, as the cdar of the stack
 variable."
-  (declare (indent 3) (et (@expand)))
+  (declare (indent 3) (et ($expand)))
   `(let ((elem ,elem))
      (if-let* ((entry (assoc elem ,var)))
          (if (et-stop-recursion-unset? (cdr entry))
@@ -512,7 +512,7 @@ variable."
 ;;;; With advice
 
 (defmacro et-with-advice (symbol how fn &rest body)
-  (declare (indent 3) (et (@progn Var Var AnyFn)))
+  (declare (indent 3) (et ($body Var Var AnyFn)))
   (let* ((symvar (gensym "sym")) (fnvar (gensym "fn")))
     `(let* ((,symvar ,symbol) (,fnvar ,fn))
        (advice-add ,symvar ,how ,fnvar)
@@ -606,7 +606,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
            collect (cons name qs)))
 
 (defmacro et:type--with-polymorphs (polys &rest body)
-  (declare (indent 1) (et (@expand)))
+  (declare (indent 1) (et ($expand)))
   `(let* ((et:type--polymorphs (append ,polys et:type--polymorphs)))
      ,@body))
 
@@ -737,7 +737,7 @@ This is a common pattern for functions that have a `noerror' argument."
 ;;;; Defining aliases
 
 (defmacro et-custom-defalias (name arglist &rest body)
-  (declare (indent 2) (et (@expand)))
+  (declare (indent 2) (et ($expand)))
   (let* ((props (cl-loop while (keywordp (car body))
                          nconc (list (pop body) (pop body)) into props
                          finally return props)))
@@ -1758,7 +1758,7 @@ in GEN-REPLS, if it exists."
 ;;;; Segment macros
 
 (defmacro et:repr--deffactor (repr-sym spec-sym arglist &rest plist)
-  (declare (indent 3) (et (@expand)))
+  (declare (indent 3) (et ($expand)))
   (let* ((parse (or (plist-get plist :parse) (error "No :parse field provided")))
          (print (or (plist-get plist :print) (error "No :print field provided")))
          (totype (plist-get plist :to-type))
@@ -1770,7 +1770,7 @@ in GEN-REPLS, if it exists."
 
 (defmacro et:repr--defspec (spec-sym repr-sym arglist body)
   "Define how a spec form is parsed into a repr."
-  (declare (indent 3) (et (@expand)))
+  (declare (indent 3) (et ($expand)))
   `(put ',spec-sym 'et-spec-parse
         (cons ',repr-sym (lambda ,arglist ,body))))
 
@@ -2154,7 +2154,7 @@ DNF is the struct representing the matcher."
 ;;;; Parse/print matcher
 
 (defmacro et-matcher (genvec &rest args)
-  (declare (indent 1) (et (@expand)))
+  (declare (indent 1) (et ($expand)))
   (or (vectorp genvec) (error "Write the generics as a vector"))
   `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
                      ,genvec))
