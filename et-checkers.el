@@ -123,6 +123,14 @@ Returns a plist with :constrain and :populate functions."
      (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist (declare (et ,@declares))))))
        (apply #'et:identify-defun (cdr defun-expr))))))
 
+(et-set-identifier '@check #'et:identify-@check)
+
+(et-defun et:identify-@check (name: Var chk: Sexp) EtIdentifyPlist
+  (list
+   :declare
+   (lambda ()
+     (et-set-checker name (eval `(lambda () (et-check ,chk)))))))
+
 
 ;;;; Macroexpand
 
