@@ -28,7 +28,8 @@
 
 
 ;;; ============================================================
-;;; Type declarations
+;;; Globals
+;;;; Type declarations
 
 (et-declare
  (@alias EtNarrows AList<*et:type-var~*et:type>)
@@ -64,9 +65,30 @@
  (@symbol-property et-function-props KVPList<Var~Any>))
 
 
-;;; ============================================================
-;;; Symbol properties
-;;;; Function type
+;;;; Customizations
+
+(defcustom et-display-narrows nil
+  "Whether to display narrowed types on if/when/etc blocks."
+  :group 'et
+  :type 'boolean)
+
+(et-defun et-pp-narrows (narrows: EtNarrows &optional sep: String|Nil) String
+  (cl-loop for (var . type) in narrows
+           collect (format "%s: %s" (et:type-var->name var) (et-pp type)) into strs
+           finally return (string-join strs (or sep "\\n"))))
+
+(et-defun et-hint-narrows (rel: EtRel &rest types: KVPList<String~EtNarrows>) Nil
+  "Display a list of binds to the user at path=(0).
+
+TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
+  (when et-display-narrows
+    (cl-loop for (fmt type) on types by #'cddr
+             for binds = (et-type-binds type) ; TODO: display just binds instead of whole type
+             when binds do (et-hint rel fmt (et-pp-narrows binds)))))
+
+
+;;;; Symbol properties
+;;;;; Function type
 
 (et-defun et-symbol-func-type (name: Var) *et:type|Nil
   (when (get name 'et-deferred-declare)
@@ -90,7 +112,7 @@
     ((and chk (pred functionp)) (put name 'et-checker chk))))
 
 
-;;;; Variable type
+;;;;; Variable type
 
 (et-defun et-set-global-var-type (name: Var type: *et:type) Nil
   (put name 'et-variable-type type)
@@ -103,7 +125,7 @@
   (get name 'et-variable-var))
 
 
-;;;; Identifier
+;;;;; Identifier
 
 (et-defvar et:process--identifier-symbols List<Symbol> nil)
 
@@ -115,7 +137,7 @@
   (get sym 'et-identify))
 
 
-;;;; Checker
+;;;;; Checker
 
 (et-defun et-set-checker (sym: Var fn: fn) Nil
   (put sym 'et-checker fn)
@@ -1135,18 +1157,20 @@ will be the result."
   `(let* ((,var (et:type-var-new :name ',var :type (et-chk ,type))))
      (et-chk ,body)))
 
-(et-define-check-macro $when-var (var type body)
-  `(et-when-type (et-supersect (et:check-var-type (et-chk ,var)) ,type)
-     (et-chk ,body)))
+(et-define-check-macro $when-var (var type body &optional hint)
+  (let* ((intersym (gensym "intersection")))
+    `(let* ((,intersym (et-supersect (et:check-var-type (et-chk ,var)) (et-chk ,type))))
+       ,@(when hint (list `(et-hint-narrows 0 hint (et-type-binds ,intersym))))
+       (et-when-type ,intersym (et-chk ,body)))))
 
 
 ;;;; Check conditionals
 
-(et-define-check-shortcut [$if et-check-if] (cond then else)
+(et-define-check-shortcut [$if et-check-if] (cond then else &optional then-hint else-hint)
   `($temp-var cond-var ,cond
               ($branches
-               ($when-var cond-var ($type NonNil) ,then)
-               ($when-var cond-var ($type Nil) ,else))))
+               ($when-var cond-var ($type NonNil) ,then ,then-hint)
+               ($when-var cond-var ($type Nil) ,else ,else-hint))))
 
 (et-define-check-shortcut [$or et-check-or] (cond else)
   `($temp-var cond-var ,cond

@@ -254,6 +254,7 @@ Returns a plist with :constrain and :populate functions."
                                          arglist-repr struct-repr))))))))
 
 
+;;;; @get
 
 (et-set-identifier '@get #'et:identify-@get)
 
@@ -289,74 +290,6 @@ Returns a plist with :declare to set the symbol type."
       (push library et:identify--require-loaded-libs)
       ;; Process the buffer without propagating diagnostics
       (et-process-exprs (et-process-file-exprs library)))))
-
-
-;;; ============================================================
-;;; Useful helpers
-;;;; Print narrows
-
-(defcustom et-display-narrows nil
-  "Whether to display narrowed types on if/when/etc blocks."
-  :group 'et
-  :type 'boolean)
-
-(defun et-pp-narrows (narrows &optional sep)
-  (cl-loop for (var . type) in narrows
-           collect (format "%s: %s" (et:type-var->name var) (et-pp type)) into strs
-           finally return (string-join strs (or sep "\\n"))))
-
-(defun et-checker-hint-narrows (path &rest types)
-  "Display a list of binds to the user at path=(0).
-
-TYPES is (FMT1 TYPE1 FMT2 TYPE2 ...)."
-  (when et-display-narrows
-    (cl-loop for (fmt type) on types by #'cddr
-             for binds = (et-type-binds type) ; TODO: display just binds instead of whole type
-             when binds do (et-hint path fmt (et-pp-narrows binds)))))
-
-
-;;;; Resolve
-
-(defun et-checker-resolve (type &rest path)
-  "Type check an expression at PATH, ensuring that it satisfied TYPE.
-
-TYPE is a type or an expression parseable to a type.
-
-PATH is the path to the subexpression."
-  (unless (et:type-p type) (setq type (et-parse-type type)))
-  (let* ((expr-type (et-check-at type path)))
-    (unless (et-subtype? expr-type type)
-      (et-err path "Expected %s, found %s" type expr-type))
-    type))
-
-
-;;;; Infer
-
-(defmacro et-checker-infer (type genvec matcher-spec output-spec)
-  (let* ((gens (et-genvec-generics genvec))
-         (constraints (et-genvec-constraints genvec)))
-    `(et--checker-infer ,type ',gens ',constraints ,(list '\` matcher-spec) ,(list '\` output-spec))))
-
-(defun et--checker-infer (type gens constraints matcher-spec output-spec)
-  (let* ((result
-          (et-infer (et:match-matcher-new
-                     :generics gens
-                     :constraints constraints
-                     :repr (et-parse-repr matcher-spec gens))
-                    type
-                    (et-parse-repr output-spec gens))))
-    (when (et:match-result->success result)
-      (et:match-result->value result))))
-
-
-;;;; Nicer funcall
-
-(defun et-checker-funcall (func-type arglist-type)
-  (declare (et (func-type *et:type) (arglist-type *et:type)
-               (@return *et:type)))
-  (let* ((result (et-funcall func-type arglist-type)))
-    (when (et:match-result->success result)
-      (et:match-result->value result))))
 
 
 ;;; ============================================================
