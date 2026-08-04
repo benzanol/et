@@ -1,3 +1,6 @@
+;; -*- lexical-binding: t; -*-
+
+
 ;;; Pcase pattern parser
 
 (defun et:std--pcase-merge-envs (envs)

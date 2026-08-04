@@ -266,6 +266,10 @@ only be read by functions in this file.")
           (if (null type) removed (cons (cons var type) removed)))
     nil))
 
+(et-defun et-apply-type-narrows (type: *et:type) Nil
+  (cl-callf et:check--narrows-and et:check--context-narrows type)
+  nil)
+
 (defmacro et-with-narrows (narrows &rest body)
   (declare (indent 1) (et (@expand)))
   `(let* ((et:check--context-narrows ,narrows)) ,@body))
@@ -867,9 +871,19 @@ will be the result."
   `(let* ((,var (et:type-var-new :name ',var :type (et-chk ,type))))
      (et-chk ,body)))
 
-(et-define-check-macro $when-var (var type body)
-  `(et-when-type (et-supersect (et:check-var-type ,var) (et-chk ,type))
+
+;;;; Narrows control macros
+
+(et-define-check-macro $when-var (var is body)
+  `(et-when-type (et-supersect (et:check-var-type ,var) (et-chk ,is))
      (et-chk ,body)))
+
+(et-define-check-macro $must-be (type is)
+  (let* ((typesym (gensym "type")))
+    `(let* ((,typesym (et-supersect (et-chk ,type) (et-chk ,is))))
+       (if (et-never-p type) (et-fatal nil "Unexitable") ;TODO
+         (et-apply-type-narrows ,typesym))
+       (et Nil))))
 
 
 ;;;; Utility check macros
@@ -880,12 +894,13 @@ will be the result."
 (et-define-check-macro $ignore (chk)
   `(et-with-recommendation nil (et-chk ,chk)))
 
-(et-define-check-macro $expect (spec chk)
+(et-define-check-macro $expect (expected chk)
   (let* ((typesym (gensym "type"))
-         (expect (et-parse-type spec)))
-    `(let* ((,typesym (et-chk ,chk)))
-       (unless (et-subtype? ,typesym ,expect)
-         (et-fatal "Expected %s, found %s" ,expect ,typesym))
+         (expsym (gensym "expected")))
+    `(let* ((,expsym (et-chk ,expected))
+            (,typesym (et-chk ,chk)))
+       (unless (et-subtype? ,typesym ,expsym)
+         (et-fatal "Expected %s, found %s" ,expsym ,typesym))
        ,typesym)))
 
 (et-define-check-shortcut $recurse (rest)
