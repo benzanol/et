@@ -907,6 +907,64 @@ will be the result."
              collect (cons sym (et-check-at nil rel pos 1)))))
 
 
+;;;; Utility checkers
+
+(defmacro et:helper--define-utility-checker (kwd arglist &rest body)
+  (declare (indent 2))
+  `(et-set-checker
+    ,kwd
+    (et-defun ,(intern (format "et:helpers--check-%s" kwd))
+        ,arglist EtChecked
+      ,@body)))
+
+(et:helper--define-utility-checker :type (spec: EtSpec)
+  (et-parse-type spec))
+
+(et:helper--define-utility-checker :eval (expr: Sexp)
+  (et-hint nil (et-pp (eval expr)))
+  (et Nil))
+
+(et:helper--define-utility-checker :var (var: EtVar)
+  (et:type-var->type var))
+
+;; Hinting
+
+(et:helper--define-utility-checker :pp (expr: Sexp)
+  (et-hint nil "%s" (eval expr))
+  (et Nil))
+
+(et:helper--define-utility-checker :narrows ()
+  (et-hint nil (et-pp-narrows (et-cur-narrows) "   "))
+  (et Nil))
+
+(et:helper--define-utility-checker :assert (expr: Sexp)
+  (if (eval expr) (et Nil)
+    (et-err nil "Returned nil")))
+
+(et:helper--define-utility-checker :assert-error (_expr: Sexp)
+  (condition-case _err (et-chk ($at 1))
+    (error (et Nil))
+    (:success (et-err nil "Didn't error"))))
+
+(et:helper--define-utility-checker :typeof (_expr: Sexp &optional id)
+  (let* ((type (et-chk ($at 1))))
+    (if (null id) (et-hint nil type)
+      (et-with-diagnostic-prefix id (et-hint nil type)))
+    type))
+
+(et:helper--define-utility-checker :typeof+ (_expr &optional id)
+  (let* ((type (et-chk ($at 1)))
+         (et-print-labels t)
+         (et-print-narrows t))
+    (et-with-diagnostic-prefix id (et-hint nil type))
+    type))
+
+(et:helper--define-utility-checker :expand (&rest spec: EtSpec)
+  (let* ((type (et-expand-all-aliases (et-parse-type spec))))
+    (et-hint nil type)
+    type))
+
+
 ;;; ============================================================
 ;;; Function def handling - `et:func'
 ;;;; Create function type
