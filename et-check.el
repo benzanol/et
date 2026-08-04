@@ -33,7 +33,7 @@
 (et-declare
  (@alias EtNarrows AList<*et:type-var~*et:type>)
  ;; True = keep the current recommendation
- (@alias EtRec Nil|True|*et:type)
+ (@alias EtRec Nil|*et:type)
  (@alias EtIdentifyPlist (KVPList @:constrain|@:populate|@:declare Nil|fn))
  (@alias EtIdentifyFn (fn Nil EtIdentifyPlist))
 
@@ -221,7 +221,7 @@
 
 (et-defvar et:check--context-expr Nil|Sexp nil)
 
-(et-defvar et:check--context-recommendation Nil|*et:type nil
+(et-defvar et:check--context-recommendation EtRec nil
   "A hint to the current checker of what type its expression should be.
 
 This should ONLY be used in the checker for `lambda', in order to guess
@@ -242,8 +242,9 @@ only be read by functions in this file.")
 (et-defun et-cur-recommendation () *et:type|Nil
   et:check--context-recommendation)
 
-(et-defun et-recommendation-type (rec: EtRec) *et:type|Nil
-  (if (eq rec t) (et-cur-recommendation) rec))
+(defmacro et-with-recommendation (rec &rest body)
+  (declare (indent 1))
+  `(let* ((et:check--context-recommendation ,rec)) ,@body))
 
 
 ;;;; Narrows helpers
@@ -306,7 +307,7 @@ unreachable)."
   (type nil :et *et:type)
   (narrows nil :et AList<*et:type-var~*et:type>))
 
-(et-defun et:check-check (expr: Sexp narrows: EtNarrows recommendation: Nil|*et:type)
+(et-defun et:check-check (expr: Sexp narrows: EtNarrows recommendation: EtRec)
           *et:check--result
   "Generates an `et-result' resulting from typechecking EXPR.
 
@@ -396,8 +397,7 @@ not be called within `et-at', it should always be called at the root of
 the current checking expr."
   (let* ((flat (flatten-tree path))
          (expr (et:util-traverse-tree et:check--context-expr flat))
-         (recommendation (et-recommendation-type rec))
-         (checked (et-at flat (et:check-check expr et:check--context-narrows recommendation))))
+         (checked (et-at flat (et:check-check expr et:check--context-narrows rec))))
     (setq et:check--context-narrows (et:check--result->narrows checked))
     (et:check--result->type checked)))
 
@@ -423,8 +423,7 @@ the current checking expr."
   "Check EXPR, mapping paths in EXPR back into the current expr."
   (et-propagate-result
    (et-result-boundary
-    (et:check-check expr et:check--context-narrows
-                    (et-recommendation-type rec)))
+    (et:check-check expr et:check--context-narrows rec))
    (lambda (path)
      (cl-loop for (from . to) in mappings
               when (and (>= (length path) (length from))
@@ -506,30 +505,18 @@ be used as the body of the checker function."
      ,@(when (stringp (car body)) (list (pop body)))
      (list #'et-chk ,(car body))))
 
+(et-defun et-check-macro-p (sym: Symbol) Boolean
+  (not (not (get sym 'et-check-macro))))
 
-(et-defun et:check--rec-p (obj: Any) Boolean
-  (or (eq t obj) (et:type-p obj)))
-
-(defun et:check--rec-and (path)
-  (if (et:check--rec-p (car path))
-      (list (car path) (cdr path))
-    (list nil path)))
 
 (et-define-check-macro $at (&rest path)
-  `(apply #'et-check-at (et:check--rec-and ,path)))
-(et-define-check-macro $at! (&rest path)
-  `(et-check-at t ,path))
+  `(et-check-at (et-cur-recommendation) ',path))
 
 (et-define-check-macro $tail (&rest first-path)
-  `(apply #'et-check-tail (et:check--rec-and ,first-path)))
-(et-define-check-macro $tail! (&rest first-path)
-  `(et-check-tail t ,first-path))
+  `(et-check-tail (et-cur-recommendation) ',first-path))
 
-(et-define-check-macro $exp (&rest rec-and-val)
-  `(let* ((rav ,rec-and-val))
-     (et-check-expansion (when (cdr rav) (pop rav)) (car rav))))
-(et-define-check-macro $exp! (exp)
-  `(et-check-expansion t ,exp))
+(et-define-check-macro $exp (expr)
+  `(et-check-expansion (et-cur-recommendation) ,expr))
 
 (et-define-check-macro $type (spec)
   (et-parse-type spec))
@@ -665,16 +652,10 @@ This assumes that the current path points to DECLARES."
           (`(@function . ,_) (et-fatal 0 "Expected (@function TYPE)"))
 
           ;; checker strategy
-          ((or
-            ;; The checker can be either FUNC or (FUNC ARGS...)
-            `(@checker . ,fn-and-args)
-            (and `(,abbrev . ,args)
-                 (let fn (alist-get abbrev et:func--checker-macros))
-                 (guard fn)
-                 (let fn-and-args (cons fn args))))
+          (`(@check ,chk)
            (funcall use-strategy 'checker)
            (when checker (et-fatal 0 "Multiple checkers specified"))
-           (setq checker (if (cdr fn-and-args) fn-and-args (car fn-and-args))))
+           (setq checker `(lambda () (et-chk ,chk))))
 
           ;; Props
           (`(@skip)
@@ -942,7 +923,7 @@ FUNC-INPUT-TYPE."
 
 (defvar et:flow--guessing-var-type nil)
 
-(et-define-check-macro $guess-binds (inits body)
+(et-define-check-macro $inferred-binds (inits body)
   "Check an expression with a variable bound to the best estimated type.
 
 This will first perform a trial run of BODY to determine a good guess
@@ -1081,6 +1062,8 @@ do not escape into the current flow."
   `(et-with-narrows nil (et-chk ,body)))
 
 
+;;; ============================================================
+;;; Control flow helpers - `et:helpers'
 ;;;; Custom environments
 
 (et-defstruct et-env
@@ -1111,8 +1094,41 @@ functions."
                    collect `($env (nth idx ,envs-sym) ,b))))))
 
 
-;;; ============================================================
-;;; Control flow helpers - `et:helpers'
+;;;; Utility check macros
+
+(et-define-check-macro $eval (&rest exprs)
+  `(progn ,@exprs))
+
+(et-define-check-macro $ignore (chk)
+  `(et-with-recommendation nil (et-chk ,chk)))
+
+(et-define-check-macro $expect (spec chk)
+  (let* ((typesym (gensym "type"))
+         (expect (et-parse-type spec)))
+    `(let* ((,typesym (et-chk ,chk)))
+       (unless (et-subtype? ,typesym ,expect)
+         (et-fatal "Expected %s, found %s" ,expect ,typesym))
+       ,typesym)))
+
+(et-define-check-macro $progn (&rest chks)
+  (cl-loop for chk in chks
+           for idx upfrom 0
+           collect (if (= idx (1- (length chks))) `(et-chk ,chk)
+                     `(et-chk ($ignore ,chk)))
+           into exprs
+           finally return `(progn ,@exprs)))
+
+(et-define-check-macro $pcase (&rest repls)
+  "Replace the expression, then typecheck the replacement.
+
+The replacement can also be just a single type, in which case that type
+will be the result."
+  `(pcase (cdr (et-cur-expr))
+     ,@(cl-loop for (pat chk) in repls
+                collect `(,pat (et-chk ,chk)))
+     (_ (et-fatal nil "Invalid `%s' format" (car (et-cur-expr))))))
+
+
 ;;;; Use a temporary variable
 
 (et-define-check-macro $temp-var (var type body)
@@ -1140,20 +1156,13 @@ functions."
   `($if ,cond ,then ($type Nil)))
 
 
-;;;; Useful check macros
+;;;; Parse let binds
 
-(et-define-check-macro $eval (&rest exprs)
-  `(progn ,@exprs))
-
-(et-define-check-macro $pcase (&rest repls)
-  "Replace the expression, then typecheck the replacement.
-
-The replacement can also be just a single type, in which case that type
-will be the result."
-  `(pcase (cdr (et-cur-expr))
-     ,@(cl-loop for (pat chk) in repls
-                collect `(,pat (et-chk ,chk)))
-     (_ (et-fatal nil "Invalid `%s' format" (car (et-cur-expr))))))
+(et-defun et-check-let-inits (rel: EtRel) AList<Var~*et:type>
+  (let* ((forms (et-cur-expr rel)))
+    (cl-loop for (sym _expr) in forms
+             for pos upfrom 0
+             collect (cons sym (et-check-at nil rel pos 1)))))
 
 
 ;;; ============================================================
