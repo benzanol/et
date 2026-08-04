@@ -129,7 +129,7 @@ Returns a plist with :constrain and :populate functions."
   (list
    :declare
    (lambda ()
-     (et-set-checker name (eval `(lambda () (et-check ,chk)))))))
+     (et-set-checker name `(lambda () (et-chk ,chk))))))
 
 
 ;;;; Macroexpand
