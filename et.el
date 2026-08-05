@@ -74,14 +74,19 @@
 
  (@alias EtAliasName Var)
  (@alias EtAliasDefinitionPlist
-         (PList :custom (or Nil (Function Args<List<Any>> *et:repr))
-                :generics List<EtGeneric>
+         (PList :generics List<EtGeneric>
                 :defaults AList<EtGeneric~EtRepr>
                 :constraints List<EtTypeConstraint>
                 :repr (or Nil EtRepr)
                 :type (or Nil *et:type)
                 :spec EtSpec
-                :default-specs AList<EtGeneric~EtSpec>))
+                :default-specs AList<EtGeneric~EtSpec>
+                ;; non-nil NAME => this alias is the ro version of NAME
+                :ro-from Nil|EtAliasName
+                ;; non-nil NAME => this alias is NOT ro, and its read-only equivalent is NAME
+                :ro-name Nil|EtAliasName
+                ;; t => this is a ro alias, but is no different from its non-ro equivalent
+                :ro-redundant Boolean))
  (@symbol-property et-alias EtAliasDefinitionPlist))
 
 (et-declare
@@ -728,8 +733,26 @@ This is a common pattern for functions that have a `noerror' argument."
 
 ;;;; Alias internals
 
+(et-defun et:type--alias-props (name: EtAliasName &optional noerror: [N])
+          (or EtAliasProps (is-nil? N Never Nil))
+  (or (get name 'et-alias) (unless noerror (error "Alias `%s' not defined" name))))
+
+(et-defun et:type-alias-ro-name (name EtAliasName) EtAliasName
+  (if-let* ((props (et:type--alias-props name))
+            (ro-name (plist-get props :ro-name))
+            (ro-props (get ro-name 'et-alias))
+            ((not (plist-get ro-props :ro-redundant))))
+      ro-name
+    name))
+
+(et-defun et:type-alias-display-name (name: EtAliasName) EtAliasName
+  (let* ((props (et:type--alias-props name)))
+    (if (plist-get props :ro-redundant)
+        (plist-get props :ro-from)
+      name)))
+
 (et-defun et:type-identify-alias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec props: ListR<Any>) Nil
-  (when (plist-get (get name 'et-alias) :read-only)
+  (when (plist-get (et:type--alias-props name t) :read-only)
     (error "Alias %s is already defined, and is read-only" name))
 
   ;; Parse the default specs
@@ -741,27 +764,52 @@ This is a common pattern for functions that have a `noerror' argument."
                                 (cadr item))
                               into genlist
                               finally return (vconcat genlist)))
-         (plist `(:genvec ,raw-genvec :generics ,(et-genvec-generics genvec) :spec ,spec
-                          :default-specs ,def-specs ,@props)))
+         (ro-from (plist-get props :ro-from))
+         (ro-name (unless ro-from (intern (format "&%s" name))))
+         (plist (cl-list* :genvec raw-genvec
+                          :generics (et-genvec-generics genvec)
+                          :spec spec
+                          :default-specs def-specs
+                          :ro-name ro-name
+                          props)))
+
     (put name 'et-alias plist)
+    (when ro-name
+      (et:type-identify-alias ro-name genvec spec
+                              (cl-list* :ro-from name props)))
+
     nil))
 
 (et-defun et:type-constrain-alias (name: EtAliasName) Nil
-  (let* ((props (or (get name 'et-alias) (error "Alias `%s' not declared" name))))
+  (let* ((props (et:type--alias-props name)))
     (plist-put props :constraints (et-genvec-constraints (plist-get props :genvec)))
+
+    (when-let* ((ro-name (plist-get props :ro-name)))
+      (et:type-constrain-alias ro-name))
+
     nil))
 
 (et-defun et:type-declare-alias (name: EtAliasName) Nil
-  (let* ((props (or (get name 'et-alias) (error "Alias `%s' not declared" name)))
+  (let* ((props (et:type--alias-props name))
          (gens (plist-get props :generics))
-         (def-specs (plist-get props :default-specs)))
-    (plist-put props :repr (et-parse-repr (plist-get props :spec) gens))
+         (def-specs (plist-get props :default-specs))
+         (ro-name (plist-get props :ro-name))
+         (base-repr (et-parse-repr (plist-get props :spec) gens)))
+
+    (plist-put props :repr (if ro-name base-repr (et:repr-to-read-only base-repr)))
     (plist-put props :defaults
                (cl-loop for gen in gens
                         for idx upfrom 0
                         for def-spec = (alist-get gen def-specs)
                         when def-spec
-                        collect (cons gen (et-parse-repr def-spec (take idx gens))))))
+                        collect (cons gen (et-parse-repr def-spec (take idx gens)))))
+
+    (when ro-name
+      (et:type-declare-alias ro-name)
+      ;; Check if the ro version is redundant (the same)
+      (let* ((ro-props (et:type--alias-props ro-name)))
+        (when (equal base-repr (plist-get ro-props :repr))
+          (plist-put ro-props :ro-redundant t)))))
   nil)
 
 (et-defun et:type-defalias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec props: ListR<Any>) Nil
@@ -771,7 +819,7 @@ This is a common pattern for functions that have a `noerror' argument."
   (et:type-constrain-alias name))
 
 (et-defun et:type-alias-arity (name: EtAliasName) Nil|Cons<Integer~Integer>
-  (let* ((props (get name 'et-alias))
+  (let* ((props (et:type--alias-props name t))
          (gens (plist-get props :generics))
          (defs (plist-get props :default-specs)))
     (when props
@@ -796,7 +844,7 @@ This is a common pattern for functions that have a `noerror' argument."
 
 SCOPE is the generic scope of the caller, which the expansion is
 produced into. It is only relevant when TOTYPE is nil."
-  (let* ((plist (or (get name 'et-alias) (error "Alias %s is not defined" name)))
+  (let* ((plist (et:type--alias-props name))
          (generics (plist-get plist :generics))
          (repr (or (plist-get plist :repr)
                    (error "Alias %s defined incorrectly: Missing repr" name)))
@@ -895,6 +943,17 @@ a valid `et:type-case->value'."
 (defun et-any () (et-dt 'Any))
 (defun et-never () (et:type-new :cases nil))
 (defun et-literal (val) (et-dt 'Literal val))
+
+(defun et:type-tuple-spec (cons args)
+  (if (null args) (et-ql Nil)
+    (et-ql ,cons ,(car args) ,(et:type-tuple-spec cons (cdr args)))))
+
+(defun et:type-tuple-star-spec (cons types)
+  (pcase types
+    (`(,last) last)
+    (`(,next . ,rest)
+     (et-ql ,cons ,next ,(et:type-tuple-star-spec cons rest)))
+    (_ (error "No tail provided"))))
 
 
 ;;; ============================================================
@@ -1389,7 +1448,7 @@ never be read for any purpose other than assertions."
      (et:repr--parse-factor 'op (cons name args)))
 
    ;; Parse an alias
-   (when (get name 'et-alias)
+   (when (et:type-alias-arity name)
      (et:repr--parse-factor 'alias (cons name args)))
 
    (error "Invalid type name: %s" name)))
@@ -1409,7 +1468,7 @@ never be read for any purpose other than assertions."
            when (string-empty-p or-seg)
            do (error "Empty segment in union type: %s" s)
            collect
-           (cl-loop for and-seg in (et:repr--split-at-depth or-seg ?&)
+           (cl-loop for and-seg in (et:repr--split-at-depth or-seg ?^)
                     when (string-empty-p and-seg)
                     do (error "Empty segment in intersection type: %s" s)
                     collect (et:repr->dnf (et:repr--parse-atom and-seg)) into and-parts
@@ -1456,7 +1515,7 @@ never be read for any purpose other than assertions."
     (et:repr--parse-0 (list 'set (intern (match-string 1 s)) (match-string 2 s))))
 
    ;; Name or Name<...> or *struct or *struct<...>
-   ((string-match "^\\*?\\([-a-zA-Z0-9:]+\\)\\(?:<\\(.*\\)>\\)?$" s)
+   ((string-match "^\\*?\\([-&:a-zA-Z0-9]+\\)\\(?:<\\(.*\\)>\\)?$" s)
     (let* ((is-struct (string-match-p "^\\*" s))
            (name (intern (match-string 1 s)))
            (inner (match-string 2 s))
@@ -1542,6 +1601,34 @@ in GEN-REPLS, if it exists."
 
 (defun et-repr-to-type (repr &optional gen-repls)
   (car (et-repr-to-type-and-indes repr gen-repls)))
+
+
+;;;; Repr to read-only
+
+(et-defun et:repr-to-read-only (repr: EtRepr) EtRepr
+  "Convert REPR to its read-only equivalent."
+  (let* ((sub #'et:repr-to-read-only)
+         (gens (et:repr->generics repr)))
+    (cl-loop
+     for case in (et:repr->dnf repr)
+     collect
+     (cl-loop
+      for factor in case
+      collect (pcase factor
+                (`(S:DT ConsFull ,lr ,_lw ,rr ,_rw)
+                 (let* ((never (et-parse-repr 'Never gens)))
+                   (et-q (S:DT ConsFull ,(funcall sub lr) ,never ,(funcall sub rr) ,never))))
+
+                (`(S:ALIAS ,name . ,args)
+                 (let* ((ro-name (intern (format "&%s" name))))
+                   (et-q (S:ALIAS ,ro-name . ,(mapcar sub args)))))
+
+                (`(S:DT ,name . ,args)
+                 (et-q (S:DT ,name ,@(et:dt-map-type-args name args sub))))
+
+                (_ factor)))
+     into new-dnf
+     finally return (et-copy-with repr :dnf new-dnf))))
 
 
 ;;;; Replacement for matchers
@@ -1722,7 +1809,7 @@ in GEN-REPLS, if it exists."
   :to-type
   (let* ((new-args (mapcar #'et:repr--totype-0 args)))
     (list (et:type-case-new :value (et:type-alias-new :name name :args new-args))))
-  :print (et:repr--tostring-named name args))
+  :print (et:repr--tostring-named (et:type-alias-display-name name) args))
 
 (et:repr--deffactor S:POLY poly (name)
   :parse (progn (et:type-polymorph-constraints name) (list name))
@@ -3380,23 +3467,13 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias KVPList [K V] (or Nil (Cons K (Cons V (KVPList K V)))))
 
-(defun et--expand-tuple-spec (cons args)
-  (if (null args) (et-ql Nil)
-    (et-ql ,cons ,(car args) ,(et--expand-tuple-spec cons (cdr args)))))
+(et-defspec Args (&rest args) (et:type-tuple-spec 'ConsR args))
+(et-defspec Tuple (&rest args) (et:type-tuple-spec 'Cons args))
+(et-defspec TupleR (&rest args) (et:type-tuple-spec 'ConsR args))
 
-(defun et--expand-tailed-tuple-spec (cons types)
-  (pcase types
-    (`(,last) last)
-    (`(,next . ,rest)
-     (et-ql ,cons ,next ,(et--expand-tailed-tuple-spec cons rest)))
-    (_ (error "No tail provided"))))
-
-(et-defspec &tuple (&rest args) (et--expand-tuple-spec 'ConsR args))
-(et-defspec tuple (&rest args) (et--expand-tuple-spec 'Cons args))
-(et-defspec args (&rest args) (et--expand-tuple-spec 'ConsR args))
-(et-defspec args+ (&rest args) (et--expand-tailed-tuple-spec 'ConsR args))
-(et-defspec tuple+ (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
-(et-defspec &tuple+ (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
+(et-defspec Args* (&rest args) (et:type-tuple-star-spec 'ConsR args))
+(et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
+(et-defspec TupleR* (&rest args) (et:type-tuple-star-spec 'ConsR args))
 
 (et-defalias Sexp []
   (or Symbol String Number
