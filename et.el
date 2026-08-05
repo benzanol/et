@@ -1333,22 +1333,13 @@ never be read for any purpose other than assertions."
 
 (et-defvar et:repr--parsing-generics List<EtGeneric> nil)
 
-(defun et-parse-repr (spec generics &optional label)
-  (declare (et (spec EtSpec)
-               (generics List<EtGeneric>)
-               (label EtLabel)
-               (@return EtRepr)))
-
+(et-defun et-parse-repr (spec: EtSpec generics: ListR<EtGeneric> &optional label: EtLabel) EtRepr
   (let* ((et:repr--parsing-generics generics)
          (repr (et:repr--parse-0 spec)))
     (setf (et:repr->label repr) label)
     repr))
 
-(defun et:repr--parse-0 (spec &optional extra-generics)
-  (declare (et (spec EtSpec)
-               (extra-generics List<EtGeneric>)
-               (@return EtRepr)))
-
+(et-defun et:repr--parse-0 (spec: EtSpec &optional extra-generics: ListR<EtGeneric>) EtRepr
   (let* ((et:repr--parsing-generics (append extra-generics et:repr--parsing-generics)))
     (cond
      ((and (consp spec) (symbolp (car spec)))
@@ -1360,20 +1351,19 @@ never be read for any purpose other than assertions."
      ((et:repr-p spec) spec)
      (t (error "Invalid spec: %s" spec)))))
 
-(defun et:repr--parse-factor (name args)
-  (declare (et (name Symbol)
-               (args List<EtSpec>)
-               (@return EtRepr)))
-
+(et-defun et:repr--parse-factor (name: Symbol args: ListR<EtSpec>) EtRepr
   (or
+   ;; and/or
+   (when (memq name '(and or))
+     (let* ((ps (mapcar #'et:repr--parse-0 args))
+            (ds (mapcar #'et:repr->dnf ps)))
+       (et:repr-new :generics et:repr--parsing-generics
+                    :dnf (apply (if (eq name 'and) #'et-dnf-intersect #'nconc) ds))))
+
    ;; Parse a built-in spec segment
    (when-let* ((handler (get name 'et-spec-parse)))
-     (if (eq :full (car handler))
-         (et:repr-new :generics et:repr--parsing-generics
-                      :dnf (apply (cdr handler) args))
-       ;; Base case: wrap a factor in a list of lists
-       (et:repr-new :generics et:repr--parsing-generics
-                    :dnf (list (list (cons (car handler) (apply (cdr handler) args)))))))
+     (et:repr-new :generics et:repr--parsing-generics
+                  :dnf (list (list (cons (car handler) (apply (cdr handler) args))))))
 
    ;; Parse a generic
    (when (memq name et:repr--parsing-generics)
@@ -1388,6 +1378,10 @@ never be read for any purpose other than assertions."
    (when (et:type-is-polymorph? name)
      (et:repr-new :generics et:repr--parsing-generics
                   :dnf (list (list (list 'S:POLY name)))))
+
+   ;; Parse a spec macro
+   (when-let* ((macro (get name 'et-spec-macro)))
+     (et:repr--parse-0 (apply macro args)))
 
    ;; Parse a custom op
    (when-let* ((op (get name 'et-op)))
@@ -1695,7 +1689,7 @@ in GEN-REPLS, if it exists."
          (format "%s<%s>" name-str (string-join strs ", ")))))))
 
 
-;;;; Segment macros
+;;;; Repr factor definitions
 
 (defmacro et:repr--deffactor (repr-sym spec-sym arglist &rest plist)
   (declare (indent 3) (et ($expand)))
@@ -1707,40 +1701,6 @@ in GEN-REPLS, if it exists."
        (put ',spec-sym 'et-spec-parse (cons ',repr-sym (lambda ,arglist ,ignore ,parse)))
        (put ',repr-sym 'et:repr-print (lambda ,arglist ,ignore ,print))
        ,@(when totype `((put ',repr-sym 'et-repr-to-type (lambda ,arglist ,ignore ,totype)))))))
-
-(defmacro et:repr--defspec (spec-sym repr-sym arglist body)
-  "Define how a spec form is parsed into a repr."
-  (declare (indent 3) (et ($expand)))
-  `(put ',spec-sym 'et-spec-parse
-        (cons ',repr-sym (lambda ,arglist ,body))))
-
-
-;;;; Spec segment definitions
-
-(et:repr--defspec literal S:DT (val) (list 'Literal val))
-(et:repr--defspec Any S:DT () (list 'Any))
-(et:repr--defspec Nil S:DT () (list 'Literal nil))
-(et:repr--defspec True S:DT () (list 'Literal t))
-
-(et:repr--defspec fn S:DT (&rest args)
-  (let* ((genvec (when (vectorp (car args)) (pop args)))
-         (in (or (pop args) 'Nil))
-         (out (or (pop args) 'Any)))
-    (or (null args) (error "Too many arguments for `fn'"))
-    (if genvec
-        (list 'DynFunction (et-parse-matcher in genvec et:repr--parsing-generics)
-              (et-parse-repr out (append (et-genvec-generics genvec) et:repr--parsing-generics)))
-      (list 'Function (et:repr--parse-0 in) (et:repr--parse-0 out)))))
-
-(et:repr--defspec Never :full () nil)
-(et:repr--defspec or :full (&rest args)
-  (let* ((ps (mapcar #'et:repr--parse-0 args))
-         (ds (mapcar #'et:repr->dnf ps)))
-    (apply #'nconc ds)))
-(et:repr--defspec and :full (&rest args)
-  (apply #'et-dnf-intersect (mapcar #'et:repr->dnf (mapcar #'et:repr--parse-0 args))))
-
-;; Repr factors
 
 (et:repr--deffactor S:DT dt (name &rest args)
   :parse (cons name (et:dt-map-type-args name args #'et:repr--parse-0))
@@ -1798,6 +1758,28 @@ in GEN-REPLS, if it exists."
              (apply (et:repr--op->eval op) (et:repr--op-pre-eval op args)))
   :print  (if-let* ((tostring (et:repr--op->to-string (et:repr--get-op op-name))))
               (apply tostring args) (et:repr--op-to-string-fallback op-name args)))
+
+
+;;;; Spec macros
+
+(defmacro et-defspec (name arglist &rest body)
+  (declare (indent 2))
+  `(put ',name 'et-spec-macro (lambda ,arglist ,@body)))
+
+(et-defspec literal (val) `(Literal ,val))
+(et-defspec Nil () `(Literal nil))
+(et-defspec True () `(Literal t))
+(et-defspec Never () `(and))
+
+(et-defspec fn (&rest args)
+  (let* ((genvec (when (vectorp (car args)) (pop args)))
+         (in (or (pop args) 'Nil))
+         (out (or (pop args) 'Any)))
+    (or (null args) (error "Too many arguments for `fn'"))
+    (if genvec
+        (list 'DynFunction (et-parse-matcher in genvec et:repr--parsing-generics)
+              (et-parse-repr out (append (et-genvec-generics genvec) et:repr--parsing-generics)))
+      (list 'Function (et:repr--parse-0 in) (et:repr--parse-0 out)))))
 
 
 ;;;; Op macros
@@ -3387,9 +3369,8 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias ConsWR [L R] (ConsFull Any L R Never))
 
 ;; ConsR/ListR/*R can be thought of as "read only references" to a
-;; type. It is merely a shortcut for "[(T <= Number)] List<T>" for
-;; function parameters. Actual data, such as return values from
-;; functions, should usually not have the ListR/ConsR/*R type.
+;; type. Actual data, such as return values from functions, should
+;; usually not have the ListR/ConsR/*R type.
 (et-defalias ListFresh [E] (or Nil (ConsFresh E (ListFresh E))))
 (et-defalias ListR [E] (or Nil (ConsR E (ListR E))))
 (et-defalias List [E] (or Nil (Cons E (List E))))
