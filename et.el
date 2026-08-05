@@ -856,9 +856,9 @@ produced into. It is only relevant when TOTYPE is nil."
                      name (length generics) (length args))
 
             (cl-loop for gen in generics
-                     for arg in args
+                     for idx upfrom 0
                      for val =
-                     (or arg
+                     (or (nth idx args)
                          ;; Default reprs are defined with all previous gens as their gen scope
                          (when-let* ((repr (alist-get gen defaults)))
                            (et:repr-substitute-generics repr gen-repls nil))
