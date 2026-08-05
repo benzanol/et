@@ -737,7 +737,7 @@ This is a common pattern for functions that have a `noerror' argument."
           (or EtAliasProps (is-nil? N Never Nil))
   (or (get name 'et-alias) (unless noerror (error "Alias `%s' not defined" name))))
 
-(et-defun et:type-alias-ro-name (name EtAliasName) EtAliasName
+(et-defun et:type-alias-ro-name (name: EtAliasName) EtAliasName
   (if-let* ((props (et:type--alias-props name))
             (ro-name (plist-get props :ro-name))
             (ro-props (get ro-name 'et-alias))
@@ -1620,8 +1620,7 @@ in GEN-REPLS, if it exists."
                    (et-q (S:DT ConsFull ,(funcall sub lr) ,never ,(funcall sub rr) ,never))))
 
                 (`(S:ALIAS ,name . ,args)
-                 (let* ((ro-name (intern (format "&%s" name))))
-                   (et-q (S:ALIAS ,ro-name . ,(mapcar sub args)))))
+                 (et-q (S:ALIAS ,(et:type-alias-ro-name name) . ,(mapcar sub args))))
 
                 (`(S:DT ,name . ,args)
                  (et-q (S:DT ,name ,@(et:dt-map-type-args name args sub))))
