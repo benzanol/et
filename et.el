@@ -1299,7 +1299,7 @@ check (see the `R:FN' constraint)."
          (cond
           ;; We can use a simple funcall + subtype approach
           ((and (et:type-p func-input) (et:type-p func-output))
-           (let* ((dyn-result (et-funcall (apply #'et-dt 'DynFunction sub-args) func-input)))
+           (let* ((dyn-result (et:algebra-funcall (apply #'et-dt 'DynFunction sub-args) func-input)))
              (valid-if (and (et:match-result->success dyn-result)
                             (et-subtype? (et:match-result->value dyn-result) func-output)))))
           ;; The super args are matcher reprs; defer the check to
@@ -2031,7 +2031,7 @@ indeterminates slot."
                      (et:repr--tostring-0 yes) (et:repr--tostring-0 no))
   (let* ((result
           (et:repr--record-indeterminates
-           (et-infer matcher type yes et:repr--totype-gen-repls))))
+           (et:algebra-infer matcher type yes et:repr--totype-gen-repls))))
     (if (et:match-result->success result) (et:match-result->value result)
       ;; Lazily evaluate (only if matching failed)
       (et:repr--totype-0 no))))
@@ -2061,7 +2061,7 @@ indeterminates slot."
   :to-string (format "{eval %s on %s}" func (mapconcat #'et:repr--tostring-0 args ", "))
   (apply func args))
 
-(et:repr--defop is (type is)
+(et:repr--defop is? (type is)
   :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
   (et-union (et:algebra-replace-binds (et True) (et-type-binds (et-supersect type is)))
             (et:algebra-replace-binds (et Nil) (et-type-binds (et-subtract type is)))))
@@ -2540,7 +2540,7 @@ Returns the final list of generic types, or `INVALID'."
      (pcase-let* ((`(,_ ,dyn-matcher ,dyn-out-repr ,fn-in-mr ,fn-out-mr) q)
                   (input (to-type fn-in-mr))
                   (result (unless (eq input 'INVALID)
-                            (et-infer dyn-matcher input dyn-out-repr))))
+                            (et:algebra-infer dyn-matcher input dyn-out-repr))))
        (unless (and result (et:match-result->success result)) (cl-return 'INVALID))
 
        (pcase (et:repr->dnf fn-out-mr)
@@ -3089,7 +3089,13 @@ returning A itself is a valid approximation."
 
 ;;;; Infer
 
-(defun et-infer (matcher type output-repr &optional extra-repls)
+(defmacro et-infer (type genvec matcher-spec output-spec)
+  `(let* ((matcher ,(et-parse-matcher matcher-spec genvec))
+          (result (et:algebra-infer matcher ,type ,(et-parse-repr output-spec (et-genvec-generics genvec)))))
+     (when (et:match-result->success result)
+       (et:match-result->value result))))
+
+(defun et:algebra-infer (matcher type output-repr &optional extra-repls)
   "Infer TYPE against MATCHER, then convert OUTPUT-REPR to a type.
 
 Specifically, this will first call `et-sub-match' on MATCHER and TYPE
@@ -3119,7 +3125,12 @@ This returns an `et-match-result' in case matching fails."
 
 ;;;; Funcall
 
-(et-defun et-funcall (func-type: *et:type arglist-type: *et:type) *et:match-result<*et:type>
+(et-defun et-funcall (func-type: *et:type arglist-type: *et:type) *et:type
+  (let* ((result (et:algebra-funcall func-type arglist-type)))
+    (when (et:match-result->success result)
+      (et:match-result->value result))))
+
+(et-defun et:algebra-funcall (func-type: *et:type arglist-type: *et:type) *et:match-result<*et:type>
   "Determine the return type of calling FUNC-TYPE with ARGLIST-TYPE."
   (setq func-type (et-expand-all-aliases func-type))
 
@@ -3132,7 +3143,7 @@ This returns an `et-match-result' in case matching fails."
                   (et:match-result-new :success t :value return-type)
                 (et:match-failed)))
              ((cl-struct et:type-dt (name 'DynFunction) (args `(,matcher ,output-repr)))
-              (et-infer matcher arglist-type output-repr))
+              (et:algebra-infer matcher arglist-type output-repr))
              (_ (et:match-failed)))
            unless (et:match-result->success result) return result
            collect (et:match-result->value result) into types

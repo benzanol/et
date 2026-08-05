@@ -182,7 +182,7 @@
                                for type = (et-check-at pos)
                                collect (et-copy-with type :label (list :position pos))))
            (args-type (et-tuple 'Cons arg-types))
-           (output-result (et-funcall func-type args-type)))
+           (output-result (et:algebra-funcall func-type args-type)))
       (cond
        ((et:match-result->success output-result) (et:match-result->value output-result))
        ;; If `et--result-failed' is already true, that means one of the arguments was invalid,
@@ -1403,20 +1403,22 @@ Returns a plist with :constrain and :populate functions."
 
 (et-set-identifier '@def #'et:identify-@def)
 
-(et-defun et:identify-@def (name: Var arglist: ListR<Any> &rest declares: Sexps) EtIdentifyPlist
+(et-defun et:identify-@def (names: Var|VectorR<Var> arglist: ListR<Any> &rest declares: Sexps) EtIdentifyPlist
   (list
    :declare
    (lambda ()
-     (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist (declare (et ,@declares))))))
-       (apply #'et:identify-defun (cdr defun-expr))))))
+     (dolist (name (if (vectorp names) (append names nil) (list names)))
+       (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist (declare (et ,@declares))))))
+         (apply #'et:identify-defun (cdr defun-expr)))))))
 
 (et-set-identifier '@check #'et:identify-@check)
 
-(et-defun et:identify-@check (name: Var chk: Sexp) EtIdentifyPlist
+(et-defun et:identify-@check (names: Var|VectorR<Var> chk: Sexp) EtIdentifyPlist
   (list
    :declare
    (lambda ()
-     (et-set-checker name `(lambda () (et-chk ,chk))))))
+     (dolist (name (if (vectorp names) (append names nil) (list names)))
+       (et-set-checker name `(lambda () (et-chk ,chk)))))))
 
 
 ;;;; Macroexpand

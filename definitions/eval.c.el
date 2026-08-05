@@ -46,12 +46,7 @@
  (@def default-toplevel-value (symbol: Symbol) Any)
  (@def set-default-toplevel-value (symbol: Var value: Any) Any)
 
- (@check defvar
-         ($pcase
-          (or `(,name) `(,name ,val .,_))
-          ($progn ($expect ($eval (et-global-var-type name)) ($exp val))
-                  ($eval (et-literal name)))))
- (@check defconst
+ (@check [defvar defconst]
          ($pcase
           (or `(,name) `(,name ,val .,_))
           ($progn ($expect ($eval (et-global-var-type name)) ($exp val))
@@ -92,19 +87,49 @@
          ($pcase
           `(,(and err-var (pred symbolp)) ,val) ($ignore ($at 2))
 
-          `(,(and err-var (pred symbolp)) ,val (:success . ,body) . ,rest)
+          `(,(and err-var (pred symbolp)) ,val (,pat . ,body) . ,rest)
           ($temp-var var ($at 2)
                      ($branches
-                      ($bind err-var ($var var) ($tail 3 1))
-                      ($recurse `(,err-var (:var ,var) ,@rest))))
-
-          `(,(and err-var (pred symbolp)) ,val (,_other . ,body) . ,rest)
-          ($temp-var var ($at 2)
-                     ($branches
-                      ($tail 3 1)
+                      ($bind err-var ($eval (if (eq pat :success) (et-chk ($var var)) (et Any)))
+                             ($tail 3 1))
                       ($recurse `(,err-var (:var ,var) ,@rest))))))
- 
+
  (@def signal (error-symbol: NonNilSymbol data: Any) Never)
+
+ (@def commandp (function: Any) Boolean)
+
+ (@def autoload
+       ([(<= V Var)] function: V file: String
+        &optional docstring: String interactive: Any
+        type: (or Nil @keymap @macro True))
+       V)
+ (@def autoload-do-load ([(<= V Var)] fundef: V &optional funname: Symbol macro-only Nil|@macro) V)
+
+ (@def eval (form: Sexp &optional lexical: Boolean) Any)
+
+ (@def apply ([A R] function: (fn (eval et-tuple-to-tailed A) R) &rest arguments: A) R)
+
+ (@def run-hooks (&rest hooks: ListR<fn>) Nil)
+ (@def run-hook-with-args (hook: Var &rest args: ListR<Any>) Any)
+ (@def run-hook-with-args-until-success (hook: Var &rest args: ListR<Any>) Any)
+ (@def run-hook-with-args-until-failure (hook: Var &rest args: ListR<Any>) Any)
+ (@def run-hook-wrapped
+       ([] hook: Var
+        wrap-function: (fn (ConsR (fn ListR<Any> Any) ListR<Any>) Any)
+        &rest args: ListR<Any>)
+       Any)
  
- (@def commandp ([T] function: T) Boolean) ;todo
- )
+ (@def functionp ([T] object: T) (is? T AnyFn))
+
+ (@def funcall ([A R] function: (fn A R) &rest arguments: A) R)
+ 
+ (@def func-arity (function: AnyFn) Cons<Integer~Integer|@many|@unevalled>)
+
+ (@def special-variable-p (symbol: Symbol) Boolean))
+
+(defvar et--tuple-to-tailed-stack nil)
+(et-defun et-tuple-to-tailed (tuple: *et:type) *et:type
+  (or (et-stop-recursion et--tuple-to-tailed-stack tuple nil
+        (or (et-infer tuple [T] (ConsR T Nil) T)
+            (et-infer tuple [E A B] (ConsR E (ConsR A B)) (ConsR E (eval et-tuple-to-tailed (ConsR A B))))))
+      (error "Not a tuple: %s" tuple)))
