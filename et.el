@@ -1619,6 +1619,10 @@ in GEN-REPLS, if it exists."
                  (let* ((never (et-parse-repr 'Never gens)))
                    (et-q (S:DT ConsFull ,(funcall sub lr) ,never ,(funcall sub rr) ,never))))
 
+                (`(S:DT VectorFull ,r ,_w)
+                 (let* ((never (et-parse-repr 'Never gens)))
+                   (et-q (S:DT VectorFull ,(funcall sub r) ,never))))
+
                 (`(S:ALIAS ,name . ,args)
                  (et-q (S:ALIAS ,(et:type-alias-ro-name name) . ,(mapcar sub args))))
 
