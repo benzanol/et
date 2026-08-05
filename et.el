@@ -67,14 +67,21 @@
 (et-declare
  (@alias EtTypeSpec Any)
  (@alias EtGeneric Var)
- (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
+
+ ;; Alias GenVecs also have an (=) option (for default values)
+ (@alias EtGenVec (VectorR (or EtGeneric (TupleR (or @<= @>=) EtGeneric Any))))
+ (@alias EtAliasGenVec (VectorR (or EtGeneric (TupleR (or @= @<= @>=) EtGeneric Any))))
+
  (@alias EtAliasName Var)
  (@alias EtAliasDefinitionPlist
          (PList :custom (or Nil (Function Args<List<Any>> *et:repr))
                 :generics List<EtGeneric>
+                :defaults AList<EtGeneric~EtRepr>
                 :constraints List<EtTypeConstraint>
                 :repr (or Nil EtRepr)
-                :type (or Nil *et:type)))
+                :type (or Nil *et:type)
+                :spec EtSpec
+                :default-specs AList<EtGeneric~EtSpec>))
  (@symbol-property et-alias EtAliasDefinitionPlist))
 
 (et-declare
@@ -725,19 +732,37 @@ This is a common pattern for functions that have a `noerror' argument."
   (when (plist-get (get name 'et-alias) :read-only)
     (error "Alias %s is already defined, and is read-only" name))
 
-  (let* ((plist `(:genvec ,genvec :generics ,(et-genvec-generics genvec) :spec ,spec ,@props)))
+  ;; Parse the default specs
+  (let* ((def-specs nil)
+         (raw-genvec (cl-loop for item across genvec
+                              collect
+                              (if (not (and (listp item) (eq '= (car item)))) item
+                                (setf (alist-get (cadr item) def-specs) (caddr item))
+                                (cadr item))
+                              into genlist
+                              finally return (vconcat genlist)))
+         (plist `(:genvec ,raw-genvec :generics ,(et-genvec-generics genvec) :spec ,spec
+                          :default-specs ,def-specs ,@props)))
     (put name 'et-alias plist)
     nil))
 
 (et-defun et:type-constrain-alias (name: EtAliasName) Nil
-  (let* ((genvec (or (plist-get (get name 'et-alias) :genvec) (error "Alias `%s' not declared" name))))
-    (plist-put props :constraints (et-genvec-constraints genvec))
+  (let* ((props (or (get name 'et-alias) (error "Alias `%s' not declared" name))))
+    (plist-put props :constraints (et-genvec-constraints (plist-get props :genvec)))
     nil))
 
 (et-defun et:type-declare-alias (name: EtAliasName) Nil
-  (let* ((props (or (get name 'et-alias) (error "Alias `%s' not declared" name))))
-    (plist-put props :repr (et-parse-repr (plist-get props :spec) (plist-get props :generics)))
-    nil))
+  (let* ((props (or (get name 'et-alias) (error "Alias `%s' not declared" name)))
+         (gens (plist-get props :generics))
+         (def-specs (plist-get props :default-specs)))
+    (plist-put props :repr (et-parse-repr (plist-get props :spec) gens))
+    (plist-put props :defaults
+               (cl-loop for gen in gens
+                        for idx upfrom 0
+                        for def-spec = (alist-get gen def-specs)
+                        when def-spec
+                        collect (cons gen (et-parse-repr def-spec (take idx gens))))))
+  nil)
 
 (et-defun et:type-defalias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec props: ListR<Any>) Nil
   "Identify, constrain, and declare an alias."
@@ -745,14 +770,25 @@ This is a common pattern for functions that have a `noerror' argument."
   (et:type-declare-alias name)
   (et:type-constrain-alias name))
 
+(et-defun et:type-alias-arity (name: EtAliasName) Nil|Cons<Integer~Integer>
+  (when-let* ((props (get name 'et-alias))
+              (gens (plist-get props :generics))
+              (defs (plist-get props :defaults)))
+    (cons (- (length gens)
+             (length (seq-take-while (lambda (gen) (alist-get gen defs))
+                                     (reverse gens))))
+          (length gens))))
+
 (defmacro et-defalias (name genvec spec &rest props)
   "Alias NAME types to return the specific type.
 
 \(fn NAME GENERIC-VECTOR BODY...)"
   (declare (indent 2))
-  `(et:type-defalias ',name ,genvec ,spec ,@props))
+  `(et:type-defalias ',name ,genvec ',spec (list ,@props)))
 
-(et-defun et:type-alias-call ([] name: EtAliasName args: ListR<*et:type|EtRepr> totype: [B]
+(et-defun et:type-alias-call ([] name: EtAliasName
+                              args: (ListR (is-non-nil? B *et:type EtRepr))
+                              totype: [B]
                               &optional scope: ListR<EtGeneric>)
           (is-non-nil? B *et:type EtRepr)
   "Expand the alias with name NAME, passing arguments ARGS.
@@ -763,20 +799,29 @@ produced into. It is only relevant when TOTYPE is nil."
          (generics (plist-get plist :generics))
          (repr (or (plist-get plist :repr)
                    (error "Alias %s defined incorrectly: Missing repr" name)))
-         (gen-repls (cl-loop for gen in generics
-                             for arg in args
-                             collect (cons gen arg))))
+         (defaults (plist-get plist :defaults))
+
+         (gen-repls
+          (if (> (length args) (length generics))
+              (error "Alias %s expected %s arguments, but %s were provided"
+                     name (length generics) (length args))
+
+            (cl-loop for gen in generics
+                     for arg in args
+                     for val =
+                     (or arg
+                         ;; Default reprs are defined with all previous gens as their gen scope
+                         (when-let* ((repr (alist-get gen defaults)))
+                           (et:repr-substitute-generics repr gen-repls nil))
+                         (error "Argument %s not provided, and has no default value" gen))
+                     collect (cons gen val) into gen-repls
+                     finally return gen-repls))))
 
 
-    (if (not (eq (length generics) (length args)))
-        ;; Ensure there are the right number of arguments
-        (error "Alias %s expected %s arguments, but %s were provided"
-               name (length generics) (length args))
-
-      ;; Replace S:GENERIC with the specified arg
-      (if totype (et-repr-to-type repr gen-repls)
-        (if (null generics) repr
-          (et:repr-substitute-generics repr gen-repls scope))))))
+    ;; Replace S:GENERIC with the specified arg
+    (if totype (et-repr-to-type repr gen-repls)
+      (if (null generics) repr
+        (et:repr-substitute-generics repr gen-repls scope)))))
 
 
 ;;;; Expanding aliases
@@ -1706,12 +1751,12 @@ in GEN-REPLS, if it exists."
 
 (et:repr--deffactor S:ALIAS alias (name &rest args)
   :parse
-  (let* ((plist (get name 'et-alias))
-         (_ (or plist (error "Not an alias: %s" name)))
-         (gen-ct (length (plist-get plist :generics)) )
-         (_ (or (plist-get plist :custom)
-                (eq (length args) gen-ct)
-                (error "Alias %s requires %s arguments, got %s" name gen-ct (length args)))))
+  (pcase-let*
+      ((`(,min . ,max) (or (et:type-alias-arity name) (error "Not an alias: %s" name)))
+       (_ (unless (and (<= min (length args)) (>= max (length args)))
+            (error "Alias %s requires %s arguments, got %s" name
+                   (if (eq min max) min (format "%s-%s" min max))
+                   (length args)))))
     (cons name (mapcar #'et:repr--parse-0 args)))
   :to-type
   (let* ((new-args (mapcar #'et:repr--totype-0 args)))
@@ -3320,12 +3365,9 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias AnyFn [] (Function Never Any))
 (et-defalias IdFn [T] (Function T T))
 
-(et-custom-defalias Vector (&optional a)
-  (if a (et-ql VectorFull ,a ,a)
-    (et-ql VectorFull Any Never)))
-
-(et-defalias VectorR [E] VectorFull<E~Never>)
-(et-defalias VectorW [E] VectorFull<Any~E>)
+(et-defalias Vector [(= E Any)] VectorFull<E~E>)
+(et-defalias VectorR [(= E Any)] VectorFull<E~Never>)
+(et-defalias VectorW [(= E Any)] VectorFull<Any~E>)
 
 (et-defalias Indirect [T] T)
 
@@ -3335,6 +3377,9 @@ lazily because `List' is not yet defined when this file loads.")
 (et-custom-defalias Cons (&optional a b)
   (if a (et-ql ConsFull ,a ,a ,(or b a) ,(or b a))
     (et-ql ConsFull Any Never Any Never)))
+
+(et-defalias Cons [(= L Any) (= R L)]
+  (ConsFull L L R R))
 
 (et-defalias ConsR [L R] (ConsFull L Never R Never))
 (et-defalias ConsW [L R] (ConsFull Any L Any R))
@@ -3404,12 +3449,12 @@ lazily because `List' is not yet defined when this file loads.")
 
 (dolist (sym et-aliased-emacs-types)
   (let* ((alias (string-replace "-" "" (capitalize (format "%s" sym)))))
-    (et:type-define-alias (intern alias) nil `(Emacs ,sym))))
+    (et:type-defalias (intern alias) [] `(Emacs ,sym) nil)))
 
-(et-defalias Closure (or InterpretedFunction ByteCodeFunction))
-(et-defalias Font (or FontSpec FontEntity FontObject))
-(et-defalias IntOrMarker (or Integer Marker))
-(et-defalias NumOrMarker (or Number Marker))
+(et-defalias Closure [] (or InterpretedFunction ByteCodeFunction))
+(et-defalias Font [] (or FontSpec FontEntity FontObject))
+(et-defalias IntOrMarker [] (or Integer Marker))
+(et-defalias NumOrMarker [] (or Number Marker))
 
 
 ;;; ============================================================
