@@ -541,10 +541,13 @@ be used as the body of the checker function."
 ;;; Processing - `et:process'
 ;;;; Identify exprs
 
+(et-defvar et-identifying-expr Sexp|Nil nil)
+
 (et-defun et-identify-expr (expr: Sexp) Nil|EtIdentifyPlist
   (when-let* ((func (car-safe expr))
               (identify (when (symbolp func) (et-symbol-identifier func))))
-    (apply identify (cdr expr))))
+    (let* ((et-identifying-expr expr))
+      (apply identify (cdr expr)))))
 
 (et-defun et-identify-exprs (exprs: Sexps) List<Nil|EtIdentifyPlist>
   (cl-loop for expr in exprs
@@ -1113,7 +1116,20 @@ This assumes that the current path points to DECLARES."
           (lambda (strat)
             (if (null strategy) (setq strategy strat)
               (unless (eq strat strategy)
-                (error "Form not valid for strategy %s" strategy))))))
+                (error "Form not valid for strategy %s" strategy)))))
+
+         (extra-gv nil))
+
+    ;; Find any inline generics and assign them
+    (pcase-dolist (`(,var ,type) declares)
+      (when (and (memq var param-list) (vectorp type))
+        (pcase type
+          (`[,var] (push var extra-gv))
+          (`[,op ,var ,constr] (push (list op var constr) extra-gv)))))
+    (when extra-gv
+      (setq extra-gv (apply #'vector (nreverse extra-gv)))
+      (setq generics (et-genvec-generics extra-gv)
+            constraints (et-genvec-constraints extra-gv)))
 
     ;; Parse the fields of the declare block
     (dotimes (form-idx (length declares))
@@ -1122,6 +1138,7 @@ This assumes that the current path points to DECLARES."
           ;; return strategy
           (`(@generics ,(and gv (pred vectorp)))
            (funcall use-strategy 'return)
+           (when extra-gv (setq gv (vconcat gv extra-gv)))
            (unless (eq 0 form-idx) (et-fatal 0 "@generics clauses must be first"))
            (et-at 1
              (setq generics (et-genvec-generics gv)
@@ -1158,11 +1175,13 @@ This assumes that the current path points to DECLARES."
            (setq props (cl-list* :show show props)))
 
           ;; Parameters
-          (`(,(and name (guard (memq name param-list))) ,spec)
+          (`(,(and name (guard (memq name param-list))) ,spec-or-vec)
            (funcall use-strategy 'return)
            (when (alist-get name param-alist) (et-fatal 0 "Param defined multiple times"))
-           (et-at 1 (setf (alist-get name param-alist)
-                          (et-parse-repr spec generics))))
+           (pcase spec-or-vec
+             ((or `[,spec] `[,_ ,spec ,_] spec)
+              (et-at 1 (setf (alist-get name param-alist)
+                             (et-parse-repr spec generics))))))
 
           (_ (et-fatal 0 "Invalid form")))))
 
@@ -1427,7 +1446,7 @@ Returns a plist with :constrain and :populate functions."
 
 (defun et:identify-macroexpand (&rest _body)
   "Identify an expression by identifying its macro expansion."
-  (let* ((expanded (macroexpand-1 (et-cur-expr))))
+  (let* ((expanded (macroexpand-1 et-identifying-expr)))
     (et-at 0 (et-with-sticky-path (et-identify-expr expanded)))))
 
 
