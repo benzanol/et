@@ -771,13 +771,14 @@ This is a common pattern for functions that have a `noerror' argument."
   (et:type-constrain-alias name))
 
 (et-defun et:type-alias-arity (name: EtAliasName) Nil|Cons<Integer~Integer>
-  (when-let* ((props (get name 'et-alias))
-              (gens (plist-get props :generics))
-              (defs (plist-get props :defaults)))
-    (cons (- (length gens)
-             (length (seq-take-while (lambda (gen) (alist-get gen defs))
-                                     (reverse gens))))
-          (length gens))))
+  (let* ((props (get name 'et-alias))
+         (gens (plist-get props :generics))
+         (defs (plist-get props :default-specs)))
+    (when props
+      (cons (- (length gens)
+               (length (seq-take-while (lambda (gen) (alist-get gen defs))
+                                       (reverse gens))))
+            (length gens)))))
 
 (defmacro et-defalias (name genvec spec &rest props)
   "Alias NAME types to return the specific type.
@@ -1766,10 +1767,9 @@ in GEN-REPLS, if it exists."
   (declare (indent 2))
   `(put ',name 'et-spec-macro (lambda ,arglist ,@body)))
 
-(et-defspec literal (val) `(Literal ,val))
 (et-defspec Nil () `(Literal nil))
 (et-defspec True () `(Literal t))
-(et-defspec Never () `(and))
+(et-defspec Never () `(or))
 
 (et-defspec fn (&rest args)
   (let* ((genvec (when (vectorp (car args)) (pop args)))
@@ -2837,8 +2837,8 @@ returning A itself is a valid approximation."
 
 (defun et:algebra--transform-type (type type-fn case-fn)
   (et-declare (type *et:type)
-              (type-fn (or Nil (fn (Args *et:type ListR<*et:type-case>) *et:type)))
-              (case-fn (or Nil (fn (Args *et:type *et:type-case *et:type-alias|*et:type-dt) *et:type-case)))
+              (type-fn (or Nil (fn (args *et:type &List<*et:type-case>) *et:type)))
+              (case-fn (or Nil (fn (args *et:type *et:type-case *et:type-alias|*et:type-dt) *et:type-case)))
               (@return *et:type))
 
   (let* ((sub-fn (lambda (sub) (et:algebra--transform-type sub type-fn case-fn)))
@@ -3339,9 +3339,7 @@ lazily because `List' is not yet defined when this file loads.")
 ;;; Define aliases
 ;;;; Basic aliases
 
-(et-defalias Nil [] (Literal nil))
-(et-defalias True [] (Literal t))
-(et-defalias Boolean [] (or (Literal nil) (Literal t)))
+(et-defalias Boolean [] (or Nil True))
 
 ;; All functions are a subtype of AnyFn
 (et-defalias AnyFn [] (Function Never Any))
@@ -3355,10 +3353,6 @@ lazily because `List' is not yet defined when this file loads.")
 
 
 ;;;; Cons aliases
-
-(et-custom-defalias Cons (&optional a b)
-  (if a (et-ql ConsFull ,a ,a ,(or b a) ,(or b a))
-    (et-ql ConsFull Any Never Any Never)))
 
 (et-defalias Cons [(= L Any) (= R L)]
   (ConsFull L L R R))
@@ -3397,17 +3391,12 @@ lazily because `List' is not yet defined when this file loads.")
      (et-ql ,cons ,next ,(et--expand-tailed-tuple-spec cons rest)))
     (_ (error "No tail provided"))))
 
-(et-custom-defalias TupleR (&rest args) (et--expand-tuple-spec 'ConsR args))
-(et-custom-defalias Tuple (&rest args) (et--expand-tuple-spec 'Cons args))
-(et-custom-defalias Args (&rest args) (et--expand-tuple-spec 'ConsR args))
-(et-custom-defalias ArgsWithTail (&rest args) (et--expand-tailed-tuple-spec 'ConsR args))
-(et-custom-defalias TupleWithTail (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
-(et-custom-defalias TupleStar (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
-
-(et-custom-defalias Repeat (&rest args)
-  (et--expand-tailed-tuple-spec 'Cons (append args (list (cons 'Repeat args)))))
-(et-custom-defalias RepeatR (&rest args)
-  (et--expand-tailed-tuple-spec 'ConsR (append args (list (cons 'Repeat args)))))
+(et-defspec &tuple (&rest args) (et--expand-tuple-spec 'ConsR args))
+(et-defspec tuple (&rest args) (et--expand-tuple-spec 'Cons args))
+(et-defspec args (&rest args) (et--expand-tuple-spec 'ConsR args))
+(et-defspec args+ (&rest args) (et--expand-tailed-tuple-spec 'ConsR args))
+(et-defspec tuple+ (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
+(et-defspec &tuple+ (&rest args) (et--expand-tailed-tuple-spec 'Cons args))
 
 (et-defalias Sexp []
   (or Symbol String Number
