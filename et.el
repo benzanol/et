@@ -2061,6 +2061,11 @@ indeterminates slot."
   :to-string (format "{eval %s on %s}" func (mapconcat #'et:repr--tostring-0 args ", "))
   (apply func args))
 
+(et:repr--defop is (type is)
+  :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
+  (et-union (et:algebra-replace-binds (et True) (et-type-binds (et-supersect type is)))
+            (et:algebra-replace-binds (et Nil) (et-type-binds (et-subtract type is)))))
+
 
 ;;;; Type to repr
 
