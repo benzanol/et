@@ -1360,41 +1360,22 @@ Returns the type of the last expression in the body."
 
 During identification, declares the alias name and generics.
 Returns a plist with :constrain and :populate functions."
-  (let* ((orig-args args)
-         (name (pop args))
-         (_ (or (symbolp name)
-                (et-fatal 1 "Alias name must be a symbol")))
+  (let* ((name (pop args))
+         (_ (or (symbolp name) (et-fatal 1 "Alias name must be a symbol")))
          (genvec (if (vectorp (car args)) (pop args) []))
-         (pb (condition-case nil (et-props-and-body args)
-               (error (et-fatal nil "Expected format (@alias NAME [GENERICS] [PROPS...] TYPE)"))))
+         (spec (pop args)))
 
-         ;; Identification phase: declare the alias name, generics, and spec
-         ;; (but don't parse repr or constraints yet)
-         (_ (apply #'et:type-declare-alias name genvec (cdr pb) (car pb)))
-
-         (spec-idx (length orig-args))
-         (genvec-idx (when (vectorp (nth 1 orig-args)) 2)))
-
+    (et:type-identify-alias name genvec spec args)
     (list
      :constrain
      (lambda ()
        ;; Parse the generic constraints (which reference other types)
-       (when genvec-idx
-         (et-at genvec-idx
-           (let* ((props (get name 'et-alias)))
-             (plist-put props :constraints
-                        (et-genvec-constraints (plist-get props :genvec)))))))
+       (when genvec (et-at 2 (et:type-constrain-alias name))))
 
      :populate
      (lambda ()
        ;; Parse the spec into a repr
-       (et-at spec-idx
-         (let* ((props (or (get name 'et-alias)
-                           (et-fatal nil "Alias `%s' not declared" name)))
-                (spec (plist-get props :spec))
-                (generics (plist-get props :generics)))
-           (plist-put props :repr
-                      (et-parse-repr spec generics))))))))
+       (et-at (if genvec 3 2) (et:type-declare-alias name))))))
 
 
 ;;;; Variables

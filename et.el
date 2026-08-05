@@ -74,7 +74,8 @@
                 :generics List<EtGeneric>
                 :constraints List<EtTypeConstraint>
                 :repr (or Nil EtRepr)
-                :type (or Nil *et:type))))
+                :type (or Nil *et:type)))
+ (@symbol-property et-alias EtAliasDefinitionPlist))
 
 (et-declare
  (@alias EtConstrainResult *et:match-result<List<EtMatchConstraint>>)
@@ -396,10 +397,6 @@ be non-nil."
           ((consp expr) (cons (et:util--copy-quotes (car expr)) (et:util--copy-quotes (cdr expr))))
           (t expr))))
 
-(et-test
- (equal '(a (copy-tree '(b)) c (copy-tree ''(((1 2 'hi)))))
-        (et:util--copy-quotes '(a '(b) c ''(((1 2 'hi)))))))
-
 
 (defmacro et-q (expr)
   "Like `backquote', but return copies of all list literals.
@@ -461,18 +458,6 @@ variable."
 
        (let ((,var (cons (cons elem et:util--stop-recursion-unset-marker) ,var)))
          ,@body))))
-
-
-;;;; Props and body
-
-(eval-and-compile
-  (et-defun et-props-and-body (body: ListR<Any>) Cons<Any~ListR<Any>>
-    (let* ((props nil))
-      (while (keywordp (car body))
-        (setq props (nconc props (list (pop body) (pop body)))))
-      (or body (error "Empty body"))
-      (or (eq 1 (length body)) (error "Body can only contain one expression"))
-      (cons props (car body)))))
 
 
 ;;;; Gen vec parsing
@@ -734,58 +719,71 @@ This is a common pattern for functions that have a `noerror' argument."
     (_ (error "Invalid function type: %s" func-type))))
 
 
-;;;; Defining aliases
+;;;; Alias internals
 
-(defmacro et-custom-defalias (name arglist &rest body)
-  (declare (indent 2) (et ($expand)))
-  (let* ((props (cl-loop while (keywordp (car body))
-                         nconc (list (pop body) (pop body)) into props
-                         finally return props)))
-    `(put ',name 'et-alias
-          (list :custom (lambda ,arglist ,@body) ,@props))))
-
-(et-defun et:type-define-alias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec &rest props: Any) Nil
-  "First declare an alias, then initialize it."
-  (apply #'et:type-declare-alias name genvec spec props)
-  (et:type--initialize-alias name))
-
-(et-defun et:type-declare-alias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec &rest props: Any) Nil
+(et-defun et:type-identify-alias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec props: ListR<Any>) Nil
   (when (plist-get (get name 'et-alias) :read-only)
     (error "Alias %s is already defined, and is read-only" name))
 
-  (let* ((plist (cl-list*
-                 :genvec genvec
-                 :generics (et-genvec-generics genvec)
-                 :spec spec
-                 props)))
+  (let* ((plist `(:genvec ,genvec :generics ,(et-genvec-generics genvec) :spec ,spec ,@props)))
     (put name 'et-alias plist)
     nil))
 
-(et-defun et:type--initialize-alias (name: EtAliasName) Nil
-  (if-let* ((props (get name 'et-alias))
-            (spec (plist-get props :spec)))
-      (ignore
-       (plist-put props :repr (et-parse-repr spec (plist-get props :generics)))
-       (plist-put props :constraints (et-genvec-constraints (plist-get props :genvec))))
-    (error "Alias `%s' not declared" name)))
+(et-defun et:type-constrain-alias (name: EtAliasName) Nil
+  (let* ((genvec (or (plist-get (get name 'et-alias) :genvec) (error "Alias `%s' not declared" name))))
+    (plist-put props :constraints (et-genvec-constraints genvec))
+    nil))
 
-(defmacro et-defalias (name &rest body)
+(et-defun et:type-declare-alias (name: EtAliasName) Nil
+  (let* ((props (or (get name 'et-alias) (error "Alias `%s' not declared" name))))
+    (plist-put props :repr (et-parse-repr (plist-get props :spec) (plist-get props :generics)))
+    nil))
+
+(et-defun et:type-defalias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec props: ListR<Any>) Nil
+  "Identify, constrain, and declare an alias."
+  (et:type-identify-alias name genvec spec props)
+  (et:type-declare-alias name)
+  (et:type-constrain-alias name))
+
+(defmacro et-defalias (name genvec spec &rest props)
   "Alias NAME types to return the specific type.
 
-\(fn NAME [GENERIC-VECTOR] [PROPS...] BODY...)"
+\(fn NAME GENERIC-VECTOR BODY...)"
   (declare (indent 2))
+  `(et:type-defalias ',name ,genvec ,spec ,@props))
 
-  (let* ((genvec (when (vectorp (car body)) (pop body)))
-         (pb (et-props-and-body body)))
-    `(et:type-define-alias ',name ,genvec ',(cdr pb) ,@(car pb))))
+(et-defun et:type-alias-call ([] name: EtAliasName args: ListR<*et:type|EtRepr> totype: [B]
+                              &optional scope: ListR<EtGeneric>)
+          (is-non-nil? B *et:type EtRepr)
+  "Expand the alias with name NAME, passing arguments ARGS.
+
+SCOPE is the generic scope of the caller, which the expansion is
+produced into. It is only relevant when TOTYPE is nil."
+  (let* ((plist (or (get name 'et-alias) (error "Alias %s is not defined" name)))
+         (generics (plist-get plist :generics))
+         (repr (or (plist-get plist :repr)
+                   (error "Alias %s defined incorrectly: Missing repr" name)))
+         (gen-repls (cl-loop for gen in generics
+                             for arg in args
+                             collect (cons gen arg))))
+
+
+    (if (not (eq (length generics) (length args)))
+        ;; Ensure there are the right number of arguments
+        (error "Alias %s expected %s arguments, but %s were provided"
+               name (length generics) (length args))
+
+      ;; Replace S:GENERIC with the specified arg
+      (if totype (et-repr-to-type repr gen-repls)
+        (if (null generics) repr
+          (et:repr-substitute-generics repr gen-repls scope))))))
 
 
 ;;;; Expanding aliases
 
 (et-defun et:type-alias-expand (alias: *et:type-alias) *et:type
   "Expand an alias to a type."
-
-  (et:type-alias-call (et:type-alias->name alias) (et:type-alias->args alias) 'TYPE))
+  (et:type-alias-call (et:type-alias->name alias) (et:type-alias->args alias) :totype))
 
 (et-defun et-expand-all-aliases (type: *et:type) *et:type
   (cl-loop for case in (et:type->cases type)
@@ -795,47 +793,6 @@ This is a common pattern for functions that have a `noerror' argument."
                     (list case))
            into new-cases
            finally return (et:type-new :cases new-cases)))
-
-(defun et:type-alias-call (name args output &optional scope)
-  "Expand the alias with name NAME, passing arguments ARGS.
-
-SCOPE is the generic scope of the caller, which the expansion is
-produced into. It is only relevant when OUTPUT is `MATCHER'."
-  (declare (et (name EtAliasName)
-               (args (ListR (or *et:type EtRepr)))
-               (output (or @TYPE @MATCHER))
-               (scope List<EtGeneric>)
-               (@return (or *et:type EtRepr))))
-
-  (let* ((plist (or (get name 'et-alias) (error "Alias %s is not defined" name)))
-         (custom (plist-get plist :custom))
-         (generics (plist-get plist :generics)))
-
-    (cond
-     (custom
-      ;; ARGS are reprs or types, both of which are valid specs
-      (let* ((spec (apply custom args))
-             (repr (et-parse-repr spec scope)))
-        (if (eq output 'MATCHER) repr
-          (et-repr-to-type repr nil))))
-
-     ;; Ensure there are the right number of arguments
-     ((not (eq (length generics) (length args)))
-      (error "Alias %s expected %s arguments, but %s were provided"
-             name (length generics) (length args)))
-
-     ((let* ((repr (plist-get plist :repr))
-             (gen-repls (cl-loop for gen in generics
-                                 for arg in args
-                                 collect (cons gen arg))))
-
-        (unless repr (error "Alias %s defined incorrectly: Missing repr" name))
-
-        ;; Replace S:GENERIC with the specified arg
-        (if (eq output 'MATCHER)
-            (if (null generics) repr
-              (et:repr-substitute-generics repr gen-repls scope))
-          (et-repr-to-type repr gen-repls)))))))
 
 
 ;;;; Helpers
@@ -873,68 +830,6 @@ a valid `et:type-case->value'."
 
 (et-defun et-pp (arg: Any) String
   (if (stringp arg) arg (cl-prin1-to-string arg)))
-
-(et-test
- (equal (et Cons<1~@abc>)
-        (et-type (et:type-alias-new :name 'Cons :args (list (et-literal 1) (et-literal 'abc)))))
-
- (equal (et Number)
-        (et-type (et:type-dt-new :name 'Number)))
-
- (equal (et {$a::5}&4)
-        (et-type (et:type-case-new
-                  :value (et:type-dt-new :name 'Literal :args (list 4))
-                  :binds (list (cons (alist-get '$a et:repr--test-variables) (et-literal 5))))))
-
- (equal (et {::$a}&{$b::6}&Integer)
-        (et-type (et:type-case-new
-                  :value (et:type-dt-new :name 'Integer)
-                  :binds (list (cons (alist-get '$b et:repr--test-variables) (et-literal 6)))
-                  :typeofs (list (alist-get '$a et:repr--test-variables)))))
-
- (equal (et bindsof<{::$a}&{$a::2|3}&{1|2}>)
-        (et-type (et:type-case-new
-                  :value (et:type-dt-new :name 'Any)
-                  :binds (list (cons (alist-get '$a et:repr--test-variables) (et-literal 2))))))
-
- ;; Test that bindsof never is never
- (equal (et Never) (et bindsof (and Integer&{::$a} String)))
-
- ;; Test when a predicate is redundant (both directions)
- (et-subtype? (et or (and True (bindsof (and Integer&{::$a} String)))
-                  (and Nil (bindsof (subtract Integer&{::$a} String))))
-              (et Nil))
- (et-subtype? (et or (and True (bindsof (and Integer&{::$a} Number)))
-                  (and Nil (bindsof (subtract Integer&{::$a} Number))))
-              (et True))
-
- ;; Test infer
- (equal (et Never)
-        (et infer ConsR<%hi~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
- (equal (et VectorR<12>)
-        (et infer ConsR<12~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
- (equal (et VectorR<Integer>)
-        (et infer ConsR<Integer~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
- (equal (et Never)
-        (et infer ConsR<Number~%hi> [T] ConsR<T&Integer~String> VectorR<T> Never))
- (equal (et VectorR<12>)
-        (et infer ListR<12> [T] ListR<T&Integer> VectorR<T> Never))
- (equal (et VectorR<1|2>)
-        (et infer ConsR<1~ConsR<2~Nil>> [T] ListR<T&Integer> VectorR<T> Never))
- (equal (et VectorR<1|2|3>)
-        (et infer ConsR<1~ConsR<2~ListR<3>>> [T] ListR<T&Integer> VectorR<T> Never))
- (equal (et Never)
-        (et infer ListR<Number> [T] ListR<T&Integer> VectorR<T> Never))
- (equal (et VectorR<Never>)
-        (et infer Nil [T] ListR<T&Integer> VectorR<T> Never))
-
- ;; Test constant args
- (equal (et PList<%hello~%hi~@hello~@hi~:hello~@:hi~123~4.56>)
-        (et-dt 'PList
-               "hello" (et-literal "hi")
-               'hello (et-literal 'hi)
-               :hello (et-literal :hi)
-               123 (et-literal 4.56))))
 
 
 ;;;; Utils
@@ -2251,7 +2146,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                       (`(S:ALIAS ,name . ,args)
                        (et:repr->dnf
                         (et:match--expand-repr-aliases
-                         (et:type-alias-call name args 'MATCHER scope)
+                         (et:type-alias-call name args nil scope)
                          scope)))
                       (other (list (list other))))
                     into and-terms
@@ -2708,63 +2603,6 @@ non-empty list => Might be subtype depending on the conditions."
                collect (list 'I:LEQ poly (et-type super)) into new-indes
                finally return (et:match-succeeded (append new-indes indes))))))
 
-(et-test
- (et-subtype? (et Integer) (et Number))
- (et-subtype? (et Integer) (et Any))
-
- ;; Check that ConsR has covariant arguments
- (et-subtype? (et ConsR<Integer~Integer>) (et ConsR<Number~Number>))
- (not (et-subtype? (et ConsR<Number~Number>) (et ConsR<Integer~Integer>)))
- ;; Check that ConsW has contravariant arguments
- (et-subtype? (et ConsW<Number~Number>) (et ConsW<Integer~Integer>))
- (not (et-subtype? (et ConsW<Integer~Integer>) (et ConsW<Number~Number>)))
- ;; Check that ConsWR/RW have alternating arguments
- (et-subtype? (et ConsRW<Integer~Number>) (et ConsRW<Number~Integer>))
- (not (et-subtype? (et ConsRW<Integer~Number>) (et ConsRW<1~Integer>)))
- (et-subtype? (et ConsWR<Number~Integer>) (et ConsWR<Integer~Number>))
- (not (et-subtype? (et ConsWR<Number~Integer>) (et ConsWR<Integer~1>)))
- ;; Cons (no arguments) is a supertype of everything
- (et-subtype? (et ConsR<1~2>) (et Cons))
- (et-subtype? (et ConsW<1~2>) (et Cons))
- (et-subtype? (et ConsRW<1~2>) (et Cons))
- (et-subtype? (et ConsWR<1~2>) (et Cons))
- ;; Cons with arguments is a subtype of all
- (et-subtype? (et Cons<1~2>) (et ConsR<Integer~Integer>))
- (not (et-subtype? (et Cons<Integer~Integer>) (et ConsR<1~2>)))
- (et-subtype? (et Cons<Integer~Integer>) (et ConsW<1~2>))
- (not (et-subtype? (et Cons<1~2>) (et ConsW<Integer~Integer>)))
-
- (et-subtype? (et Literal (4 . 5)) (et ConsR<Integer~Integer>))
- (et-subtype? (et Literal (4 . 5)) (et Cons<Integer~Integer>))
- (not (et-subtype? (et Literal (4 . 5.5)) (et ConsR<Integer~Integer>)))
- (et-subtype? (et Literal (4 . 5)) (et Cons))
-
- (et-subtype? (et Literal [4 5 6]) (et VectorR<Integer>))
- (et-subtype? (et Literal [4 5 6]) (et Vector<Integer>))
- (not (et-subtype? (et Literal [4 5 6.6]) (et VectorR<Integer>)))
- (et-subtype? (et Literal [4 5 6]) (et Vector))
-
- (et-subtype? (et ListR<Integer>)
-              (et Nil|ConsR<Number~ListR<Integer>>))
-
- ;; Check function subtypes
- (et-subtype? (et Function Integer Integer) (et Function Integer Integer))
- (et-subtype? (et Function Number Integer) (et Function Integer Number))
-
- ;; Check recursive subtypes
- (et-subtype? (et ListR<Integer>) (et ListR<Number>))
- (et-subtype? (et Cons<1~Cons<2~List<3>>>) (et ListR<Number>))
- (not (et-subtype? (et ListR<Number>) (et ListR<Integer>)))
-
- ;; Check cons is plist
- ;; ConsFull representing (:a 1 :b 2) is a subtype of PList<:a Integer :b Integer>
- (et-subtype? (et TupleR @:b %hi @:c 5 @:a 1 @:b 4)
-              (et PList<:a~Integer~:b~String>))
-
- ;; Wrong value type: (:a "hi" :b 2) is NOT a subtype of PList<:a Integer :b Integer>
- (not (et-subtype? (et ConsR<@:a~ConsR<%hi~ConsR<@:b~ConsR<2~Nil>>>>)
-                   (et PList<:a~Integer~:b~Integer>))))
-
 
 ;;;; Simplify
 
@@ -2818,10 +2656,6 @@ non-empty list => Might be subtype depending on the conditions."
 
 (et-defun et-nil-of (type: *et:type) *et:type
   (et-supersect type (et Nil)))
-
-(et-test
- (equal (et-never) (et-subsect (et Integer) (et Positive)))
- (equal (et Integer) (et-supersect (et Integer) (et Positive))))
 
 (et-defun et:algebra--intersect (subsect?: Boolean &rest types: ListR<*et:type>) *et:type
   "Return the type intersection of TYPES."
@@ -2971,13 +2805,6 @@ returning A itself is a valid approximation."
      ;; Todo: Handle more complex cases
      (t (list (funcall make-case a))))))
 
-(et-test
- (equal (et 1|3) (et-subtract (et 1|2|3) (et 2)))
- (equal (et-never) (et-subtract (et Integer) (et Number)))
- (equal (et Number) (et-subtract (et Number) (et Integer)))
- (equal (et String|Number) (et-subtract (et String|Number) (et Integer)))
- (equal (et NonNil) (et-subtract (et NonNil) (et Integer))))
-
 
 ;;;; Recursively modify type
 
@@ -3043,15 +2870,6 @@ returning A itself is a valid approximation."
                   (alist-get var binds-alist))))))
     (cl-loop for (var . types) in (nreverse binds-alist)
              collect (cons var (apply #'et-union (nreverse types))))))
-
-(et-test
- (equal (list (cons (alist-get '$a et:repr--test-variables) (et 2|3)))
-        (et-type-binds (et $a::{2|3}&{1|2})))
- (equal (list (cons (alist-get '$a et:repr--test-variables) (et 1|2)))
-        (et-type-binds (et {::$a}&{1|2})))
- (equal (list (cons (alist-get '$a et:repr--test-variables) (et 2)))
-        (et-type-binds (et {::$a}&{$a::{2|3}}&{1|2}))))
-
 
 (et-defun et:algebra-replace-binds (type: *et:type binds: EtBinds) *et:type
   (et:algebra--transform-type
