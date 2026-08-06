@@ -66,13 +66,23 @@
 
 
 ;;;; Symbol properties
+;;;;; Deferred declare
+
+(et-defun et-run-deferred-declare (name: Symbol) Boolean
+  (when (get name 'et-deferred-declare)
+    (ignore (et-result-boundary (funcall (get name 'et-deferred-declare))))
+    (put name 'et-deferred-declare nil)))
+
+
+(defmacro et-deferred-declare (name &rest body)
+  (declare (indent 1))
+  `(put ,name 'et-deferred-declare (lambda () ,@body)))
+
+
 ;;;;; Function type
 
 (et-defun et-symbol-func-type (name: Var) EtType|Nil
-  (when (get name 'et-deferred-declare)
-    (ignore (et-result-boundary (funcall (get name 'et-deferred-declare))))
-    (put name 'et-deferred-declare nil))
-
+  (et-run-deferred-declare name)
   (get name 'et-symbol-func-type))
 
 (et-defun et-symbol-func-props (name: Var) Nil|PlistOf<Any~Any>
@@ -361,9 +371,7 @@ determine the output type."
   (pcase et:check--context-expr
     (`(,func . ,_args)
      ;; If this function is lazily declared, and hasn't been declared yet, do it now
-     (when (get func 'et-deferred-declare)
-       (ignore (et-result-boundary (funcall (get func 'et-deferred-declare))))
-       (put func 'et-deferred-declare nil))
+     (when (symbolp func) (et-run-deferred-declare func))
 
      ;; Call the checker
      (if-let* ((checker (et-checker-for func)))
@@ -1403,20 +1411,21 @@ Returns a plist with :constrain and :populate functions."
 (et-set-identifier #'cl-defun #'et:identify-defun)
 (et-set-identifier #'defmacro #'et:identify-defun)
 
-(et-defun et:identify-defun (names: Var|&Vector<Var> arglist: &List &rest rest: Sexps) EtIdentifyPlist
+(et-defun et:identify-defun (name: Var arglist: &List &rest rest: Sexps) EtIdentifyPlist
   (list
    :declare
    (lambda ()
-     (let* ((params (et-at 2 (et-parse-arglist arglist))))
-       (when-let* ((decls (et-at-offset 3 (et-find-and-parse-func-decls params rest))))
-         (dolist (name (if (vectorp names) (append names nil) (list names)))
-           (et-symbol-set-func-decls name decls)))))))
+     (let* ((params (et-at 2 (et-parse-arglist arglist)))
+            (decls (et-at-offset 3 (et-find-and-parse-func-decls params rest))))
+       (when decls (et-symbol-set-func-decls name decls))))))
 
 (et-set-identifier '@def #'et:identify-@def)
 
 (et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List ret: EtSpec &rest declares: Sexps) EtIdentifyPlist
-  (let* ((defun-expr (macroexpand-1 `(et-defun ,names ,arglist ,ret (declare (et ,@declares))))))
-    (apply #'et:identify-defun (cdr defun-expr))))
+  (dolist (name (if (vectorp names) (append names nil) (list names)))
+    (et-deferred-declare name
+      (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist ,ret (declare (et ,@declares))))))
+        (funcall (plist-get (apply #'et:identify-defun (cdr defun-expr)) :declare))))))
 
 (et-set-identifier '@check #'et:identify-@check)
 
@@ -1425,7 +1434,8 @@ Returns a plist with :constrain and :populate functions."
    :declare
    (lambda ()
      (dolist (name (if (vectorp names) (append names nil) (list names)))
-       (et-set-checker name `(lambda () (et-chk ,chk)))))))
+       (et-deferred-declare name
+         (et-set-checker name `(lambda () (et-chk ,chk))))))))
 
 
 ;;;; @expand

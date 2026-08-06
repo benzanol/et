@@ -110,6 +110,27 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
                '((4 5 6) (1 2 3))))))
 
 
+;;;; Error guard
+
+;; The cache is supposed to be a transparent optimization: it slots in
+;; alongside the real logic without ever changing behavior, so its own
+;; bookkeeping (hashing, lookups, stores, possibly-stale on-disk structs)
+;; must never let an error escape into the type checker. `et:cache--try'
+;; runs a piece of cache bookkeeping and, if it signals, yields the
+;; sentinel `et--cache-bail' so the caller can fall back to the uncached
+;; path. `debug-on-error' is honored, so a real bug still surfaces while
+;; debugging.
+
+(defvar et--cache-bail (make-symbol "et--cache-bail")
+  "Sentinel returned by `et:cache--try' when cache bookkeeping signals.")
+
+(defmacro et:cache--try (&rest body)
+  "Evaluate BODY, shielding the checker from cache-machinery errors.
+Return BODY's value, or `et--cache-bail' if BODY signals."
+  (declare (indent 0) (debug t))
+  `(condition-case-unless-debug _ (progn ,@body) (error et--cache-bail)))
+
+
 ;;; ============================================================
 ;;; Hashing
 ;;;; Documentation
@@ -158,6 +179,7 @@ of (VALUE . REPLACEMENT) that were replaced by placeholders."
     (or (cl-position var vars :test #'eq)
         (prog1 (length vars)
           (setf (et:cache--hashing-state-vars state) (append vars (list var)))))))
+
 
 ;;;; Types
 
@@ -463,214 +485,6 @@ input (see the call cache)."
 
 
 ;;; ============================================================
-;;; Caching
-;;;; Documentation
-
-;; The cache is partitioned per source file: a single run only ever
-;; touches the cached results for the exact file being checked. Each
-;; source's `et-cache' lives in its own file under `et-cache-directory'
-;; (named after the escaped source path), or in `et-cache-nonfile-file'
-;; for a buffer with no source. There is no persistent in-memory cache;
-;; disk is the only store.
-;;
-;; `et-with-cache-source' loads a source's `et-cache' from disk (or a
-;; fresh one) into the dynamically scoped `et--current-cache', runs the
-;; body, and writes `et--current-cache' back to disk afterwards. A run
-;; enters through `et-with-cache-source-if-enabled', which does this
-;; only when `et-cache-enabled' -- the single place that switch is read.
-;; When caching is disabled `et--current-cache' stays nil, so the defun
-;; and call caches below simply see no cache and fall back to the
-;; uncached path; they key off `et--current-cache', never the switch.
-;;
-;; Under flycheck, the checked contents come from a temp copy while the
-;; source passed to `et-with-cache-source' remains the real path used for
-;; the cache key.
-
-
-;;;; Variables
-
-(defvar et-cache-enabled t
-  "Master switch for et's caching.  When nil, no caching happens at all.")
-
-(defvar et-cache-defuns t
-  "Whether to cache the result of checking a defun body.
-Has no effect unless `et-cache-enabled' is non-nil.")
-
-(defvar et-cache-calls t
-  "Whether to cache subtyping and constraint-solving calls.
-Has no effect unless `et-cache-enabled' is non-nil.")
-
-(defvar et-cache-directory
-  (expand-file-name ".cache/et-cache/" user-emacs-directory)
-  "Directory holding one cache file per checked source file.")
-
-(defvar et-cache-nonfile-file
-  (expand-file-name "et-cache-nonfile.eld" temporary-file-directory)
-  "Cache file used when type checking a buffer with no source file.")
-
-(defvar et--current-cache nil
-  "The `et-cache' for the source currently being checked, or nil.
-Bound to a loaded `et-cache' by `et-with-cache-source' for the duration
-of a run, and left nil when caching is disabled.  The defun and call
-caches read and fill it in place when it is non-nil, and fall back to
-the uncached path otherwise; they never consult `et-cache-enabled'.")
-
-
-;;;; Structs
-
-(defconst et-cache-format-version 1
-  "Version of the serialized `et-cache' representation.")
-
-(cl-defstruct et-cache
-  "The whole in-memory cache for one source file, serialized to disk.
-
-DEFUN-CACHE maps a function name to its `et:cache--cached-defun'.
-CALL-CACHE maps a call hash (see `et:cache--call-cached') to a cached result,
-with ephemeral variables replaced by placeholders."
-  (version et-cache-format-version)
-  (defun-cache (make-hash-table :test 'eq))
-  (call-cache (make-hash-table :test 'equal)))
-
-(cl-defstruct et:cache--cached-defun
-  "A cached defun check: its FINGERPRINT and the `et-result' VALUE."
-  fingerprint value)
-
-
-;;;; Cache files
-
-(defun et:cache--file-for (source)
-  "Return the cache file path for SOURCE (nil means the non-file cache)."
-  (if (null source)
-      et-cache-nonfile-file
-    (expand-file-name
-     (concat (replace-regexp-in-string
-              "[^A-Za-z0-9_.-]" (lambda (s) (format "%%%02x" (aref s 0))) source)
-             ".eld")
-     et-cache-directory)))
-
-(defun et:cache--read-file (file)
-  "Read an `et-cache' from FILE, or nil if it is absent or unreadable."
-  (and (file-exists-p file)
-       (ignore-errors
-         (with-temp-buffer
-           (insert-file-contents file)
-           (let ((obj (read (current-buffer))))
-             (and (et-cache-p obj)
-                  (eq (et-cache-version obj) et-cache-format-version)
-                  obj))))))
-
-(defun et:cache--write-file (cache file)
-  "Write CACHE to FILE, creating its parent directory if needed."
-  (make-directory (file-name-directory file) t)
-  (with-temp-file file
-    (let ((print-level nil) (print-length nil) (print-circle t))
-      (prin1 cache (current-buffer)))))
-
-(defun et:cache--load-file (file)
-  "Read an `et-cache' from FILE, or return a fresh empty one."
-  (or (et:cache--read-file file) (make-et-cache)))
-
-(defmacro et:cache--with-file (file &rest body)
-  "Run BODY with FILE's `et-cache' loaded into `et--current-cache'.
-Load FILE's cache from disk (or a fresh one) into `et--current-cache',
-run BODY, then write `et--current-cache' back to FILE."
-  (declare (indent 1))
-  (let ((f (gensym "file")))
-    `(let* ((,f ,file)
-            (et--current-cache (et:cache--load-file ,f)))
-       (unwind-protect (progn ,@body)
-         (et:cache--write-file et--current-cache ,f)))))
-
-(defmacro et:cache--with-cache-advice (&rest body)
-  "Evaluate BODY with cache advice installed."
-  (declare (indent 0))
-  `(et-with-advice #'et-parse-type :before #'et:cache--capture-type
-     (et-with-advice #'et:check-check :before #'et:cache--capture-function
-       (et-with-advice #'et:check-check :around #'et:cache--check-cached
-         (et-with-advice #'et:match--sub-constraints-1 :around #'et:cache--sub-constraints-cached
-           (et-with-advice #'et:match--super-constraints-1 :around #'et:cache--super-constraints-cached
-             (et-with-advice #'et:algebra--subtype-1 :around #'et:cache--subtype-cached
-               ,@body)))))))
-
-(defmacro et-with-cache-source (source &rest body)
-  "Run BODY with SOURCE's `et-cache' loaded into `et--current-cache'.
-SOURCE is the real source file path, or nil for the non-file cache.
-See `et:cache--with-file'."
-  (declare (indent 1))
-  `(et:cache--with-cache-advice
-     (et:cache--with-file (et:cache--file-for ,source) ,@body)))
-
-(defmacro et-with-cache-source-if-enabled (source &rest body)
-  "Like `et-with-cache-source', but a no-op wrapper when caching is off.
-When `et-cache-enabled' is non-nil, load SOURCE's cache as
-`et-with-cache-source' does; otherwise just run BODY with
-`et--current-cache' left nil.  This is the only place `et-cache-enabled'
-is consulted: every consumer keys off whether `et--current-cache' is
-non-nil instead."
-  (declare (indent 1))
-  `(if et-cache-enabled
-       (et-with-cache-source ,source ,@body)
-     ,@body))
-
-(defun et:cache--all-files ()
-  "Return the list of all existing on-disk cache files."
-  (append (when (file-directory-p et-cache-directory)
-            (directory-files et-cache-directory t "\\.eld\\'"))
-          (when (file-exists-p et-cache-nonfile-file)
-            (list et-cache-nonfile-file))))
-
-(defun et-clear-cache (source)
-  "Empty SOURCE's cached results, rewriting its cache file in place.
-SOURCE is the original source file path, or nil for the non-file cache.
-Interactively, clears the cache for the current buffer's file."
-  (interactive (list (buffer-file-name)))
-  (et-with-cache-source source
-    (setq et--current-cache (make-et-cache))))
-
-(defun et-clear-all-cache ()
-  "Empty every source's cached results, rewriting the cache files in place."
-  (interactive)
-  (dolist (file (et:cache--all-files))
-    (et:cache--with-file file
-      (setq et--current-cache (make-et-cache)))))
-
-
-;;;; Clearing the defun cache
-
-(defun et-clear-defun-cache (source &optional all-loaded)
-  "Clear cached defun check results, leaving the call cache intact.
-Clear SOURCE's defun cache, or every on-disk source's when ALL-LOADED
-is non-nil, rewriting the affected cache files in place.  Called
-interactively, clears every source's defun cache."
-  (interactive (list nil t))
-  (dolist (file (if all-loaded (et:cache--all-files)
-                  (list (et:cache--file-for source))))
-    (et:cache--with-file file
-      (clrhash (et-cache-defun-cache et--current-cache)))))
-
-
-;;;; Error guard
-
-;; The cache is supposed to be a transparent optimization: it slots in
-;; alongside the real logic without ever changing behavior, so its own
-;; bookkeeping (hashing, lookups, stores, possibly-stale on-disk structs)
-;; must never let an error escape into the type checker. `et:cache--try'
-;; runs a piece of cache bookkeeping and, if it signals, yields the
-;; sentinel `et--cache-bail' so the caller can fall back to the uncached
-;; path. `debug-on-error' is honored, so a real bug still surfaces while
-;; debugging.
-
-(defvar et--cache-bail (make-symbol "et--cache-bail")
-  "Sentinel returned by `et:cache--try' when cache bookkeeping signals.")
-
-(defmacro et:cache--try (&rest body)
-  "Evaluate BODY, shielding the checker from cache-machinery errors.
-Return BODY's value, or `et--cache-bail' if BODY signals."
-  (declare (indent 0) (debug t))
-  `(condition-case-unless-debug _ (progn ,@body) (error et--cache-bail)))
-
-
-;;; ============================================================
 ;;; Defun Caching
 ;;;; Documentation
 
@@ -960,7 +774,194 @@ solving), and nil when it cannot."
 
 
 ;;; ============================================================
+;;; Caching
+;;;; Variables
+
+(defvar et-cache-enabled t
+  "Master switch for et's caching.  When nil, no caching happens at all.
+
+The cache is partitioned per source file: a single run only ever
+touches the cached results for the exact file being checked. Each
+source's `et-cache' lives in its own file under `et-cache-directory'
+(named after the escaped source path), or in `et-cache-nonfile-file' for
+a buffer with no source. There is no persistent in-memory cache; disk is
+the only store.
+
+`et-with-cache-source' loads a source's `et-cache' from disk (or a fresh
+one) into the dynamically scoped `et--current-cache', runs the body, and
+writes `et--current-cache' back to disk afterwards. A run enters through
+`et-with-cache-source-if-enabled', which does this only when
+`et-cache-enabled' -- the single place that switch is read. When caching
+is disabled `et--current-cache' stays nil, so the defun and call caches
+below simply see no cache and fall back to the uncached path; they key
+off `et--current-cache', never the switch.
+
+Under flycheck, the checked contents come from a temp copy while the
+source passed to `et-with-cache-source' remains the real path used for
+the cache key.")
+
+(defvar et-cache-defuns t
+  "Whether to cache the result of checking a defun body.
+Has no effect unless `et-cache-enabled' is non-nil.")
+
+(defvar et-cache-calls t
+  "Whether to cache subtyping and constraint-solving calls.
+Has no effect unless `et-cache-enabled' is non-nil.")
+
+(defvar et-cache-directory
+  (expand-file-name ".cache/et-cache/" user-emacs-directory)
+  "Directory holding one cache file per checked source file.")
+
+(defvar et-cache-nonfile-file
+  (expand-file-name "et-cache-nonfile.eld" temporary-file-directory)
+  "Cache file used when type checking a buffer with no source file.")
+
+(defvar et--current-cache nil
+  "The `et-cache' for the source currently being checked, or nil.
+Bound to a loaded `et-cache' by `et-with-cache-source' for the duration
+of a run, and left nil when caching is disabled.  The defun and call
+caches read and fill it in place when it is non-nil, and fall back to
+the uncached path otherwise; they never consult `et-cache-enabled'.")
+
+
+;;;; Structs
+
+(defconst et-cache-format-version 1
+  "Version of the serialized `et-cache' representation.")
+
+(cl-defstruct et-cache
+  "The whole in-memory cache for one source file, serialized to disk.
+
+DEFUN-CACHE maps a function name to its `et:cache--cached-defun'.
+CALL-CACHE maps a call hash (see `et:cache--call-cached') to a cached result,
+with ephemeral variables replaced by placeholders."
+  (version et-cache-format-version)
+  (defun-cache (make-hash-table :test 'eq))
+  (call-cache (make-hash-table :test 'equal)))
+
+(cl-defstruct et:cache--cached-defun
+  "A cached defun check: its FINGERPRINT and the `et-result' VALUE."
+  fingerprint value)
+
+
+;;;; Cache files
+
+(defun et:cache--all-files ()
+  "Return the list of all existing on-disk cache files."
+  (append (when (file-directory-p et-cache-directory)
+            (directory-files et-cache-directory t "\\.eld\\'"))
+          (when (file-exists-p et-cache-nonfile-file)
+            (list et-cache-nonfile-file))))
+
+(defun et:cache--file-for (source)
+  "Return the cache file path for SOURCE (nil means the non-file cache)."
+  (if (null source)
+      et-cache-nonfile-file
+    (expand-file-name
+     (concat (replace-regexp-in-string
+              "[^A-Za-z0-9_.-]" (lambda (s) (format "%%%02x" (aref s 0))) source)
+             ".eld")
+     et-cache-directory)))
+
+(defun et:cache--read-file (file)
+  "Read an `et-cache' from FILE, or nil if it is absent or unreadable."
+  (and (file-exists-p file)
+       (ignore-errors
+         (with-temp-buffer
+           (insert-file-contents file)
+           (let ((obj (read (current-buffer))))
+             (and (et-cache-p obj)
+                  (eq (et-cache-version obj) et-cache-format-version)
+                  obj))))))
+
+(defun et:cache--write-file (cache file)
+  "Write CACHE to FILE, creating its parent directory if needed."
+  (make-directory (file-name-directory file) t)
+  (with-temp-file file
+    (let ((print-level nil) (print-length nil) (print-circle t))
+      (prin1 cache (current-buffer)))))
+
+(defun et:cache--load-file (file)
+  "Read an `et-cache' from FILE, or return a fresh empty one."
+  (or (et:cache--read-file file) (make-et-cache)))
+
+(defmacro et:cache--with-file (file &rest body)
+  "Run BODY with FILE's `et-cache' loaded into `et--current-cache'.
+Load FILE's cache from disk (or a fresh one) into `et--current-cache',
+run BODY, then write `et--current-cache' back to FILE."
+  (declare (indent 1))
+  (let ((f (gensym "file")))
+    `(let* ((,f ,file)
+            (et--current-cache (et:cache--load-file ,f)))
+       (unwind-protect (progn ,@body)
+         (et:cache--write-file et--current-cache ,f)))))
+
+
+;;;; Advice
+
+(defmacro et:cache--with-cache-advice (&rest body)
+  "Evaluate BODY with cache advice installed."
+  (declare (indent 0))
+  `(et-with-advice #'et-parse-type :before #'et:cache--capture-type
+     (et-with-advice #'et:check-check :before #'et:cache--capture-function
+       (et-with-advice #'et:check-check :around #'et:cache--check-cached
+         (et-with-advice #'et:match--sub-constraints-1 :around #'et:cache--sub-constraints-cached
+           (et-with-advice #'et:match--super-constraints-1 :around #'et:cache--super-constraints-cached
+             (et-with-advice #'et:algebra--subtype-1 :around #'et:cache--subtype-cached
+               ,@body)))))))
+
+(defmacro et-with-cache-source (source &rest body)
+  "Run BODY with SOURCE's `et-cache' loaded into `et--current-cache'.
+SOURCE is the real source file path, or nil for the non-file cache.
+See `et:cache--with-file'."
+  (declare (indent 1))
+  `(et:cache--with-cache-advice
+     (et:cache--with-file (et:cache--file-for ,source) ,@body)))
+
+(defmacro et-with-cache-source-if-enabled (source &rest body)
+  "Like `et-with-cache-source', but a no-op wrapper when caching is off.
+When `et-cache-enabled' is non-nil, load SOURCE's cache as
+`et-with-cache-source' does; otherwise just run BODY with
+`et--current-cache' left nil.  This is the only place `et-cache-enabled'
+is consulted: every consumer keys off whether `et--current-cache' is
+non-nil instead."
+  (declare (indent 1))
+  `(if et-cache-enabled
+       (et-with-cache-source ,source ,@body)
+     ,@body))
+
+
+;;; ============================================================
 ;;; Extra
+;;;; Clearing
+
+(defun et-clear-cache (source)
+  "Empty SOURCE's cached results, rewriting its cache file in place.
+SOURCE is the original source file path, or nil for the non-file cache.
+Interactively, clears the cache for the current buffer's file."
+  (interactive (list (buffer-file-name)))
+  (et-with-cache-source source
+    (setq et--current-cache (make-et-cache))))
+
+(defun et-clear-all-cache ()
+  "Empty every source's cached results, rewriting the cache files in place."
+  (interactive)
+  (dolist (file (et:cache--all-files))
+    (et:cache--with-file file
+      (setq et--current-cache (make-et-cache)))))
+
+(defun et-clear-defun-cache (source &optional all-loaded)
+  "Clear cached defun check results, leaving the call cache intact.
+Clear SOURCE's defun cache, or every on-disk source's when ALL-LOADED
+is non-nil, rewriting the affected cache files in place.  Called
+interactively, clears every source's defun cache."
+  (interactive (list nil t))
+  (dolist (file (if all-loaded (et:cache--all-files)
+                  (list (et:cache--file-for source))))
+    (et:cache--with-file file
+      (clrhash (et-cache-defun-cache et--current-cache)))))
+
+
 ;;;; Process directory
 
 (defun et-process-directory (dir &rest args)

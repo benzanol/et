@@ -2081,14 +2081,14 @@ indeterminates slot."
 
 (et:repr--defop is? (type is)
   :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
-  (et-union (et:algebra-replace-binds (et True) (et-type-binds (et-supersect type is)))
-            (et:algebra-replace-binds (et Nil) (et-type-binds (et-subtract type is)))))
+  (et-union (et:algebra-when (et-supersect type is) (et True))
+            (et:algebra-when (et-subtract type is) (et Nil))))
 
 ;; Same as 'is', but the 'nil' case doesn't necessarily mean the value IS NOT the type
 (et:repr--defop is-a? (type is)
   :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
-  (et-union (et:algebra-replace-binds (et True) (et-type-binds (et-supersect type is)))
-            (et:algebra-replace-binds (et Nil))))
+  (et-union (et:algebra-when (et-supersect type is) (et True))
+            (et Nil)))
 
 (et-defspec overlapping? (a b yes &optional no)
   `(extends? (and ,a ,b) Never ,(or no 'Never) ,yes))
@@ -3013,12 +3013,17 @@ returning A itself is a valid approximation."
              collect (cons var (apply #'et-union (nreverse types))))))
 
 (et-defun et:algebra-replace-binds (type: EtType binds: EtBinds) EtType
-  (if (and nil (cl-loop for (_ . type) in binds thereis (et-never-p type)))
-      (et-never)
-    (et:algebra--transform-type
-     type nil
-     (lambda (ty case value)
-       (et-copy-with case :value value :binds (when (eq ty type) binds) :typeofs nil)))))
+  (et:algebra--transform-type
+   type nil
+   (lambda (ty case value)
+     (et-copy-with case :value value :binds (when (eq ty type) binds) :typeofs nil))))
+
+(et-defun et:algebra-when (cond: EtType type: EtType) EtType
+  (if (et-never-p cond) cond
+    (let* ((binds (et-type-binds cond)))
+      (if (cl-loop for (_ . type) in binds thereis (et-never-p type))
+          (et-never)
+        (et:algebra-replace-binds type binds)))))
 
 
 ;;;; Label utils
@@ -3373,7 +3378,7 @@ structural key -- a stale result is never served, only a cache miss."
               ;; Redefine each kept loop alias under its stable name.
               (cl-loop for (old . new) in renames
                        for new-def = (et:algebra--rec-subst (alist-get old kept) subs)
-                       do (et:type-define-alias new [] new-def)
+                       do (et:type-defalias new [] new-def nil)
                        do (put new 'et-loop-alias new-def))
               (et:algebra--rec-subst result subs))))))))
 
