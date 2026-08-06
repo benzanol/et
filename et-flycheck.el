@@ -69,6 +69,7 @@
             "--eval" (eval (format "(add-to-list 'load-path %S)" et-source-directory))
             "--eval" "(setq load-prefer-newer t)"
             "-l" "et-cache"
+            "-l" "et-checkers"
             "--eval" (eval (format "(et-process-directory %S :eval t)"
                                    (expand-file-name "definitions" et-source-directory)))
             "--eval" (eval (format "(et-flycheck-check-file %S %S :eval t :check t :test %S)"

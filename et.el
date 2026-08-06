@@ -858,7 +858,9 @@ produced into. It is only relevant when TOTYPE is nil."
                      (or (nth idx args)
                          ;; Default reprs are defined with all previous gens as their gen scope
                          (when-let* ((repr (alist-get gen defaults)))
-                           (et:repr-substitute-generics repr gen-repls nil))
+                           (if totype
+                               (et-repr-to-type repr gen-repls)
+                             (et:repr-substitute-generics repr gen-repls nil)))
                          (error "Argument %s not provided, and has no default value" gen))
                      collect (cons gen val) into gen-repls
                      finally return gen-repls))))
@@ -1988,9 +1990,10 @@ in GEN-REPLS, if it exists."
 
 (et-defun et:repr--op-subtype? (sub: EtType super: EtType) Boolean
   "Determine subtype, making note of any indeterminates."
-  (let* ((indes (et-subtype-indeterminates sub super)))
-    (cl-callf append et:repr--totype-indeterminates indes)
-    (null indes)))
+  (let* ((indes-or-no (et-subtype-indeterminates sub super)))
+    (if (not (listp indes-or-no)) nil
+      (cl-callf append et:repr--totype-indeterminates indes-or-no)
+      (null indes-or-no))))
 
 (defmacro et:repr--record-indeterminates (&rest body)
   "Run BODY while recording subtype indeterminates.
@@ -2092,6 +2095,12 @@ indeterminates slot."
 
 (et-defspec replace-in (type from to)
   `(or (subtract ,type ,from) (overlapping? ,type ,from ,to)))
+
+(et:repr--defop freshen-shallow (type)
+  (et:algebra-freshen-type-shallow type))
+
+(et:repr--defop freshen-deep (type)
+  (et:algebra-freshen-type type))
 
 
 ;;;; Type to repr
@@ -3004,10 +3013,12 @@ returning A itself is a valid approximation."
              collect (cons var (apply #'et-union (nreverse types))))))
 
 (et-defun et:algebra-replace-binds (type: EtType binds: EtBinds) EtType
-  (et:algebra--transform-type
-   type nil
-   (lambda (ty case value)
-     (et-copy-with case :value value :binds (when (eq ty type) binds) :typeofs nil))))
+  (if (and nil (cl-loop for (_ . type) in binds thereis (et-never-p type)))
+      (et-never)
+    (et:algebra--transform-type
+     type nil
+     (lambda (ty case value)
+       (et-copy-with case :value value :binds (when (eq ty type) binds) :typeofs nil)))))
 
 
 ;;;; Label utils
@@ -3171,7 +3182,7 @@ uninterned names are rewritten by the wrapper."
                    (let* ((alias (et:type-case->value (car (et:type->cases alias-type))))
                           (sym (et:type-alias->name alias)))
                      (setcdr (assq sym et:algebra--rec-transform-datatypes-loops) no-binds)
-                     (et:type-define-alias sym [] no-binds)
+                     (et:type-defalias sym [] no-binds nil)
                      alias-type)
                  type)))))
 
@@ -3322,7 +3333,7 @@ makes structurally identical loops reuse the same name across sessions.
 
 Only the outermost call establishes the loop scope and performs the
 collapsing/renaming.  A TRANSFORM may recurse back in (e.g.
-`et-unfreshen-type' unfreshening a sub-argument), and
+`et:algebra-unfreshen-type' unfreshening a sub-argument), and
 `et:algebra--rec-transform-stack' spans those nested calls -- so a loop detected
 in a nested call belongs to an outer frame.  Nested calls therefore
 delegate straight to the inner pass, sharing the outermost call's loop
@@ -3370,7 +3381,7 @@ structural key -- a stale result is never served, only a cache miss."
 ;;;;; Freshen/unfreshen
 
 (defvar et:algebra--unfreshen-canonical-loops nil
-  "Cached canonical (MATCHER . REPR) collapses for `et-unfreshen-type'.
+  "Cached canonical (MATCHER . REPR) collapses for `et:algebra-unfreshen-type'.
 Loops produced while unfreshening that match MATCHER are rewritten to
 REPR with the matched generics substituted in, so the loop generated for
 `ListFresh<Number>' collapses to the readable `List<Number>'.  Built
@@ -3383,38 +3394,41 @@ lazily because `List' is not yet defined when this file loads.")
             (list (cons (et-matcher [E] List<E>)
                         (et-parse-repr 'List<E> '(E)))))))
 
-(et-defun et-unfreshen-type (type: EtType) EtType
+(et-defun et:algebra-unfreshen-type (type: EtType) EtType
   (et:algebra-remove-binds
    (et:algebra--rec-transform-datatypes
     type
     (lambda (name args)
       (pcase name
-        ('ConsFresh (et:type-alias-new :name 'Cons :args (mapcar #'et-unfreshen-type args)))
-        ('VectorFresh (et:type-alias-new :name 'Vector :args (mapcar #'et-unfreshen-type args)))
+        ('ConsFresh (et:type-alias-new :name 'Cons :args (mapcar #'et:algebra-unfreshen-type args)))
+        ('VectorFresh (et:type-alias-new :name 'Vector :args (mapcar #'et:algebra-unfreshen-type args)))
         (_ (et:type-dt-new :name name :args args))))
     (et:algebra--unfreshen-canonical-loops))))
 
-(et-defun et-freshen-type (type: EtType) EtType
+(et-defun et:algebra-freshen-type (type: EtType) EtType
   (et:algebra-remove-binds
    (et:algebra--rec-transform-datatypes
     type
     (lambda (name args)
       (pcase name
         ('ConsFull
-         (let* ((new-args (list (et-freshen-type (car args)) (et-freshen-type (caddr args)))))
+         (let* ((new-args (list (et:algebra-freshen-type (car args)) (et:algebra-freshen-type (caddr args)))))
            (et:type-dt-new :name 'ConsFresh :args new-args)))
-        ('VectorFull (et:type-alias-new :name 'VectorFresh :args (list (et-freshen-type (car args)))))
+        ('VectorFull (et:type-alias-new :name 'VectorFresh :args (list (et:algebra-freshen-type (car args)))))
         (_ (et:type-dt-new :name name :args args)))))))
 
-(et-defun et-freshen-type-shallow (type: EtType) EtType
+(et-defun et:algebra-freshen-type-shallow (type: EtType) EtType
   (et:algebra-remove-binds
    (et:algebra--rec-transform-datatypes
     type
     (lambda (name args)
       (pcase name
         ('ConsFull
-         (let* ((new-args (list (car args) (et-freshen-type-shallow (caddr args)))))
+         (let* ((new-args (list (car args) (et:algebra-freshen-type-shallow (caddr args)))))
            (et:type-dt-new :name 'ConsFresh :args new-args)))
+        ('VectorFull
+         (et:type-dt-new :name 'VectorFresh :args (list (car args))))
+
         (_ (et:type-dt-new :name name :args args)))))))
 
 
@@ -3437,7 +3451,7 @@ lazily because `List' is not yet defined when this file loads.")
 ;;;; Public functions
 
 (et-defun et-reify-type (type: EtType) EtType
-  (et-unfreshen-type (et-remove-type-binds-and-polys type nil)))
+  (et:algebra-unfreshen-type (et-remove-type-binds-and-polys type nil)))
 
 
 ;;; ============================================================

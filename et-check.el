@@ -179,7 +179,7 @@
          (func-type (et-get-fbind func)))
 
     (let* ((arg-types (cl-loop for pos upfrom 1 below (length (et-cur-expr))
-                               for type = (et-check-at pos)
+                               for type = (et-check-at nil pos)
                                collect (et-copy-with type :label (list :position pos))))
            (args-type (et-tuple 'Cons arg-types))
            (output-result (et:algebra-funcall func-type args-type)))
@@ -370,7 +370,7 @@ determine the output type."
          (let* ((output (funcall checker)))
            (if (or (null output) (et:type-p output)) output
              (et-fatal nil "Checker for `%s' had invalid return: %s" func output)))
-       (et-err 0 "No type for `%s'" func)))
+       (et-err 0 "No checker for `%s'" func)))
 
     ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
     ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
@@ -432,16 +432,19 @@ the current checking expr."
 
 (et-defun et-check-expr (rec: EtRec expr: Sexp mappings: Alist<EtPath~EtPath>) EtChecked
   "Check EXPR, mapping paths in EXPR back into the current expr."
-  (et-propagate-result
-   (et-result-boundary
-    (et:check-check expr et:check--context-narrows rec))
-   (lambda (path)
-     (cl-loop for (from . to) in mappings
-              when (and (>= (length path) (length from))
-                        (equal from (seq-subseq path 0 (length from))))
-              return (append to (seq-subseq path (length from)))
-              ;; If none match, map to nil
-              finally return nil))))
+  (let* ((checked
+          (et-propagate-result
+           (et-result-boundary
+            (et:check-check expr et:check--context-narrows rec))
+           (lambda (path)
+             (cl-loop for (from . to) in mappings
+                      when (and (>= (length path) (length from))
+                                (equal from (seq-subseq path 0 (length from))))
+                      return (append to (seq-subseq path (length from)))
+                      ;; If none match, map to nil
+                      finally return nil)))))
+    (setq et:check--context-narrows (et:check--result->narrows checked))
+    (et:check--result->type checked)))
 
 
 ;;;;; Check expansion
@@ -672,10 +675,9 @@ bound to that type.
 
 TODO: Only perform estimation for certain types, such as literals and
 fresh types."
-  (et-declare (inits Alist<Var~EtType>)
-              (body EtCheckable))
+  (et-declare (inits Alist<Var~EtType>) (body EtCheckable))
   `(et-with-binds (et:flow--guess-var-types ,inits ',body)
-     (et-chk body)))
+     (et-chk ,body)))
 
 (et-defun et:flow--guess-var-types (inits: Alist<Var~EtType> body: EtCheckable>) Alist<Var~EtType>
   (if et:flow--guessing-var-type
@@ -1352,7 +1354,7 @@ Returns the type of the last expression in the body."
             (cl-loop for plist in plists
                      for pos upfrom 1
                      for func = (plist-get plist phase)
-                     when func do (et-at pos (funcall func))))))
+                     when func do (et-error-boundary pos (funcall func))))))
     (list
      :constrain (lambda () (funcall perform-phase :constrain))
      :populate (lambda () (funcall perform-phase :populate))
@@ -1386,7 +1388,7 @@ Returns a plist with :constrain and :populate functions."
        (et-at (if genvec 3 2) (et:type-declare-alias name))))))
 
 
-;;;; Variables
+;;;; @variable/defvar
 
 (et-set-identifier #'et-defvar #'et:identify-et-defvar)
 (et-set-identifier '@variable #'et:identify-et-defvar)
@@ -1395,29 +1397,26 @@ Returns a plist with :constrain and :populate functions."
   (list :declare (lambda () (et-set-global-var-type name (et-parse-type spec)))))
 
 
-;;;; Callables
+;;;; @check/@def/def*
 
 (et-set-identifier #'defun #'et:identify-defun)
 (et-set-identifier #'cl-defun #'et:identify-defun)
 (et-set-identifier #'defmacro #'et:identify-defun)
 
-(et-defun et:identify-defun (name: Var arglist: &List &rest rest: Sexps) EtIdentifyPlist
+(et-defun et:identify-defun (names: Var|&Vector<Var> arglist: &List &rest rest: Sexps) EtIdentifyPlist
   (list
    :declare
    (lambda ()
      (let* ((params (et-at 2 (et-parse-arglist arglist))))
        (when-let* ((decls (et-at-offset 3 (et-find-and-parse-func-decls params rest))))
-         (et-symbol-set-func-decls name decls))))))
+         (dolist (name (if (vectorp names) (append names nil) (list names)))
+           (et-symbol-set-func-decls name decls)))))))
 
 (et-set-identifier '@def #'et:identify-@def)
 
-(et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List &rest declares: Sexps) EtIdentifyPlist
-  (list
-   :declare
-   (lambda ()
-     (dolist (name (if (vectorp names) (append names nil) (list names)))
-       (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist (declare (et ,@declares))))))
-         (apply #'et:identify-defun (cdr defun-expr)))))))
+(et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List ret: EtSpec &rest declares: Sexps) EtIdentifyPlist
+  (let* ((defun-expr (macroexpand-1 `(et-defun ,names ,arglist ,ret (declare (et ,@declares))))))
+    (apply #'et:identify-defun (cdr defun-expr))))
 
 (et-set-identifier '@check #'et:identify-@check)
 
@@ -1429,7 +1428,7 @@ Returns a plist with :constrain and :populate functions."
        (et-set-checker name `(lambda () (et-chk ,chk)))))))
 
 
-;;;; Macroexpand
+;;;; @expand
 
 (et-set-identifier #'et-defun #'et:identify-macroexpand)
 
@@ -1439,7 +1438,7 @@ Returns a plist with :constrain and :populate functions."
     (et-at 0 (et-with-sticky-path (et-identify-expr expanded)))))
 
 
-;;;; Struct
+;;;; defstruct
 
 (et-set-identifier #'defun #'et:identify-cl-defstruct)
 
