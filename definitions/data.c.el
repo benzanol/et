@@ -77,12 +77,12 @@
  (@def symbol-function (symbol: Symbol) Any)
  (@def symbol-plist (symbol: Symbol) Any)
  (@def symbol-name (symbol: Symbol) String)
- (@def bare-symbol (sym: Symbol|(Emacs symbol-with-pos)) Symbol)
+ (@def bare-symbol (sym: (or Symbol (Emacs symbol-with-pos))) Symbol)
  (@def symbol-with-pos-pos (sympos: (Emacs symbol-with-pos)) Integer)
  (@def remove-pos-from-symbol (arg: [T]) (replace-in T (Emacs symbol-with-pos) Symbol))
  (@def position-symbol
-       (sym: Symbol|(Emacs symbol-with-pos)
-             pos: Integer|(Emacs symbol-with-pos))
+       (sym: (or Symbol (Emacs symbol-with-pos))
+             pos: (or Integer (Emacs symbol-with-pos)))
        (Emacs symbol-with-pos))
  (@def fset ([T] symbol: Var definition: T) T)
  (@def defalias
@@ -96,14 +96,14 @@
  (@def subr-native-lambda-list (subr: Subr) True|&List)
  (@def subr-type (subr: Subr) Nil|Tuple<@function~List<Sexp>~Sexp>)
  (@def subr-native-comp-unit (subr: Subr)
-       Nil|(Emacs native-comp-unit))
+       (or Nil (Emacs native-comp-unit)))
  ;; The unit's file slot is mutable and the setter accepts any Lisp value.
  ;; Field-dependent result types are needed to recover its current type.
  (@def native-comp-unit-file (comp-unit: (Emacs native-comp-unit)) Todo)
  (@def native-comp-unit-set-file (comp-unit: (Emacs native-comp-unit) new-file: Any)
        (Emacs native-comp-unit))
  (@def interactive-form (cmd: Any)
-       Nil|(&Tuple @interactive Any))
+       (or Nil (&Tuple @interactive Any)))
  (@def command-modes (command: Any) &List<Symbol>))
 
 

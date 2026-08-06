@@ -1,11 +1,13 @@
 ;; -*- lexical-binding: t; -*-
 
+
 ;;; ============================================================
 ;;; Basic utilities
 
 (et-declare
  (@def identity ([T] argument: T) T)
  (@def random (&optional limit: (or Nil True String (and Integer Positive))) Integer))
+
 
 ;;; ============================================================
 ;;; Lengths and string comparison
@@ -19,17 +21,17 @@
  (@def length<
        (sequence: (or &List &Vector String CharTable BoolVector
                       ByteCodeFunction (Emacs record))
-        length: Integer)
+                  length: Integer)
        Boolean)
  (@def length>
        (sequence: (or &List &Vector String CharTable BoolVector
                       ByteCodeFunction (Emacs record))
-        length: Integer)
+                  length: Integer)
        Boolean)
  (@def length=
        (sequence: (or &List &Vector String CharTable BoolVector
                       ByteCodeFunction (Emacs record))
-        length: Integer)
+                  length: Integer)
        Boolean)
  (@def proper-list-p (object: Any) Integer|Nil)
  (@def string-bytes (string: String) Integer)
@@ -39,8 +41,8 @@
  (@def string-equal (s1: Symbol|String s2: Symbol|String) Boolean)
  (@def compare-strings
        (str1: String start1: Integer|Nil end1: Integer|Nil
-        str2: String start2: Integer|Nil end2: Integer|Nil
-        &optional ignore-case: Boolean)
+              str2: String start2: Integer|Nil end2: Integer|Nil
+              &optional ignore-case: Boolean)
        Integer|True)
  (@def string-lessp
        (string1: Symbol|String string2: Symbol|String)
@@ -50,12 +52,13 @@
        Boolean)
  (@def string-collate-lessp
        (s1: Symbol|String s2: Symbol|String
-        &optional locale: String|Nil ignore-case: Boolean)
+            &optional locale: String|Nil ignore-case: Boolean)
        Boolean)
  (@def string-collate-equalp
        (s1: Symbol|String s2: Symbol|String
-        &optional locale: String|Nil ignore-case: Boolean)
+            &optional locale: String|Nil ignore-case: Boolean)
        Boolean))
+
 
 ;;; ============================================================
 ;;; Sequence construction and copying
@@ -81,6 +84,7 @@
        (arg: (or &List &Vector String CharTable BoolVector (Emacs record)))
        Todo))
 
+
 ;;; ============================================================
 ;;; String representation conversion
 
@@ -92,6 +96,7 @@
  (@def string-to-multibyte (string: String) String)
  (@def string-to-unibyte (string: String) String))
 
+
 ;;; ============================================================
 ;;; Subsequences and list access
 
@@ -100,31 +105,30 @@
  ;; sharing the keys and values. Selective shallow freshening is not yet
  ;; expressible.
  (@def copy-alist (alist: &List) Todo)
- ;; The result preserves whether the input is a string or vector and, for a
- ;; vector, preserves its element type while producing a fresh container.
- ;; Kind-preserving element relationships across this overload are not yet
- ;; expressible.
  (@def substring
-       (string: (or String &Vector) &optional from: Integer|Nil to: Integer|Nil)
-       Todo)
+       (string: [<= T (or String &Vector)] &optional from: Integer|Nil to: Integer|Nil)
+       (freshen-shallow T))
  (@def substring-no-properties
        (string: String &optional from: Integer|Nil to: Integer|Nil)
        String)
  (@def take ([E] n: Integer list: &List<E>) ListFresh<E>)
- ;; The result is the original writable list, truncated in place when needed.
- ;; Destructive update and return identity are not yet expressible.
- (@def ntake ([E] n: Integer list: List<E>) Todo)
+ (@def ntake ([E] n: Integer list: List<E>) List<E>)
  ;; The result is a particular existing tail of LIST and must preserve the
  ;; input spine's writeability. Substructure identity and mutability
  ;; preservation are not yet expressible.
  (@def nthcdr ([E] n: Integer list: &List<E>) Todo)
  (@def nth ([E] n: Integer list: &List<E>) E|Nil)
- ;; The result type depends on the element type of several distinct sequence
- ;; kinds, including strings, bool-vectors, and char-tables. There is no common
- ;; element-typed sequence abstraction that can express that relationship.
- (@def elt
-       (sequence: (or &List &Vector String BoolVector CharTable) n: Integer)
-       Todo))
+
+ (@alias EltSeq [] (or &List &Vector String BoolVector CharTable))
+ (@alias EltOf [<= T EltSeq]
+         (infer T [E] &List<E> E
+                (infer T [E] &Vector<E> E
+                       (extends? T String Integer
+                                 (extends? T BoolVector Boolean
+                                           (extends? T CharTable Integer
+                                                     Never))))))
+ (@def elt (sequence: [<= S EltSeq] n: Integer) EltOf<S>))
+
 
 ;;; ============================================================
 ;;; Membership, association, and deletion
@@ -146,7 +150,7 @@
  ;; language cannot preserve association-cell identity and writeability.
  (@def assoc
        (key: Any alist: &List
-        &optional testfn: (or Nil (fn (Args Any Any) Any)))
+             &optional testfn: (or Nil (fn (Args Any Any) Any)))
        Todo)
  ;; The result is an existing association cell selected from ALIST. The type
  ;; language cannot preserve association-cell identity and writeability.
@@ -162,6 +166,7 @@
  ;; and the result preserves the input container kind. This conditional
  ;; mutation, freshness, and kind relationship is not yet expressible.
  (@def delete (elt: Any seq: (or List &Vector String)) Todo))
+
 
 ;;; ============================================================
 ;;; Reversing and sorting
@@ -182,9 +187,10 @@
  ;; value-dependent freshness and mutation are not yet expressible.
  (@def sort
        (seq: (or List Vector)
-        &key key: Todo lessp: Todo
-        reverse: Boolean in-place: Boolean)
+             &key key: Todo lessp: Todo
+             reverse: Boolean in-place: Boolean)
        Todo))
+
 
 ;;; ============================================================
 ;;; Property lists and equality
@@ -215,6 +221,7 @@
  (@def equal-including-properties (o1: Any o2: Any) Boolean)
  (@def value< (a: Any b: Any) Boolean))
 
+
 ;;; ============================================================
 ;;; Mutable sequences and list concatenation
 
@@ -232,6 +239,7 @@
  ;; yet expressible.
  (@def nconc (&rest lists: Todo) Todo))
 
+
 ;;; ============================================================
 ;;; Sequence mapping
 
@@ -241,22 +249,22 @@
  ;; for that callback relationship.
  (@def mapconcat
        (function: (fn (Args Todo) (or String &List<Integer> &Vector<Integer>))
-        sequence: (or &List &Vector BoolVector String ByteCodeFunction)
-        &optional separator: (or Nil String &List<Integer> &Vector<Integer>))
+                  sequence: (or &List &Vector BoolVector String ByteCodeFunction)
+                  &optional separator: (or Nil String &List<Integer> &Vector<Integer>))
        String)
  ;; FUNCTION's input depends on SEQUENCE's element type across four container
  ;; kinds, and each result-list element depends on FUNCTION's output. Those
  ;; callback and container element relationships are not yet expressible.
  (@def mapcar
        (function: (fn (Args Todo) Todo)
-        sequence: (or &List &Vector BoolVector String ByteCodeFunction))
+                  sequence: (or &List &Vector BoolVector String ByteCodeFunction))
        ListFresh<Todo>)
  ;; FUNCTION's input depends on SEQUENCE's element type, and the return value is
  ;; the identical SEQUENCE object. Cross-kind element relationships and return
  ;; identity are not yet expressible.
  (@def mapc
        (function: (fn (Args Todo) Any)
-        sequence: (or &List &Vector BoolVector String ByteCodeFunction))
+                  sequence: (or &List &Vector BoolVector String ByteCodeFunction))
        Todo)
  ;; FUNCTION's input depends on SEQUENCE's element type, and its list results
  ;; are destructively concatenated with nconc; the final result may also be an
@@ -264,8 +272,9 @@
  ;; and mixed result sharing are not yet expressible.
  (@def mapcan
        (function: (fn (Args Todo) Todo)
-        sequence: (or &List &Vector BoolVector String ByteCodeFunction))
+                  sequence: (or &List &Vector BoolVector String ByteCodeFunction))
        Todo))
+
 
 ;;; ============================================================
 ;;; User prompts and system load
@@ -273,6 +282,7 @@
 (et-declare
  (@def yes-or-no-p (prompt: String) Boolean)
  (@def load-average (&optional use-floats: Boolean) List<Number>))
+
 
 ;;; ============================================================
 ;;; Features
@@ -286,6 +296,7 @@
        ([(<= F Symbol)] feature: F
         &optional filename: String|Nil noerror: Boolean)
        F|Nil))
+
 
 ;;; ============================================================
 ;;; Widgets and locale
@@ -302,6 +313,7 @@
  (@def locale-info
        (item: Symbol)
        (or Nil String &Vector<String> (Tuple Integer Integer))))
+
 
 ;;; ============================================================
 ;;; Base64
@@ -321,11 +333,12 @@
        String)
  (@def base64-decode-region
        (beg: IntOrMarker end: IntOrMarker
-        &optional base64url: Boolean ignore-invalid: Boolean)
+             &optional base64url: Boolean ignore-invalid: Boolean)
        Integer)
  (@def base64-decode-string
        (string: String &optional base64url: Boolean ignore-invalid: Boolean)
        String))
+
 
 ;;; ============================================================
 ;;; Structural hashing
@@ -335,6 +348,7 @@
  (@def sxhash-eql (obj: Any) Integer)
  (@def sxhash-equal (obj: Any) Integer)
  (@def sxhash-equal-including-properties (obj: Any) Integer))
+
 
 ;;; ============================================================
 ;;; Hash tables
@@ -371,7 +385,7 @@
        Nil)
  (@def define-hash-table-test
        (name: Symbol test: (fn (Args Any Any) Any)
-        hash: (fn (Args Any) Any))
+              hash: (fn (Args Any) Any))
        (Tuple AnyFn AnyFn))
  (@def internal--hash-table-histogram
        (hash-table: (Emacs hash-table))
@@ -383,6 +397,7 @@
        (hash-table: (Emacs hash-table))
        Integer))
 
+
 ;;; ============================================================
 ;;; Cryptographic hashing
 
@@ -393,17 +408,18 @@
  ;; argument's container kind are not yet expressible.
  (@def md5
        (object: Buffer|String
-        &optional start: Todo end: Todo
-        coding-system: Symbol|Nil noerror: Boolean)
+                &optional start: Todo end: Todo
+                coding-system: Symbol|Nil noerror: Boolean)
        String)
  ;; START and END are integer indices for strings but buffer positions, which
  ;; can also be markers, for buffers. Argument types conditional on another
  ;; argument's container kind are not yet expressible.
  (@def secure-hash
        (algorithm: Symbol object: Buffer|String
-        &optional start: Todo end: Todo binary: Boolean)
+                   &optional start: Todo end: Todo binary: Boolean)
        String)
  (@def buffer-hash (&optional buffer-or-name: Buffer|String|Nil) String))
+
 
 ;;; ============================================================
 ;;; Search and buffer information
@@ -421,5 +437,6 @@
  (@def line-number-at-pos
        (&optional position: IntOrMarker|Nil absolute: Boolean)
        Integer))
+
 
 ;;; ============================================================

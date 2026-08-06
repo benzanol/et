@@ -55,11 +55,11 @@
  (@check let
          ($pcase
           `(,forms . ,_body)
-          ($infer-binds (et-check-let-inits 1) ($tail 1))))
+          ($infer-binds (et-check-let-inits 1) ($tail 2))))
 
  (@check let*
          ($pcase
-          `(nil . ,_body) ($tail 1)
+          `(nil . ,_body) ($tail 2)
           `((,first . ,rest) . ,body)
           ($exp `(let (,first)
                    (let* ,rest ,@body)))))

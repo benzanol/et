@@ -1,33 +1,8 @@
-;;; et-checkers.el --- Non-internal helpers of et.el -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2026  Adam Tillou
-
-;; Author: Adam Tillou <adam.tillou@gmail.com>
-;; Keywords: tools
-
-;; This program is free software; you can redistribute it and/or modify
-;; it under the terms of the GNU General Public License as published by
-;; the Free Software Foundation, either version 3 of the License, or
-;; (at your option) any later version.
-
-;; This program is distributed in the hope that it will be useful,
-;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-;; GNU General Public License for more details.
-
-;; You should have received a copy of the GNU General Public License
-;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-
-;;; Commentary:
-;;; Code:
-
-(require 'et-check)
+;; -*- lexical-binding: t; -*-
 
 
 ;;; ============================================================
-;;; Handy checkers - `et:checker'
-;;;; Function checkers
+;;; Function checkers
 
 (et-defvar et:checker--checking-defun Nil|Var nil)
 
@@ -44,15 +19,6 @@
       (et-check-function-body (et-symbol-func-params name) func-type 3))
     (et-literal name)))
 
-
-(et-set-checker #'et-defun #'et:checker--et-defun)
-(et-defun et:checker--et-defun () EtType
-  (let* ((name (cadr (et-cur-expr))))
-    (when-let* ((func-type (et-symbol-func-type name))
-                ((not (plist-get (et-symbol-func-props name) :skip)))
-                (et-checking-defun name))
-      (et-check-function-body (et-symbol-func-params name) func-type 4))
-    (et-literal name)))
 
 
 (et-set-checker #'lambda #'et:checker--lambda)
@@ -77,9 +43,23 @@
 
 
 ;;; ============================================================
-;;; Provide
+;;; et checkers
 
-(provide 'et-checkers)
+(et-declare
+ (@check et: ($pcase `(,spec ,_expr)
+                     ($prog1 ($eval (et-parse-type spec))
+                             ($expect ($eval (et-parse-type spec)) ($at 2)))))
+ (@check et! ($pcase `(,spec ,_expr)
+                     ($prog1 ($eval (et-parse-type spec)) ($at 2)))))
+
+(et-set-checker #'et-defun #'et:checker--et-defun)
+(et-defun et:checker--et-defun () EtType
+  (let* ((name (cadr (et-cur-expr))))
+    (when-let* ((func-type (et-symbol-func-type name))
+                ((not (plist-get (et-symbol-func-props name) :skip)))
+                (et-checking-defun name))
+      (et-check-function-body (et-symbol-func-params name) func-type 4))
+    (et-literal name)))
 
 
-;;; et-checkers.el ends here
+;;; ============================================================
