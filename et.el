@@ -748,7 +748,8 @@ This is a common pattern for functions that have a `noerror' argument."
 (et-defun et:type-alias-display-name (name: EtAliasName) EtAliasName
   (let* ((props (et:type--alias-props name)))
     (if (plist-get props :ro-redundant)
-        (plist-get props :ro-from)
+        (or (plist-get props :ro-from)
+            (error "Alias marked redundant without :ro-from"))
       name)))
 
 (et-defun et:type-identify-alias (name: EtAliasName genvec: EtGenVec spec: EtTypeSpec props: ListR<Any>) Nil
@@ -1134,7 +1135,7 @@ keys.  If it does not match, the cdr must be a cons (skipping the
 value) whose cdr still covers all required keys.  Extra keys are
 allowed and order does not matter.
 
-MK-SUPER builds the synthesized `ConsR' super value in the caller's
+MK-SUPER builds the synthesized `&Cons' super value in the caller's
 language (a type or a matcher repr); see `et:dt-constraints'."
   (let ((car-read (et-expand-all-aliases (nth 0 cons-args)))
         (cdr-read (nth 2 cons-args)))
@@ -1148,21 +1149,21 @@ language (a type or a matcher repr); see `et:dt-constraints'."
       (_ (et:match-failed)))))
 
 (defun et:dt-cons-plist-super-type (car rest-plist)
-  "Build the type `ConsR<CAR~tail>', where tail is `PList<REST-PLIST>' or Any.
+  "Build the type `&Cons<CAR~tail>', where tail is `PList<REST-PLIST>' or Any.
 CAR is the matched value type, or nil for any value.  Used as the
 MK-SUPER argument of `et:dt--cons-is-plist' when matching against types."
-  (et-alias 'ConsR (or car (et-any))
+  (et-alias '&Cons (or car (et-any))
             (if rest-plist (apply #'et-dt 'PList rest-plist) (et-any))))
 
 (defun et:dt-cons-plist-super-matcher (car rest-plist scope)
-  "Build the matcher repr `ConsR<CAR~tail>', tail being `PList<REST-PLIST>' or Any.
+  "Build the matcher repr `&Cons<CAR~tail>', tail being `PList<REST-PLIST>' or Any.
 CAR is the matched value repr, or nil for any value.  SCOPE is the
 generic scope of the enclosing matcher.  Used as the MK-SUPER argument
 of `et:dt--cons-is-plist' when matching against matchers."
   (let ((any-mr (et:repr-new :generics scope :dnf (et-q (((S:DT Any)))))))
     (et:repr-new
      :generics scope
-     :dnf (et-q (((S:ALIAS ConsR
+     :dnf (et-q (((S:ALIAS &Cons
                            ,(or car any-mr)
                            ,(if rest-plist
                                 (et:repr-new :generics scope :dnf (et-q (((S:DT PList ,@rest-plist)))))
@@ -1255,7 +1256,7 @@ Also, (funcall CO-LITERAL val super-arg) checks if the literal val is a
 subtype of super-arg.
 
 The ConsFull/PList case is the only one that synthesizes a brand new
-super value (a `ConsR') instead of passing existing super-args to CO.
+super value (a `&Cons') instead of passing existing super-args to CO.
 Since super-args may be either types or matcher reprs depending on the
 caller, MK-SUPER builds that synthesized super value in the caller's
 language. See `et:dt--cons-is-plist'.
@@ -1406,7 +1407,7 @@ never be read for any purpose other than assertions."
       (et:repr--parse-factor (car spec) (cdr spec)))
      ((symbolp spec) (et:repr--parse-string (symbol-name spec)))
      ((stringp spec) (et:repr--parse-string spec))
-     ((numberp spec) (et:repr--parse-0 (list 'literal spec)))
+     ((numberp spec) (et:repr--parse-0 (list 'Literal spec)))
      ((et:type-p spec) (et:repr--parse-0 (list 'type spec)))
      ((et:repr-p spec) spec)
      (t (error "Invalid spec: %s" spec)))))
@@ -1419,6 +1420,10 @@ never be read for any purpose other than assertions."
             (ds (mapcar #'et:repr->dnf ps)))
        (et:repr-new :generics et:repr--parsing-generics
                     :dnf (apply (if (eq name 'and) #'et-dnf-intersect #'nconc) ds))))
+
+   ;; read-only
+   (when (eq name 'read-only)
+     (et:repr-to-read-only (et:repr--parse-0 (car args))))
 
    ;; Parse a built-in spec segment
    (when-let* ((handler (get name 'et-spec-parse)))
@@ -1483,7 +1488,7 @@ never be read for any purpose other than assertions."
   (cond
    ;; Literal number
    ((string-match "^[0-9]+\\(\\.[0-9]+\\)?$" s)
-    (et:repr--parse-0 (list 'literal (string-to-number s)) nil))
+    (et:repr--parse-0 (list 'Literal (string-to-number s)) nil))
 
    ;; Parenthesized expression
    ((string-match "^{\\(.*\\)}$" s)
@@ -1491,11 +1496,11 @@ never be read for any purpose other than assertions."
 
    ;; @symbol  ->  Literal symbol
    ((string-match "^@\\(.*\\)$" s)
-    (et:repr--parse-0 (list 'literal (intern (match-string 1 s)))))
+    (et:repr--parse-0 (list 'Literal (intern (match-string 1 s)))))
 
    ;; %string  ->  Literal string
    ((string-match "^%\\(.*\\)$" s)
-    (et:repr--parse-0 (list 'literal (match-string 1 s))))
+    (et:repr--parse-0 (list 'Literal (match-string 1 s))))
 
    ;; $TestVar=Type  ->  Bind to TestVar
    ((string-match "^\\(\\$[a-z]\\)::\\(.*\\)$" s)
@@ -1735,14 +1740,14 @@ in GEN-REPLS, if it exists."
        (format "*%s<%s>" name (string-join (mapcar #'et:repr--tostring-0 args) " "))))
 
     ((or `(ConsFull ,left-sub ,_1 ,right-sub ,_2)
-         `(,(or 'ConsR 'ConsW 'ConsRW 'ConsWR) ,left-sub ,right-sub))
+         `(,(or 'Cons '&Cons 'WriteCons '&WriteCons) ,left-sub ,right-sub))
      (let ((elems (list (et:repr--tostring-0 left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
                  (when (and (= (length d) 1) (= (length (car d)) 1))
                    (pcase (car (car d))
                      ((or `(S:DT ConsFull ,car-sub ,_1 ,cdr-sub ,_2)
-                          `(S:ALIAS ,(or 'ConsR 'ConsW 'ConsRW 'ConsWR) ,car-sub ,cdr-sub))
+                          `(S:ALIAS ,(or 'Cons '&Cons 'WriteCons '&WriteCons) ,car-sub ,cdr-sub))
                       (nconc elems (list (et:repr--tostring-0 car-sub)))
                       (setq right-sub cdr-sub)
                       t))))))
@@ -1855,7 +1860,9 @@ in GEN-REPLS, if it exists."
 
 (defmacro et-defspec (name arglist &rest body)
   (declare (indent 2))
-  `(put ',name 'et-spec-macro (lambda ,arglist ,@body)))
+  `(progn (put ',name 'et-spec-macro (lambda ,arglist ,@body))
+          (put ',(intern (format "&%s" name)) 'et-spec-macro
+               (lambda ,arglist (list 'read-only (progn ,@body))))))
 
 (et-defspec Nil () `(Literal nil))
 (et-defspec True () `(Literal t))
@@ -3444,45 +3451,31 @@ lazily because `List' is not yet defined when this file loads.")
 
 ;;;; Cons aliases
 
-(et-defalias Cons [(= L Any) (= R L)]
-  (ConsFull L L R R))
+(et-defalias Cons [(= L Any) (= R L)] (ConsFull L L R R))
+(et-defalias WriteCons [(= L Any) (= R L)] (ConsFull Never L Never R))
 
-(et-defalias ConsR [L R] (ConsFull L Never R Never))
-(et-defalias ConsW [L R] (ConsFull Any L Any R))
-(et-defalias ConsRW [L R] (ConsFull L Never Any R))
-(et-defalias ConsWR [L R] (ConsFull Any L R Never))
+(et-defalias ListFresh [(= E Any)] (or Nil (ConsFresh E (ListFresh E))))
+(et-defalias List [(= E Any)] (or Nil (Cons E (List E))))
 
-;; ConsR/ListR/*R can be thought of as "read only references" to a
-;; type. Actual data, such as return values from functions, should
-;; usually not have the ListR/ConsR/*R type.
-(et-defalias ListFresh [E] (or Nil (ConsFresh E (ListFresh E))))
-(et-defalias ListR [E] (or Nil (ConsR E (ListR E))))
-(et-defalias List [E] (or Nil (Cons E (List E))))
-(et-defalias NonNilListR [E] (ConsR E (ListR E)))
-
-(et-defalias Tree [E] (or (List (Tree E)) E))
-(et-defalias TreeR [E] (or (ListR (TreeR E)) E))
-(et-defalias ConsTree [E] (or (Cons (ConsTree E) (ConsTree E)) E))
-(et-defalias ConsTreeR [E] (or (ConsR ConsTreeR<E> ConsTreeR<E>) (Indirect E)))
+(et-defalias Tree [(= E Any)] (or (List (Tree E)) E))
+(et-defalias ConsTree [(= E Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
 
 (et-defalias AList [K V] (List (Cons K V)))
-(et-defalias AListR [K V] (ListR (ConsR K V)))
 
 (et-defalias KVPList [K V] (or Nil (Cons K (Cons V (KVPList K V)))))
 
-(et-defspec Args (&rest args) (et:type-tuple-spec 'ConsR args))
 (et-defspec Tuple (&rest args) (et:type-tuple-spec 'Cons args))
-(et-defspec TupleR (&rest args) (et:type-tuple-spec 'ConsR args))
+(et-defspec Args (&rest args) (et:type-tuple-spec '&Cons args))
 
-(et-defspec Args* (&rest args) (et:type-tuple-star-spec 'ConsR args))
+
 (et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
-(et-defspec TupleR* (&rest args) (et:type-tuple-star-spec 'ConsR args))
+(et-defspec Args* (&rest args) (et:type-tuple-star-spec '&Cons args))
 
 (et-defalias Sexp []
   (or Symbol String Number
-      (ConsR Sexp Sexp)
-      (VectorR Sexp)))
-(et-defalias Sexps [] ListR<Sexp>)
+      (Cons Sexp Sexp)
+      (Vector Sexp)))
+(et-defalias Sexps [] List<Sexp>)
 
 
 ;;;; Emacs aliases
