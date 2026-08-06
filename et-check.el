@@ -284,6 +284,9 @@ only be read by functions in this file.")
   (declare (indent 1) (et (@expand)))
   `(let* ((et:check--context-narrows ,narrows)) ,@body))
 
+(et-defvar et:check--unreachable Boolean nil
+  "The next expression to be checked is unreachable.")
+
 (defmacro et-when-type (type &rest body)
   "Evaluate BODY with narrows implied by TYPE.
 
@@ -291,10 +294,10 @@ If TYPE is never, then return never without evaluating BODY (BODY is
 unreachable)."
   (declare (indent 1))
   (let* ((typesym (gensym "type")))
-    `(let* ((,typesym ,type))
-       (if (et-never-p ,typesym) (et-never)
-         (et-with-narrows (et:check--narrows-and (et-cur-narrows) (et-type-binds ,typesym))
-           ,@body)))))
+    `(let* ((,typesym ,type)
+            (et:check--unreachable (or et:check--unreachable (et-never-p ,typesym))))
+       (et-with-narrows (et:check--narrows-and (et-cur-narrows) (et-type-binds ,typesym))
+         ,@body))))
 
 ;; Accessing narrows
 
@@ -360,8 +363,9 @@ determine the output type."
      :type
      (et-failed-boundary
       (or (et-error-boundary nil
-            (or (et:check--check-1)
-                (unless (et-cur-result-failed?) (et-err nil "Type checking failed mysteriously"))))
+            (if et:check--unreachable (et-warn nil "Unreachable code")
+              (or (et:check--check-1)
+                  (unless (et-cur-result-failed?) (et-err nil "Type checking failed mysteriously")))))
           (et-never)))
      ;; Remove any narrows for variables no longer in scope
      :narrows (seq-filter (lambda (narrow) (et:check-var-in-scope? (car narrow)))
