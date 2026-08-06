@@ -33,7 +33,7 @@
 
  (@alias LexicalEnvironment True|Nil) ;todo
  (@def make-interpreted-closure
-       (args: ListR<Sexp> body: Sexp env: LexicalEnvironment
+       (args: &List<Sexp> body: Sexp env: LexicalEnvironment
               &optional docstring: Nil|String iform: Sexp)
        InterpretedFunction)
 
@@ -66,14 +66,14 @@
 
  (@check while
          ($pcase
-          `(,_cond . ,body)
+          `(,_cond . ,_body)
           ($progn ($loop ($if ($at 1) ($tail 2) ($type Nil)))
                   ($must-be ($at 1) ($type Nil)))))
 
  (@def funcall-with-delayed-message
        ([R] delay: Number message: String func: fn<Nil~R>) R)
 
- (@def macroexpand (form: Sexp &optional environment: AList<Symbol~Any>) Sexp)
+ (@def macroexpand (form: Sexp &optional environment: Alist<Symbol~Any>) Sexp)
 
  (@alias ThrowCatchTag NonNil)
  (@check catch ($body ThrowCatchTag)) ;todo
@@ -109,27 +109,27 @@
 
  (@def apply ([A R] function: (fn (eval et-tuple-to-tailed A) R) &rest arguments: A) R)
 
- (@def run-hooks (&rest hooks: ListR<fn>) Nil)
- (@def run-hook-with-args (hook: Var &rest args: ListR<Any>) Any)
- (@def run-hook-with-args-until-success (hook: Var &rest args: ListR<Any>) Any)
- (@def run-hook-with-args-until-failure (hook: Var &rest args: ListR<Any>) Any)
+ (@def run-hooks (&rest hooks: &List<fn>) Nil)
+ (@def run-hook-with-args (hook: Var &rest args: &List) Any)
+ (@def run-hook-with-args-until-success (hook: Var &rest args: &List) Any)
+ (@def run-hook-with-args-until-failure (hook: Var &rest args: &List) Any)
  (@def run-hook-wrapped
        ([] hook: Var
-        wrap-function: (fn (ConsR (fn ListR<Any> Any) ListR<Any>) Any)
-        &rest args: ListR<Any>)
+        wrap-function: (fn (&Cons (fn &List Any) &List) Any)
+        &rest args: &List)
        Any)
- 
+
  (@def functionp ([T] object: T) (is? T AnyFn))
 
  (@def funcall ([A R] function: (fn A R) &rest arguments: A) R)
- 
+
  (@def func-arity (function: AnyFn) Cons<Integer~Integer|@many|@unevalled>)
 
  (@def special-variable-p (symbol: Symbol) Boolean))
 
 (defvar et--tuple-to-tailed-stack nil)
-(et-defun et-tuple-to-tailed (tuple: *et:type) *et:type
+(et-defun et-tuple-to-tailed (tuple: EtType) EtType
   (or (et-stop-recursion et--tuple-to-tailed-stack tuple nil
-        (or (et-infer tuple [T] (ConsR T Nil) T)
-            (et-infer tuple [E A B] (ConsR E (ConsR A B)) (ConsR E (eval et-tuple-to-tailed (ConsR A B))))))
+        (or (et-infer tuple [T] (&Cons T Nil) T)
+            (et-infer tuple [E A B] (&Cons E (&Cons A B)) (&Cons E (eval et-tuple-to-tailed (&Cons A B))))))
       (error "Not a tuple: %s" tuple)))

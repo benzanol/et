@@ -36,7 +36,7 @@
 
 (et-set-checker #'defun #'et:checker--defun)
 (et-set-checker #'cl-defun #'et:checker--defun)
-(et-defun et:checker--defun () *et:type
+(et-defun et:checker--defun () EtType
   (let* ((name (cadr (et-cur-expr))))
     (when-let* ((func-type (et-symbol-func-type name))
                 ((not (plist-get (et-symbol-func-props name) :skip)))
@@ -46,7 +46,7 @@
 
 
 (et-set-checker #'et-defun #'et:checker--et-defun)
-(et-defun et:checker--et-defun () *et:type
+(et-defun et:checker--et-defun () EtType
   (let* ((name (cadr (et-cur-expr))))
     (when-let* ((func-type (et-symbol-func-type name))
                 ((not (plist-get (et-symbol-func-props name) :skip)))
@@ -56,7 +56,7 @@
 
 
 (et-set-checker #'lambda #'et:checker--lambda)
-(et-defun et:checker--lambda () *et:type
+(et-defun et:checker--lambda () EtType
   (let* ((arglist (cadr (et-cur-expr)))
          (body (cddr (et-cur-expr)))
          (params (et-at 1 (et-parse-arglist arglist)))

@@ -32,53 +32,53 @@
 ;;;; Type declarations
 
 (et-declare
- (@alias EtNarrows AList<*et:type-var~*et:type>)
+ (@alias EtNarrows Alist<EtVar~EtType>)
  ;; True = keep the current recommendation
- (@alias EtRec Nil|*et:type)
- (@alias EtIdentifyPlist (KVPList @:constrain|@:populate|@:declare Nil|fn))
+ (@alias EtRec Nil|EtType)
+ (@alias EtIdentifyPlist (PlistOf @:constrain|@:populate|@:declare Nil|fn))
  (@alias EtIdentifyFn (fn Nil EtIdentifyPlist))
 
- (@alias EtChecked Nil|*et:type)
- (@alias EtCheckFn (fn Nil *et:type|Nil))
+ (@alias EtChecked Nil|EtType)
+ (@alias EtCheckFn (fn Nil EtType|Nil))
 
  (@alias EtCheckable
-         (or *et:type EtCheckFn
+         (or EtType EtCheckFn
              ;; car=t => then use the current recommendation
              ;; car=* => check the tail AND use the current recommendation
-             (ConsR Symbol ListR<Any>)))
+             (&Cons Symbol &List)))
 
  (@symbol-property et-identify EtIdentifyFn)
  (@symbol-property et-checker EtCheckFn)
- (@symbol-property et-check-macro fn<Any~*et:type>))
+ (@symbol-property et-check-macro fn<Any~EtType>))
 
 (et-declare
  (@alias EtFuncParameters [T]
-         (Tuple ListR<T> ListR<T> ListR<T> Nil|TupleR<T>))
+         (Tuple &List<T> &List<T> &List<T> Nil|&Tuple<T>))
  (@alias EtFuncDeclarations
-         (PList :parameters EtFuncParameters<Var>
-                :props KVPList<Var~Any>
+         (Plist :parameters EtFuncParameters<Var>
+                :props PlistOf<Var~Any>
                 ;; Either a function type or a custom checker
-                :definition (or Nil *et:type (fn Nil *et:type))))
+                :definition (or Nil EtType (fn Nil EtType))))
 
- (@symbol-property et-symbol-func-type *et:type)
+ (@symbol-property et-symbol-func-type EtType)
  (@symbol-property et-function-parameters EtFuncParameters<Var>)
- (@symbol-property et-function-props KVPList<Var~Any>))
+ (@symbol-property et-function-props PlistOf<Var~Any>))
 
 
 ;;;; Symbol properties
 ;;;;; Function type
 
-(et-defun et-symbol-func-type (name: Var) *et:type|Nil
+(et-defun et-symbol-func-type (name: Var) EtType|Nil
   (when (get name 'et-deferred-declare)
     (ignore (et-result-boundary (funcall (get name 'et-deferred-declare))))
     (put name 'et-deferred-declare nil))
 
   (get name 'et-symbol-func-type))
 
-(et-defun et-symbol-func-props (name: Var) Nil|KVPList<Any~Any>
+(et-defun et-symbol-func-props (name: Var) Nil|PlistOf<Any~Any>
   (get name 'et-function-props))
 
-(et-defun et-symbol-func-params (name: Var) Nil|KVPList<Any~Any>
+(et-defun et-symbol-func-params (name: Var) Nil|PlistOf<Any~Any>
   (get name 'et-function-parameters))
 
 (et-defun et-symbol-set-func-decls (name: Var decls: EtFuncDeclarations) Nil
@@ -92,14 +92,14 @@
 
 ;;;;; Variable type
 
-(et-defun et-set-global-var-type (name: Var type: *et:type) Nil
+(et-defun et-set-global-var-type (name: Var type: EtType) Nil
   (put name 'et-variable-type type)
   (put name 'et-variable-var (et:type-var-new :name name :type type)))
 
-(et-defun et-global-var-type (name: Var) *et:type|Nil
+(et-defun et-global-var-type (name: Var) EtType|Nil
   (get name 'et-variable-type))
 
-(et-defun et-global-var (name: Var) *et:type|Nil
+(et-defun et-global-var (name: Var) EtType|Nil
   (get name 'et-variable-var))
 
 
@@ -129,19 +129,19 @@
 ;;; Checking - `et:check'
 ;;;; Symbol bindings
 
-(et-defvar et:check--binds AList<Var~*et:type-var> nil
+(et-defvar et:check--binds Alist<Var~EtVar> nil
   "Stack of (SYMBOL . `et:type-var').")
 
-(et-defun et-new-var (name: Var type: *et:type) *et:type
+(et-defun et-new-var (name: Var type: EtType) EtType
   (et:type-var-new :name name :type type))
 
-(et-defun et-get-symbol-var (sym: Var) *et:type-var|Nil
+(et-defun et-get-symbol-var (sym: Var) EtVar|Nil
   (cl-assert (symbolp sym))
   (or (alist-get sym et:check--binds)
       (et-global-var sym)))
 
 (defmacro et-with-vars (vars &rest body)
-  (declare (indent 1) (et (@progn ListR<*et:type-var>)))
+  (declare (indent 1) (et (@progn &List<EtVar>)))
   (let* ((loop `(cl-loop for var in ,vars
                          do (cl-assert (et:type-var-p var))
                          collect (cons (et:type-var->name var) var))))
@@ -150,7 +150,7 @@
 
 (defmacro et-with-binds (binds &rest body)
   "VARS can contain nil values."
-  (declare (indent 1) (et (@progn (ListR (or Nil (ConsR Var *et:type))))))
+  (declare (indent 1) (et (@progn (&List (or Nil (&Cons Var EtType))))))
   (let* ((loop `(cl-loop for entry in ,binds
                          when entry collect
                          (let* ((name (car entry)) (type (cdr entry)))
@@ -162,15 +162,15 @@
 
 ;;;; Function bindings/checking
 
-(et-defvar et:check--fbinds AList<Symbol~*et:type> nil
+(et-defvar et:check--fbinds Alist<Symbol~EtType> nil
   "Stack of (SYMBOL . `et:type').")
 
-(et-defun et-get-fbind (name: Symbol) *et:type|Nil
+(et-defun et-get-fbind (name: Symbol) EtType|Nil
   (or (alist-get name et:check--fbinds)
       (et-symbol-func-type name)))
 
 (defmacro et-with-fbinds (fbinds &rest body)
-  (declare (indent 1) (et (@progn AList<Symbol~*et:type>)))
+  (declare (indent 1) (et (@progn Alist<Symbol~EtType>)))
   `(let* ((et:check--fbinds (append ,fbinds et:check--fbinds)))
      ,@body))
 
@@ -239,7 +239,7 @@ only be read by functions in this file.")
 (et-defun et-cur-expr (&rest path: EtRel) Sexp|Nil
   (et:util-traverse-tree et:check--context-expr (flatten-list path)))
 
-(et-defun et-cur-recommendation () *et:type|Nil
+(et-defun et-cur-recommendation () EtType|Nil
   et:check--context-recommendation)
 
 (defmacro et-with-recommendation (rec &rest body)
@@ -260,13 +260,13 @@ only be read by functions in this file.")
 (et-defun et-kill-all-narrows () Nil
   (setq et:check--context-narrows nil))
 
-(et-defun et-update-var-narrow (var: *et:type-var &optional type: *et:type|Nil) Nil
+(et-defun et-update-var-narrow (var: EtVar &optional type: EtType|Nil) Nil
   (let* ((removed (cl-remove var et:check--context-narrows :key #'car)))
     (setq et:check--context-narrows
           (if (null type) removed (cons (cons var type) removed)))
     nil))
 
-(et-defun et-apply-type-narrows (type: *et:type) Nil
+(et-defun et-apply-type-narrows (type: EtType) Nil
   (cl-callf et:check--narrows-and et:check--context-narrows type)
   nil)
 
@@ -293,16 +293,16 @@ unreachable)."
            for t1 = (alist-get var a) for t2 = (alist-get var b)
            collect (cons var (if t1 (if t2 (et-supersect t1 t2) t1) t2))))
 
-(et-defun et:check-var-type (var: *et:type-var) *et:type
+(et-defun et:check-var-type (var: EtVar) EtType
   "Get the current narrowed type of a variable."
   (or (alist-get var et:check--context-narrows)
       (et:type-var->type var)))
 
-(et-defun et:check-symbol-type (sym: Symbol) Nil|*et:type
+(et-defun et:check-symbol-type (sym: Symbol) Nil|EtType
   (when-let* ((var (et-get-symbol-var sym)))
     (et:check-var-type var)))
 
-(et-defun et:check-var-in-scope? (var: *et:type-var) Boolean
+(et-defun et:check-var-in-scope? (var: EtVar) Boolean
   (not (not (or (eq var (et-global-var (et:type-var->name var)))
                 (rassq var et:check--binds)))))
 
@@ -315,8 +315,8 @@ unreachable)."
 ;;;; Check
 
 (et-defstruct et:check--result
-  (type nil :et *et:type)
-  (narrows nil :et AList<*et:type-var~*et:type>))
+  (type nil :et EtType)
+  (narrows nil :et Alist<EtVar~EtType>))
 
 (et-defun et:check-check (expr: Sexp narrows: EtNarrows recommendation: EtRec)
           *et:check--result
@@ -357,7 +357,7 @@ determine the output type."
      :narrows (seq-filter (lambda (narrow) (et:check-var-in-scope? (car narrow)))
                           et:check--context-narrows))))
 
-(et-defun et:check--check-1 () *et:type
+(et-defun et:check--check-1 () EtType
   (pcase et:check--context-expr
     (`(,func . ,_args)
      ;; If this function is lazily declared, and hasn't been declared yet, do it now
@@ -396,7 +396,7 @@ type for it."
 ;;;; Sub checkers
 ;;;;; Check at
 
-(et-defun et-check-at (rec: EtRec &rest path: EtRel) *et:type
+(et-defun et-check-at (rec: EtRec &rest path: EtRel) EtType
   "Type check the sub expression at PATH, returning the type or never.
 
 This assumes that the child will ALWAYS run, and thus that the resulting
@@ -415,7 +415,7 @@ the current checking expr."
 
 ;;;;; Check tail
 
-(et-defun et-check-tail (rec: EtRec &rest first-path: EtRel) *et:type
+(et-defun et-check-tail (rec: EtRec &rest first-path: EtRel) EtType
   "Check a sequence of expressions, returning the type of the last one."
   (setq first-path (flatten-tree first-path))
   (let* ((parent-path (butlast first-path))
@@ -430,7 +430,7 @@ the current checking expr."
 
 ;;;;; Check expr
 
-(et-defun et-check-expr (rec: EtRec expr: Sexp mappings: AList<EtPath~EtPath>) EtChecked
+(et-defun et-check-expr (rec: EtRec expr: Sexp mappings: Alist<EtPath~EtPath>) EtChecked
   "Check EXPR, mapping paths in EXPR back into the current expr."
   (et-propagate-result
    (et-result-boundary
@@ -446,7 +446,7 @@ the current checking expr."
 
 ;;;;; Check expansion
 
-(et-defun et-check-expansion (rec: EtRec expansion: Sexp) *et:type
+(et-defun et-check-expansion (rec: EtRec expansion: Sexp) EtType
   "Type check EXPANSION, an expr which was built from the current expr.
 
 EXPANSION is not literally present in the current expression, but it was
@@ -464,7 +464,7 @@ onto the original expression."
              do (et:check--put-cons-paths ht (append path (list idx)) item))))
 
 (et-defun et:check--path-mappings-1 (ht: Hashmap<Sexp~EtPath> path: EtPath expr: Sexp)
-          AList<EtPath~EtPath>
+          Alist<EtPath~EtPath>
   (when (consp expr)
     (if-let* ((p (gethash expr ht)))
         (list (cons p path))
@@ -472,7 +472,7 @@ onto the original expression."
                for idx upfrom 0
                append (et:check--path-mappings-1 ht (append path (list idx)) item)))))
 
-(et-defun et:check--expansion-path-mappings (orig: Sexp expansion: Sexp) AList<EtPath~EtPath>
+(et-defun et:check--expansion-path-mappings (orig: Sexp expansion: Sexp) Alist<EtPath~EtPath>
   "Determine a collection of path mappings from EXPANSION into ORIG."
   (let* ((ht (make-hash-table :test #'eq)))
     (et:check--put-cons-paths ht nil expansion)
@@ -481,7 +481,7 @@ onto the original expression."
 
 ;;;; Check macros
 
-(et-defun et-check (chk: EtCheckable) *et:type
+(et-defun et-check (chk: EtCheckable) EtType
   (funcall `(lambda () (et-chk ,chk))))
 
 (defmacro et-chk (chk)
@@ -648,7 +648,7 @@ be used as the body of the checker function."
 ;;; Core control flow - `et:flow'
 ;;;; Check reading/setting a variable
 
-(et-defun et-check-set-var (var: *et:type-var type: *et:type) EtChecked
+(et-defun et-check-set-var (var: EtVar type: EtType) EtChecked
   "Should be called whenever VAR is assigned to TYPE."
   (if (not (et-subtype? type (et:type-var->type var)))
       (et-err nil "Variable %s is not assignable to type %s" var type)
@@ -672,12 +672,12 @@ bound to that type.
 
 TODO: Only perform estimation for certain types, such as literals and
 fresh types."
-  (et-declare (inits AList<Var~*et:type>)
+  (et-declare (inits Alist<Var~EtType>)
               (body EtCheckable))
   `(et-with-binds (et:flow--guess-var-types ,inits ',body)
      (et-chk body)))
 
-(et-defun et:flow--guess-var-types (inits: AList<Var~*et:type> body: EtCheckable>) AList<Var~*et:type>
+(et-defun et:flow--guess-var-types (inits: Alist<Var~EtType> body: EtCheckable>) Alist<Var~EtType>
   (if et:flow--guessing-var-type
       ;; Prevent exponential blow-ups in time complexity due to nested bindings
       (cl-loop for (sym . init) in inits
@@ -743,7 +743,7 @@ be expressed as a sequence of parallel checkers in sequence."
 (et-define-check-macro $loop (body)
   `(et-check-loop ',body))
 
-(et-defun et-check-loop (chk: EtCheckable) *et:type
+(et-defun et-check-loop (chk: EtCheckable) EtType
   "Check BODY-FN, a block that may execute zero or more times.
 
 Pass 1 (diagnostics discarded via `et-result-boundary') discovers the
@@ -762,7 +762,7 @@ Returns the body's type (from the real pass)."
       ;; Exit: 0 iterations (entry) OR >=1 iterations (current narrows).
       (et-set-narrows (et:flow--narrows-or entry (et-cur-narrows))))))
 
-(et-defun et:flow--narrows-changed-vars (before: EtNarrows after: EtNarrows) List<*et:type-var>
+(et-defun et:flow--narrows-changed-vars (before: EtNarrows after: EtNarrows) List<EtVar>
   "Vars whose narrow entry differs between BEFORE and AFTER."
   (cl-loop for var in (seq-uniq (mapcar #'car (append before after)) #'eq)
            unless (equal (alist-get var before) (alist-get var after))
@@ -774,7 +774,7 @@ Returns the body's type (from the real pass)."
 (et-define-check-macro $escapable (body)
   `(et-check-escapable ',body))
 
-(et-defun et-check-escapable (chk: EtCheckable) *et:type
+(et-defun et-check-escapable (chk: EtCheckable) EtType
   "Check BODY-FN, a block that may be exited nonlocally at any point.
 
 Code after the enclosing form (e.g. `catch', `with-local-quit') runs
@@ -814,8 +814,8 @@ expression can be evaluated. This is used for defining checkers like
 let, cl-flet, pcase, and anything else that binds variables or
 functions."
   (narrows nil :et EtNarrows)
-  (binds nil :et AList<Var~*et:type>)
-  (fbinds nil :et AList<Var~*et:type>))
+  (binds nil :et Alist<Var~EtType>)
+  (fbinds nil :et Alist<Var~EtType>))
 
 (et-define-check-macro [$env et-check-with-env] (env chk)
   (let* ((envsym (gensym "env")))
@@ -953,7 +953,7 @@ will be the result."
 
 ;;;; Parse let binds
 
-(et-defun et-check-let-inits (rel: EtRel) AList<Var~*et:type>
+(et-defun et-check-let-inits (rel: EtRel) Alist<Var~EtType>
   (let* ((forms (et-cur-expr rel)))
     (cl-loop for (sym _expr) in forms
              for pos upfrom 0
@@ -1024,11 +1024,11 @@ will be the result."
 
 (defun et-create-function-type (generics constraints input-repr output-repr)
   "Build a Function or DynFunction type from reprs."
-  (et-declare (generics ListR<EtGeneric>)
-              (constraints ListR<EtTypeConstraint>)
+  (et-declare (generics &List<EtGeneric>)
+              (constraints &List<EtTypeConstraint>)
               (input-repr EtRepr)
               (output-repr EtRepr)
-              (@return *et:type))
+              (@return EtType))
 
   (if generics
       (et-dt 'DynFunction
@@ -1043,7 +1043,7 @@ will be the result."
 
 ;;;; Parse arglist params
 
-(et-defun et-parse-arglist (arglist: ListR<Var>) EtFuncParameters<Var>
+(et-defun et-parse-arglist (arglist: &List<Var>) EtFuncParameters<Var>
   "Parse ARGLIST into (REQUIRED OPTIONAL KEY REST).
 
 ARGLIST is a plain parameter list with no type annotations — just
@@ -1088,7 +1088,7 @@ element."
         (list decl-pos et-pos)
       nil)))
 
-(et-defun et-find-and-parse-func-decls (params: EtFuncParameters<Var> exprs: ListR<Sexp>)
+(et-defun et-find-and-parse-func-decls (params: EtFuncParameters<Var> exprs: &List<Sexp>)
           Nil|EtFuncDeclarations
   (when-let* ((declare-path (et:func--declares-path exprs)))
     (let* ((declares (cdr (et:util-traverse-tree exprs declare-path))))
@@ -1096,20 +1096,20 @@ element."
         (et-at-offset 1
           (et-parse-func-decls params declares))))))
 
-(et-defun et-parse-func-decls (params: EtFuncParameters<Var> declares: ListR<Any>)
+(et-defun et-parse-func-decls (params: EtFuncParameters<Var> declares: &List)
           Nil|EtFuncDeclarations
   "Parse function declarations.
 
 This assumes that the current path points to DECLARES."
   (let* ((param-list (apply #'append params))
-         (param-alist (et: AListR<Var~*et:repr> nil))
-         (generics (et: ListR<EtGeneric> nil))
-         (constraints (et: ListR<EtTypeConstraint> nil))
-         (props (et: KVPList<Var~Any> nil))
+         (param-alist (et: &Alist<Var~EtRepr> nil))
+         (generics (et: &List<EtGeneric> nil))
+         (constraints (et: &List<EtTypeConstraint> nil))
+         (props (et: PlistOf<Var~Any> nil))
 
-         (return-repr (et: Nil|*et:repr nil))
-         (function-type (et: Nil|*et:type nil))
-         (checker (et: (or Nil (fn Nil *et:type)) nil))
+         (return-repr (et: Nil|EtRepr nil))
+         (function-type (et: Nil|EtType nil))
+         (checker (et: (or Nil (fn Nil EtType)) nil))
 
          (strategy (et: Nil|@return|@function|@checker nil))
          (use-strategy
@@ -1199,7 +1199,7 @@ This assumes that the current path points to DECLARES."
 
 ;;;; Construct input repr
 
-(et-defun et-untyped-func-input (params: EtFuncParameters<T>) *et:type
+(et-defun et-untyped-func-input (params: EtFuncParameters<T>) EtType
   "Guess an input type based only on the (untyped) parameters."
   (et-repr-to-type
    (et:func--params-to-input nil params (lambda (_) (et Any)) #'identity)))
@@ -1209,7 +1209,7 @@ This assumes that the current path points to DECLARES."
 
 FN converts a parameter (T) to the repr that should be used for it, and"
   (et-declare (@generics [T])
-              (generics ListR<EtGeneric>) (params EtFuncParameters<T>)
+              (generics &List<EtGeneric>) (params EtFuncParameters<T>)
               (fn Function<T~EtRepr>) (key-fn Function<T~Symbol>)
               (@return EtRepr))
 
@@ -1225,13 +1225,13 @@ FN converts a parameter (T) to the repr that should be used for it, and"
                    nconc (list (intern (format ":%s" (funcall key-fn key-p)))
                                (funcall fn key-p))
                    into plist-args
-                   finally return (et-parse-repr `(PList ,@plist-args) generics)))
+                   finally return (et-parse-repr `(Plist ,@plist-args) generics)))
          ((et-parse-repr 'Nil generics)))))
 
     (named-let loop ((req req-ps) (opt opt-ps))
       (pcase (list req opt)
         (`((,cur . ,rest) ,_)
-         (et-parse-repr (list 'ConsR (funcall fn cur) (loop rest opt))
+         (et-parse-repr (list '&Cons (funcall fn cur) (loop rest opt))
                         generics (list :field (funcall key-fn cur))))
         (`(,_ (,cur . ,rest))
          ;; The remaining optional/rest arguments may contain generics.
@@ -1249,7 +1249,7 @@ FN converts a parameter (T) to the repr that should be used for it, and"
                   (let* ((tail (loop nil rest)))
                     (et-parse-repr
                      `(or (and Nil ,@gen-params)
-                          (ConsR ,(funcall fn cur) ,tail))
+                          (&Cons ,(funcall fn cur) ,tail))
                      generics (list :field (funcall key-fn cur))))))
         (_ rest-repr)))))
 
@@ -1263,8 +1263,8 @@ If the function has generics, then this MUST be called with the
 polymorphic types defined, as those polymorphic types probably appear in
 FUNC-INPUT-TYPE."
   (et-declare (params EtFuncParameters<Var>)
-              (func-input-type *et:type)
-              (@return AList<Var~*et:type>))
+              (func-input-type EtType)
+              (@return Alist<Var~EtType>))
 
   ;; First, we want to construct a matcher representing the parameters
   (let* ((params-with-gens
@@ -1297,7 +1297,7 @@ FUNC-INPUT-TYPE."
   :type 'boolean)
 
 (defmacro et-in-function-body (func-type params &rest body)
-  (declare (indent 2) (et (@with *et:type EtFuncParameters<Var>)))
+  (declare (indent 2) (et (@with EtType EtFuncParameters<Var>)))
   `(et-with-function-polymorphs ,func-type et-check-function-overloads
      (let* ((param-types (et:func--param-types ,params input-type)))
 
@@ -1320,8 +1320,8 @@ FUNC-INPUT-TYPE."
   "The path should point to the function expr.
 
 Returns the type of the last expression in the body."
-  (et-declare (func-type *et:type) (params EtFuncParameters<Var>) (body-path TreeR<Integer>)
-              (@return *et:type))
+  (et-declare (func-type EtType) (params EtFuncParameters<Var>) (body-path &Tree<Integer>)
+              (@return EtType))
   (let* ((returns
           (et-in-function-body func-type params
             (let* ((actual-ret (et-chk ($deferred ($tail body-path)))))
@@ -1393,7 +1393,7 @@ Returns a plist with :constrain and :populate functions."
 (et-set-identifier #'cl-defun #'et:identify-defun)
 (et-set-identifier #'defmacro #'et:identify-defun)
 
-(et-defun et:identify-defun (name: Var arglist: ListR<Any> &rest rest: Sexps) EtIdentifyPlist
+(et-defun et:identify-defun (name: Var arglist: &List &rest rest: Sexps) EtIdentifyPlist
   (list
    :declare
    (lambda ()
@@ -1403,7 +1403,7 @@ Returns a plist with :constrain and :populate functions."
 
 (et-set-identifier '@def #'et:identify-@def)
 
-(et-defun et:identify-@def (names: Var|VectorR<Var> arglist: ListR<Any> &rest declares: Sexps) EtIdentifyPlist
+(et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List &rest declares: Sexps) EtIdentifyPlist
   (list
    :declare
    (lambda ()
@@ -1413,7 +1413,7 @@ Returns a plist with :constrain and :populate functions."
 
 (et-set-identifier '@check #'et:identify-@check)
 
-(et-defun et:identify-@check (names: Var|VectorR<Var> chk: Sexp) EtIdentifyPlist
+(et-defun et:identify-@check (names: Var|&Vector<Var> chk: Sexp) EtIdentifyPlist
   (list
    :declare
    (lambda ()
@@ -1494,7 +1494,7 @@ Returns a plist with :constrain and :populate functions."
               (struct-repr (et-parse-repr (et-q (Struct ,name ,@generics)) generics))
               ;; ARGLIST-REPR is the single-argument arglist (STRUCT), used by
               ;; accessors and the copier
-              (arglist-repr (et-parse-repr (et-q (ConsR ,struct-repr Nil)) generics)))
+              (arglist-repr (et-parse-repr (et-q (&Cons ,struct-repr Nil)) generics)))
 
          ;; --- Predicate ---
          (when predicate
@@ -1531,7 +1531,7 @@ Returns a plist with :constrain and :populate functions."
                                                     (et-parse-repr (cdr type-info) generics)))
                                               (et-parse-repr 'Any nil))
                             nconc (list (intern (format ":%s" slot-name)) slot-repr) into args
-                            finally return (et-parse-repr (if args `(PList ,@args) 'Nil) nil))))
+                            finally return (et-parse-repr (if args `(Plist ,@args) 'Nil) nil))))
              (put constructor 'et-symbol-func-type
                   (et-create-function-type generics constraints
                                            input-repr struct-repr))))
