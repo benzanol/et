@@ -730,7 +730,7 @@ This is a common pattern for functions that have a `noerror' argument."
 ;;;; Alias internals
 
 (et-defun et:type--alias-props (name: EtAliasName &optional noerror: [N])
-          (or EtAliasProps (is-nil? N Never Nil))
+          (or EtAliasProps (if-nil? N Never Nil))
   (or (get name 'et-alias) (unless noerror (error "Alias `%s' not defined" name))))
 
 (et-defun et:type-alias-ro-name (name: EtAliasName) EtAliasName
@@ -2080,6 +2080,18 @@ indeterminates slot."
   :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
   (et-union (et:algebra-replace-binds (et True) (et-type-binds (et-supersect type is)))
             (et:algebra-replace-binds (et Nil) (et-type-binds (et-subtract type is)))))
+
+;; Same as 'is', but the 'nil' case doesn't necessarily mean the value IS NOT the type
+(et:repr--defop is-a? (type is)
+  :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
+  (et-union (et:algebra-replace-binds (et True) (et-type-binds (et-supersect type is)))
+            (et:algebra-replace-binds (et Nil))))
+
+(et-defspec overlapping? (a b yes &optional no)
+  `(extends? (and ,a ,b) Never ,(or no 'Never) ,yes))
+
+(et-defspec replace-in (type from to)
+  `(or (subtract ,type ,from) (overlapping? ,type ,from ,to)))
 
 
 ;;;; Type to repr

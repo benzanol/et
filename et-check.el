@@ -154,7 +154,7 @@
   (let* ((loop `(cl-loop for entry in ,binds
                          when entry collect
                          (let* ((name (car entry)) (type (cdr entry)))
-                           (cl-assert (symbolp name)) (cl-assert (et:type-p name))
+                           (cl-assert (symbolp name)) (cl-assert (et:type-p type))
                            (cons name (et:type-var-new :name name :type type))))))
     `(let* ((et:check--binds (append ,loop et:check--binds)))
        ,@body)))
@@ -860,8 +860,15 @@ will be the result."
   `($progn
     ,@(cl-loop for spec in specs
                for pos upfrom 1
-               collect `($expect ,spec ($at ,pos)))
+               collect `($expect ($type ,spec) ($at ,pos)))
     ($tail ,(1+ (length specs)))))
+
+(et-define-check-shortcut $fn (&rest specs)
+  `($progn
+    ,@(cl-loop for spec in (butlast specs)
+               for pos upfrom 1
+               collect `($expect ($type ,spec) ($at ,pos)))
+    ($type ,(car (last specs)))))
 
 
 ;;;; Variable macros
@@ -966,9 +973,10 @@ will be the result."
   (declare (indent 2))
   `(et-set-checker
     ,kwd
-    (et-defun ,(intern (format "et:helpers--check-%s" kwd))
-        ,arglist EtChecked
-      ,@body)))
+    (lambda ()
+      (apply
+       (et-defun ,(intern (format "et:helpers--check-%s" kwd)) ,arglist EtChecked ,@body)
+       (cdr (et-cur-expr))))))
 
 (et:helper--define-utility-checker :type (spec: EtSpec)
   (et-parse-type spec))
