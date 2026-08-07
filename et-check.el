@@ -169,6 +169,14 @@
     `(let* ((et:check--binds (append ,loop et:check--binds)))
        ,@body)))
 
+(et-defun et:check-check-var (var: EtVar) EtChecked
+  "Check a variable.
+
+This exists as a helper function so that it can be advised in order to
+intercept all accesses to a variable when trying to determine a suitable
+type for it."
+  (et-add-typeof (et:check-var-type var) var))
+
 
 ;;;; Function bindings/checking
 
@@ -179,6 +187,10 @@
   (or (alist-get name et:check--fbinds)
       (et-symbol-func-type name)))
 
+(et-defun et-checker-for (sym: Symbol) EtCheckFn|Nil
+  (if (et-get-fbind sym) #'et:check--function
+    (et-symbol-checker sym)))
+
 (defmacro et-with-fbinds (fbinds &rest body)
   (declare (indent 1) (et (@progn Alist<Symbol~EtType>)))
   `(let* ((et:check--fbinds (append ,fbinds et:check--fbinds)))
@@ -188,8 +200,20 @@
   (let* ((func (car (et-cur-expr)))
          (func-type (et-get-fbind func)))
 
-    (let* ((arg-types (cl-loop for pos upfrom 1 below (length (et-cur-expr))
-                               for type = (et-check-at nil pos)
+    ;; First, count the number of arguments passed, then construct a matcher
+    ;; to determine a type recommendation for each argument
+    (let* ((arg-gens (cl-loop for _ in (cdr (et-cur-expr))
+                              collect (intern (symbol-name (gensym "Arg")))))
+           (fn-repr (et-parse-repr `(Function (Args ,@arg-gens)
+                                              ,(or (et-cur-recommendation) 'Any))
+                                   arg-gens))
+           (fn-matcher (et:match-matcher-new :generics arg-gens :repr fn-repr))
+           (m-res (et-sub-match fn-matcher func-type t))
+           (recs (when (et:match-result->success m-res) (et:match-result->value m-res)))
+           ;; (_ (debug))
+           ;; Use those recommendations to check the actual arguments
+           (arg-types (cl-loop for pos upfrom 1 below (length (et-cur-expr))
+                               for type = (et-check-at (nth (1- pos) recs) pos)
                                collect (et-copy-with type :label (list :position pos))))
            (args-type (et-tuple 'Cons arg-types))
            (output-result (et:algebra-funcall func-type args-type)))
@@ -206,10 +230,10 @@
          for (_ mrepr type) in (et:match-result->stack output-result)
          ;; Collect the argument position
          for pos = (plist-get (et:type->label type) :position)
-         when pos do (setq arg-pos pos arg-type type)
+         when pos do (setq arg-pos pos arg-type type param-repr mrepr)
          ;; Collect the parameter type
          for name = (plist-get (et:repr->label mrepr) :field)
-         when name do (setq param-name name param-repr mrepr)
+         when (and name (null param-name)) do (setq param-name name)
          ;; Display the error message
          finally do
          (if (and arg-type param-repr)
@@ -257,6 +281,22 @@ only be read by functions in this file.")
   `(let* ((et:check--context-recommendation ,rec)) ,@body))
 
 
+;; Other variables
+
+(et-defvar et:check--unreachable Boolean nil
+  "The next expression to be checked is unreachable.")
+
+(et-defvar et:check-preliminary-pass? Boolean nil
+  "Non-nil if this is a preliminary checking pass.
+
+Preliminary checking passes happen in `let' expressions to guess types
+for untyped variables, and in loops to determine the final loop narrows.")
+
+(defmacro et:check-preliminary-pass (&rest body)
+  `(let* ((et:check-preliminary-pass? t))
+     (ignore (et-result-boundary ,@body))))
+
+
 ;;;; Narrows helpers
 
 (et-defun et-cur-narrows () EtNarrows
@@ -283,9 +323,6 @@ only be read by functions in this file.")
 (defmacro et-with-narrows (narrows &rest body)
   (declare (indent 1) (et (@expand)))
   `(let* ((et:check--context-narrows ,narrows)) ,@body))
-
-(et-defvar et:check--unreachable Boolean nil
-  "The next expression to be checked is unreachable.")
 
 (defmacro et-when-type (type &rest body)
   "Evaluate BODY with narrows implied by TYPE.
@@ -363,7 +400,8 @@ determine the output type."
      :type
      (et-failed-boundary
       (or (et-error-boundary nil
-            (if et:check--unreachable (et-warn nil "Unreachable code")
+            (if (and et:check--unreachable (not et:check-preliminary-pass?))
+                (et-warn nil "Unreachable code")
               (or (et:check--check-1)
                   (unless (et-cur-result-failed?) (et-err nil "Type checking failed mysteriously")))))
           (et-never)))
@@ -373,9 +411,9 @@ determine the output type."
 
 (et-defun et:check--check-1 () EtType
   (pcase et:check--context-expr
-    (`(,func . ,_args)
+    (`(,(and func (pred symbolp)) . ,_args)
      ;; If this function is lazily declared, and hasn't been declared yet, do it now
-     (when (symbolp func) (et-run-deferred-declare func))
+     (et-run-deferred-declare func)
 
      ;; Call the checker
      (if-let* ((checker (et-checker-for func)))
@@ -386,23 +424,11 @@ determine the output type."
 
     ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
     ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
-     (et:check-check-var sym))
+     (if-let* ((var (et-get-symbol-var sym)))
+         (et:check-check-var var)
+       (et-err nil "Variable not in scope: %s" sym)))
 
     (expr (et-literal expr))))
-
-(et-defun et-checker-for (sym: Symbol) EtCheckFn|Nil
-  (if (et-get-fbind sym) #'et:check--function
-    (et-symbol-checker sym)))
-
-(et-defun et:check-check-var (sym: Var) EtChecked
-  "Check a variable symbol.
-
-This exists as a helper function so that it can be advised in order to
-intercept all accesses to a variable when trying to determine a suitable
-type for it."
-  (if-let* ((var (et-get-symbol-var sym)))
-      (et-add-typeof (et:check-var-type var) var)
-    (et-err nil "Variable not in scope: %s" sym)))
 
 
 ;;;; Sub checkers
@@ -673,8 +699,6 @@ be used as the body of the checker function."
 
 ;;;; Check a variable binding, determining the variable type
 
-(defvar et:flow--guessing-var-type nil)
-
 (et-define-check-shortcut $infer-bind (var bind body)
   `($infer-binds (list (cons ,var (et-chk ,bind))) ,body))
 
@@ -692,7 +716,7 @@ fresh types."
      (et-chk ,body)))
 
 (et-defun et:flow--guess-var-types (inits: Alist<Var~EtType> body: EtCheckable>) Alist<Var~EtType>
-  (if et:flow--guessing-var-type
+  (if et:check-preliminary-pass?
       ;; Prevent exponential blow-ups in time complexity due to nested bindings
       (cl-loop for (sym . init) in inits
                collect (cons sym (et-reify-type init)))
@@ -702,13 +726,15 @@ fresh types."
                      for var = (et:type-var-new :name sym :type (et-reify-type init))
                      collect (cons var nil)))
            (advice (lambda (v)
-                     (when-let* ((entry (assq v var-recs)))
-                       (push (et-cur-recommendation) (cdr entry)))))
-           (et:flow--guessing-var-type t))
-      (et-with-advice #'et:check-check-var :before advice
-        (et-with-vars (mapcar #'car var-recs)
-          (et-check body)))
+                     (when-let* ((entry (assq v var-recs))
+                                 (rec (et-cur-recommendation)))
+                       (push rec (cdr entry))))))
+      (et:check-preliminary-pass
+       (et-with-advice #'et:check-check-var :before advice
+         (et-with-vars (mapcar #'car var-recs)
+           (et-check body))))
 
+      (et-hint 0 "!!! %s" var-recs)
       (cl-loop for (var . recs) in var-recs
                for reified = (et:type-var->type var)
                for union = (apply #'et-union recs)
@@ -769,7 +795,7 @@ zero-iteration path and the after-an-iteration path.
 Returns the body's type (from the real pass)."
   (let* ((entry (et-cur-narrows))
          (dirty (et-with-narrows entry
-                  (ignore (et-result-boundary (et-check chk)))
+                  (et:check-preliminary-pass (et-check chk))
                   (et:flow--narrows-changed-vars entry (et-cur-narrows)))))
     (et-set-narrows (cl-remove-if (lambda (n) (memq (car n) dirty)) entry))
     (prog1 (et-check chk)
@@ -922,10 +948,13 @@ will be the result."
   (let* ((typesym (gensym "type"))
          (expsym (gensym "expected")))
     `(let* ((,expsym (et-chk ,expected))
-            (,typesym (et-chk ,chk)))
+            (,typesym (et-with-recommendation ,expsym (et-chk ,chk))))
        (unless (et-subtype? ,typesym ,expsym)
          (et-fatal "Expected %s, found %s" ,expsym ,typesym))
        ,typesym)))
+
+(et-define-check-macro $with-rec (rec chk)
+  `(et-with-recommendation (et-chk ,rec) (et-chk ,chk)))
 
 (et-define-check-shortcut $recurse (rest)
   `($exp (,(car (et-cur-expr)) ,@rest)))

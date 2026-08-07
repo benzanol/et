@@ -90,7 +90,7 @@
 
 (et-declare
  (@alias EtConstrainResult *et:match-result<List<EtMatchConstraint>>)
- (@alias EtMatchResult *et:match-result<EtType>)
+ (@alias EtMatchResult *et:match-result<List<EtType>>)
 
  (@alias EtMatchStack (List (Tuple @SUB|@SUPER EtRepr EtType)))
  (@alias EtTypeConstraint
@@ -2483,14 +2483,40 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                   (cl-loop for arg in args
                            thereis (and (et:type-p arg) (et:match--type-contains-binds? arg))))))))
 
-(et-defun et-sub-match (matcher: *et:match-matcher type: EtType) EtMatchResult
+(et-defun et-sub-match
+    (matcher: *et:match-matcher type: EtType &optional largest: Boolean) EtMatchResult
+  "Match TYPE as a subtype of MATCHER.
+
+When LARGEST is non-nil, prefer the largest inferred generic types."
   (let* ((result (et:match-sub-constraints matcher type)))
     (if (not (et:match-result->success result)) result
       ;; If matching succeeded, try to determine the optimal generic types
       (let* ((qs (append (et:match-result->value result) (et:match-matcher->constraints matcher)))
-             (type (et:match--satisfy-constraints-smallest (et:match-matcher->generics matcher) qs)))
-        (if (eq type 'INVALID) (et:match-failed)
-          (et:match-result-new :success t :value type))))))
+             (types (et:match--satisfy-constraints
+                     (et:match-matcher->generics matcher) qs largest)))
+        (if (eq types 'INVALID)
+            (et:match--sub-match-failed-result matcher type qs)
+          (et:match-result-new :success t :value types))))))
+
+(et-defun et:match--sub-match-failed-result
+    (matcher: EtMatcher type: EtType qs: &List<EtTypeConstraint>) EtMatchResult
+  "Create a failed match result with the desired failure stack.
+
+This function exists purely to make the failed result stack contain the
+information necessary to give the user better failure diagnostics."
+  (let* ((repls
+          (cl-loop for gen in (et:match-matcher->generics matcher)
+                   for uppers = (cl-loop for (op g type) in qs
+                                         when (and (eq op 'Q:LEQ) (eq g gen))
+                                         collect type)
+                   when uppers
+                   collect (cons gen (et-type-to-repr (apply #'et-supersect uppers)))))
+         (mrepr (et:repr-substitute-generics (et:match-matcher->repr matcher) repls nil))
+         (diagnostic
+          (when (and repls (eq (length repls) (length (et:match-matcher->generics matcher))))
+            (et:match-sub-constraints (et:match-matcher-new :repr mrepr) type))))
+    (or (when (not (et:match-result->success diagnostic)) diagnostic)
+        (et:match-failed))))
 
 (et-defun et-iso-match (matcher: *et:match-matcher type: EtType) EtMatchResult
   "Like `et-sub-match', but require MATCHER and TYPE to be equivalent.
@@ -2498,32 +2524,30 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 Uses `et:match--iso-constraints' (both sub- and super-constraints) instead of
 `et:match-sub-constraints', so a successful match means TYPE is isomorphic to
 MATCHER under the inferred generics, not merely a subtype of it."
-  (declare (et (matcher *et:match-matcher) (type EtType)
-               (@return *et:match-result<List<EtType>>)))
-
   (let* ((result (et:match--iso-constraints matcher type)))
     (if (not (et:match-result->success result)) result
       ;; If matching succeeded, try to determine the optimal generic types
       (let* ((qs (append (et:match-result->value result) (et:match-matcher->constraints matcher)))
-             (type (et:match--satisfy-constraints-smallest (et:match-matcher->generics matcher) qs)))
-        (if (eq type 'INVALID) (et:match-failed)
-          (et:match-result-new :success t :value type))))))
+             (types (et:match--satisfy-constraints
+                     (et:match-matcher->generics matcher) qs)))
+        (if (eq types 'INVALID) (et:match-failed)
+          (et:match-result-new :success t :value types))))))
 
-(et-defun et:match--satisfy-constraints-smallest (generics constraints)
-          "Return a list of types for GENERICS satisfying CONSTRAINTS.
+(et-defun et:match--satisfy-constraints
+    (generics: &List<EtGeneric> constraints: &List<EtMatchConstraint>
+               &optional largest: Boolean)
+    List<EtType>|@INVALID
+  "Return a list of types for GENERICS satisfying CONSTRAINTS.
 
 Returns `INVALID' if impossible. This function allows the resulting
-types to be the never type."
-  (declare (et (generics List<EtGeneric>)
-               (constraints List<EtMatchConstraint>)
-               (@return List<EtType>|@INVALID)))
-
+types to be the never type. When LARGEST is non-nil, include upper-bound
+constraints when constructing each inferred type."
   (cl-loop
    for gen in generics
    for gen-result =
    (let* ((guess
            (cl-loop for (fact g type) in constraints
-                    when (and (eq g gen) (eq fact 'Q:GEQ))
+                    when (and (eq g gen) (or largest (eq fact 'Q:GEQ)))
                     collect type into types
                     finally return (apply #'et-union types))))
      (if (cl-loop for (fact g type) in constraints
@@ -2544,59 +2568,162 @@ types to be the never type."
             (let* ((replaced (et-repr-to-type tr gen-repls))
                    (valid? (if (eq fact 'R:LEQ) (et-subtype? replaced type) (et-subtype? type replaced))))
               (unless valid? (cl-return 'INVALID)))
-            finally return (et:match--satisfy-fn-constraints constraints gen-repls))))
+            finally return
+            (et:match--satisfy-fn-constraints constraints gen-repls largest))))
 
-(defun et:match--satisfy-fn-constraints (constraints gen-repls)
+(et-defun et:match--satisfy-fn-constraints
+    (constraints: &List<EtMatchConstraint> gen-repls: &Alist<EtGeneric~EtType>
+                  &optional largest: Boolean)
+    List<EtType>|@INVALID
   "Process the `R:FN' constraints in CONSTRAINTS, with known generics.
 
 Each constraint is (R:FN DYN-MATCHER DYN-OUT-REPR FN-IN-MR FN-OUT-MR),
 recorded when a `DynFunction' type was matched against a `Function'
-matcher factor. With GEN-REPLS now determined, FN-IN-MR resolves to a
-concrete arglist type, the DynFunction infers its output for that
-arglist, and FN-OUT-MR must accommodate that output: a bare generic is
-enlarged to include it (rechecking that generic's upper bounds),
-anything else must already be a supertype of it.
+matcher factor. Each constraint first suggests more precise values for
+the generics in FN-IN-MR from the DynFunction's input matcher. A
+suggestion is retained only when LARGEST is non-nil and all R:FN
+constraints remain valid.
+
+With the input generics determined, FN-IN-MR resolves to a concrete
+arglist type and the DynFunction infers its output. FN-OUT-MR must
+accommodate that output: a bare generic is enlarged to include it
+\(rechecking that generic's upper bounds), while anything else must
+already be a supertype of it.
 
 Returns the final list of generic types, or `INVALID'."
-  (declare (et (constraints List<EtMatchConstraint>)
-               (gen-repls Alist<EtGeneric~EtType>)
-               (@return List<EtType>|@INVALID)))
+  (cl-labels
+      ((to-type (repr repls)
+         ;; The reprs come from a matcher, so they can contain factors
+         ;; which are invalid in a type, in which case the match fails.
+         (condition-case-unless-debug nil (et-repr-to-type repr repls)
+           (error 'INVALID)))
+       (upper-bounds-satisfied? (repls)
+         (cl-loop for (fact gen type) in constraints
+                  always
+                  (or (not (eq fact 'Q:LEQ))
+                      (when-let* ((entry (assq gen repls)))
+                        (et-subtype? (cdr entry) type)))))
+       (fn-valid? (q repls)
+         (pcase-let* ((`(,_ ,dyn-matcher ,dyn-out-repr ,fn-in-mr ,fn-out-mr) q)
+                      (input (to-type fn-in-mr repls))
+                      (result (unless (eq input 'INVALID)
+                                (et:algebra-infer dyn-matcher input dyn-out-repr))))
+           (and
+            result
+            (et:match-result->success result)
+            (pcase (et:repr->dnf fn-out-mr)
+              (`(((S:GENERIC ,var)))
+               (when-let* ((entry (assq var repls)))
+                 (let* ((trial-repls (copy-alist repls))
+                        (trial-entry (assq var trial-repls)))
+                   (setcdr trial-entry
+                           (et-union (cdr entry) (et:match-result->value result)))
+                   (upper-bounds-satisfied? trial-repls))))
+              (_
+               (let* ((out-type (to-type fn-out-mr repls)))
+                 (and (not (eq out-type 'INVALID))
+                      (et-subtype? (et:match-result->value result) out-type))))))))
+       (all-fn-valid? (repls)
+         (cl-loop for q in constraints
+                  when (eq (car q) 'R:FN)
+                  always (fn-valid? q repls)))
+       (input-suggestions (q)
+         (pcase-let* ((`(,_ ,dyn-matcher ,dyn-out-repr ,fn-in-mr ,fn-out-mr) q)
+                      (dyn-generics (et:match-matcher->generics dyn-matcher))
+                      (out-type (to-type fn-out-mr gen-repls))
+                      (out-constraints
+                       (unless (eq out-type 'INVALID)
+                         (let* ((et:match--constraints-stack nil))
+                           (et:match--super-constraints-0
+                            (et:match-matcher-new
+                             :generics dyn-generics
+                             :repr dyn-out-repr)
+                            out-type))))
+                      (dyn-constraints
+                       (append
+                        (et:match-matcher->constraints dyn-matcher)
+                        (when (and out-constraints
+                                   (et:match-result->success out-constraints))
+                          (et:match-result->value out-constraints))))
+                      (dyn-types
+                       (cl-loop
+                        for gen in dyn-generics
+                        for lowers =
+                        (cl-loop for (fact g type) in dyn-constraints
+                                 when (and (eq g gen) (eq fact 'Q:GEQ))
+                                 collect type)
+                        for uppers =
+                        (cl-loop for (fact g type) in dyn-constraints
+                                 when (and (eq g gen) (eq fact 'Q:LEQ))
+                                 collect type)
+                        for lower = (apply #'et-union lowers)
+                        for upper = (if uppers (apply #'et-supersect uppers) (et-any))
+                        unless (et-subtype? lower upper) return 'INVALID
+                        collect upper))
+                      (dyn-repls
+                       (unless (eq dyn-types 'INVALID)
+                         (cl-mapcar #'cons dyn-generics dyn-types)))
+                      (dyn-input
+                       (when dyn-repls
+                         (to-type (et:match-matcher->repr dyn-matcher) dyn-repls)))
+                      (outer-generics (mapcar #'car gen-repls))
+                      (suggestion-constraints
+                       (unless (or (null dyn-repls)
+                                   (eq dyn-input 'INVALID))
+                         (let* ((et:match--constraints-stack nil))
+                           (et:match--super-constraints-0
+                            (et:match-matcher-new
+                             :generics outer-generics
+                             :repr fn-in-mr)
+                            dyn-input)))))
+           (when (and suggestion-constraints
+                      (et:match-result->success suggestion-constraints))
+             (let* ((suggestions
+                     (et:match--satisfy-constraints
+                      outer-generics
+                      (et:match-result->value suggestion-constraints)
+                      t)))
+               (unless (eq suggestions 'INVALID) suggestions))))))
 
-  (cl-flet ((to-type (repr)
-              ;; The reprs come from a matcher, so they can contain
-              ;; factors which are invalid in a type (like S:SET), in
-              ;; which case the match should simply fail.
-              (condition-case-unless-debug nil (et-repr-to-type repr gen-repls)
-                (error 'INVALID))))
+    ;; Let each R:FN constraint contribute input recommendations. Apply
+    ;; them independently so an output-dependent argument can remain
+    ;; Never without discarding useful recommendations for other args.
+    (when largest
+      (cl-loop for q in constraints
+               when (eq (car q) 'R:FN)
+               do
+               (cl-loop for entry in gen-repls
+                        for suggestion in (input-suggestions q)
+                        for old = (cdr entry)
+                        do
+                        (setcdr entry (et-union old suggestion))
+                        (unless (and (upper-bounds-satisfied? gen-repls)
+                                     (all-fn-valid? gen-repls))
+                          (setcdr entry old)))))
 
+    ;; Validate the final inputs and update bare-generic outputs.
     (cl-loop
      for q in constraints
      when (eq (car q) 'R:FN)
      do
      (pcase-let* ((`(,_ ,dyn-matcher ,dyn-out-repr ,fn-in-mr ,fn-out-mr) q)
-                  (input (to-type fn-in-mr))
+                  (input (to-type fn-in-mr gen-repls))
                   (result (unless (eq input 'INVALID)
                             (et:algebra-infer dyn-matcher input dyn-out-repr))))
        (unless (and result (et:match-result->success result)) (cl-return 'INVALID))
 
        (pcase (et:repr->dnf fn-out-mr)
-         ;; A bare generic output: enlarge the generic to include the
-         ;; inferred output, rechecking its upper bounds
          (`(((S:GENERIC ,var)))
           (let* ((entry (or (assq var gen-repls) (cl-return 'INVALID)))
                  (enlarged (et-union (cdr entry) (et:match-result->value result))))
-            (unless (cl-loop for (fact g type) in constraints
-                             always (or (not (eq g var))
-                                        (not (eq fact 'Q:LEQ))
-                                        (et-subtype? enlarged type)))
-              (cl-return 'INVALID))
-            (setcdr entry enlarged)))
-         ;; Otherwise the output is fixed, so it must already be a
-         ;; supertype of the inferred output
-         (_ (let* ((out-type (to-type fn-out-mr)))
-              (unless (and (not (eq out-type 'INVALID))
-                           (et-subtype? (et:match-result->value result) out-type))
-                (cl-return 'INVALID))))))
+            (setcdr entry enlarged)
+            (unless (upper-bounds-satisfied? gen-repls)
+              (cl-return 'INVALID))))
+         (_
+          (let* ((out-type (to-type fn-out-mr gen-repls)))
+            (unless (and (not (eq out-type 'INVALID))
+                         (et-subtype? (et:match-result->value result) out-type))
+              (cl-return 'INVALID))))))
 
      finally return (mapcar #'cdr gen-repls))))
 
@@ -2636,6 +2763,10 @@ non-empty list => Might be subtype depending on the conditions."
          (result (et:algebra--subtype-0 sub super)))
     (if (not (et:match-result->success result)) 'NO
       (et:match-result->value result))))
+
+(et-defun et:algebra-subtype-result (sub: EtType super: EtType) EtSubtypeResult
+  (let ((et:algebra--subtype-stack nil))
+    (et:algebra--subtype-0 sub super)))
 
 ;; This function could just use `et-sub-match', but it needs to take
 ;; into account binds.
@@ -3105,9 +3236,11 @@ This returns an `et-match-result' in case matching fails."
            for result =
            (pcase val
              ((cl-struct et:type-dt (name 'Function) (args `(,param-type ,return-type)))
-              (if (et-subtype? arglist-type param-type)
-                  (et:match-result-new :success t :value return-type)
-                (et:match-failed)))
+              (let* ((matcher (et:match-matcher-new :repr (et-type-to-repr param-type)))
+                     (result (et-sub-match matcher arglist-type)))
+                (if (et:match-result->success result)
+                    (et:match-succeeded return-type)
+                  result)))
              ((cl-struct et:type-dt (name 'DynFunction) (args `(,matcher ,output-repr)))
               (et:algebra-infer matcher arglist-type output-repr))
              (_ (et:match-failed)))
