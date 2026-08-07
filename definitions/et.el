@@ -47,10 +47,13 @@
 
 (et-declare
  (@check et: ($pcase `(,spec ,_expr)
-                     ($prog1 ($eval (et-parse-type spec))
-                             ($expect ($eval (et-parse-type spec)) ($at 2)))))
+                     ($temp-var type ($eval (et-parse-type spec))
+                                ($prog1 ($var type)
+                                        ($expect ($var type) ($at 2))))))
  (@check et! ($pcase `(,spec ,_expr)
-                     ($prog1 ($eval (et-parse-type spec)) ($at 2)))))
+                     ($temp-var type ($eval (et-parse-type spec))
+                                ($prog1 ($var type)
+                                        ($with-rec ($var type) ($at 2)))))))
 
 (et-set-checker #'et-defun #'et:checker--et-defun)
 (et-defun et:checker--et-defun () EtType
