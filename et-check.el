@@ -169,14 +169,6 @@
     `(let* ((et:check--binds (append ,loop et:check--binds)))
        ,@body)))
 
-(et-defun et:check-check-var (var: EtVar) EtChecked
-  "Check a variable.
-
-This exists as a helper function so that it can be advised in order to
-intercept all accesses to a variable when trying to determine a suitable
-type for it."
-  (et-add-typeof (et:check-var-type var) var))
-
 
 ;;;; Function bindings/checking
 
@@ -293,8 +285,11 @@ Preliminary checking passes happen in `let' expressions to guess types
 for untyped variables, and in loops to determine the final loop narrows.")
 
 (defmacro et:check-preliminary-pass (&rest body)
-  `(let* ((et:check-preliminary-pass? t))
-     (ignore (et-result-boundary ,@body))))
+  (let* ((outsym (gensym "output")))
+    `(let* ((et:check-preliminary-pass? t)
+            (,outsym nil))
+       (ignore (et-result-boundary (setq ,outsym (progn ,@body))))
+       ,outsym)))
 
 
 ;;;; Narrows helpers
@@ -425,7 +420,7 @@ determine the output type."
     ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
     ((and sym (pred symbolp) (pred (not keywordp)) (guard sym) (guard (not (eq sym t))))
      (if-let* ((var (et-get-symbol-var sym)))
-         (et:check-check-var var)
+         (et:flow-check-var var)
        (et-err nil "Variable not in scope: %s" sym)))
 
     (expr (et-literal expr))))
@@ -689,7 +684,15 @@ be used as the body of the checker function."
 ;;; Core control flow - `et:flow'
 ;;;; Check reading/setting a variable
 
-(et-defun et-check-set-var (var: EtVar type: EtType) EtChecked
+(et-defun et:flow-check-var (var: EtVar) EtChecked
+  "Check a variable.
+
+This exists as a helper function so that it can be advised in order to
+intercept all accesses to a variable when trying to determine a suitable
+type for it."
+  (et-add-typeof (et:check-var-type var) var))
+
+(et-defun et:flow-check-set (var: EtVar type: EtType) EtChecked
   "Should be called whenever VAR is assigned to TYPE."
   (if (not (et-subtype? type (et:type-var->type var)))
       (et-err nil "Variable %s is not assignable to type %s" var type)
@@ -711,36 +714,42 @@ bound to that type.
 
 TODO: Only perform estimation for certain types, such as literals and
 fresh types."
-  (et-declare (inits Alist<Var~EtType>) (body EtCheckable))
+  (et-declare (inits Alist<Var~EtCheckable>) (body EtCheckable))
   `(et-with-binds (et:flow--guess-var-types ,inits ',body)
      (et-chk ,body)))
 
-(et-defun et:flow--guess-var-types (inits: Alist<Var~EtType> body: EtCheckable>) Alist<Var~EtType>
+(et-defun et:flow--guess-var-types (inits: Alist<Var~EtCheckable> body: EtCheckable>) Alist<Var~EtType>
   (if et:check-preliminary-pass?
       ;; Prevent exponential blow-ups in time complexity due to nested bindings
-      (cl-loop for (sym . init) in inits
-               collect (cons sym (et-reify-type init)))
+      (cl-loop for (sym . chk) in inits
+               collect (cons sym (et-reify-type (et-check chk))))
 
     (let* ((var-recs
-            (cl-loop for (sym . init) in inits
-                     for var = (et:type-var-new :name sym :type (et-reify-type init))
-                     collect (cons var nil)))
-           (advice (lambda (v)
-                     (when-let* ((entry (assq v var-recs))
-                                 (rec (et-cur-recommendation)))
-                       (push rec (cdr entry))))))
+            (et:check-preliminary-pass
+             (cl-loop for (sym . chk) in inits
+                      for var = (et:type-var-new :name sym :type (et-reify-type (et-check chk)))
+                      collect (cons var nil))))
+           (get-advice
+            (lambda (var)
+              (when-let* ((entry (assq var var-recs))
+                          (rec (et-cur-recommendation)))
+                (push rec (cdr entry)))))
+           (set-advice
+            (lambda (var type)
+              (when-let* ((entry (assq var var-recs)))
+                (push type (cdr entry))))))
       (et:check-preliminary-pass
-       (et-with-advice #'et:check-check-var :before advice
-         (et-with-vars (mapcar #'car var-recs)
-           (et-check body))))
+       (et-with-advice #'et:flow-check-var :before get-advice
+         (et-with-advice #'et:flow-check-set :before set-advice
+           (et-with-vars (mapcar #'car var-recs)
+             (et-check body)))))
 
-      (et-hint 0 "!!! %s" var-recs)
-      (cl-loop for (var . recs) in var-recs
-               for reified = (et:type-var->type var)
+      (cl-loop for (sym . chk) in inits
+               for (_ . recs) in var-recs
                for union = (apply #'et-union recs)
-               for type = (if (et-subtype? reified union) union
-                            (et-union union reified))
-               collect (cons (et:type-var->name var) type)))))
+               for type = (et-with-recommendation union (et-check chk))
+               for all = (et-union type union)
+               collect (cons sym all)))))
 
 
 ;;;; Check branches
@@ -999,15 +1008,6 @@ will be the result."
 
 (et-define-check-shortcut [$and et-check-and] (cond then)
   `($if ,cond ,then ($type Nil)))
-
-
-;;;; Parse let binds
-
-(et-defun et-check-let-inits (rel: EtRel) Alist<Var~EtType>
-  (let* ((forms (et-cur-expr rel)))
-    (cl-loop for (sym _expr) in forms
-             for pos upfrom 0
-             collect (cons sym (et-check-at nil rel pos 1)))))
 
 
 ;;;; Utility checkers
