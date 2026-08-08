@@ -521,6 +521,9 @@ variable."
   "A variable currently in scope."
   name type)
 
+(cl-defmethod cl-print-object ((var et:type-var) stream)
+  (princ (format "#var<%s>" (et:type-var->name var)) stream))
+
 (et-defstruct et:type-dt
   "A datatype factor of an `et-type'."
   (name nil :et Var)
@@ -700,7 +703,7 @@ This is a common pattern for functions that have a `noerror' argument."
               (overloads Boolean)
               (@return (List (Tuple EtPolymorphicTypes EtType EtType))))
 
-  (pcase (et-type-single (et-expand-all-aliases func-type))
+  (pcase (et-type-single (et-expand-aliases func-type))
     ((cl-struct et:type-dt (name 'DynFunction) (args `(,i-matcher ,o-repr)))
      (let* ((make-gen-repls
              ;; Must be called within et:type--with-polymorphs
@@ -724,7 +727,7 @@ This is a common pattern for functions that have a `noerror' argument."
 
     ((cl-struct et:type-dt (name 'Function) (args `(,i-type ,o-type)))
      (list (list nil i-type o-type)))
-    (_ (error "Invalid function type: %s" func-type))))
+    (_ (error "Invalid function type: %s" (et-pp func-type)))))
 
 
 ;;;; Alias internals
@@ -878,14 +881,16 @@ produced into. It is only relevant when TOTYPE is nil."
   "Expand an alias to a type."
   (et:type-alias-call (et:type-alias->name alias) (et:type-alias->args alias) :totype))
 
-(et-defun et-expand-all-aliases (type: EtType) EtType
-  (cl-loop for case in (et:type->cases type)
-           for val = (et:type-case->value case)
-           append (if (et:type-alias-p val)
-                      (apply #'list (et:type->cases (et-expand-all-aliases (et:type-alias-expand val))))
-                    (list case))
-           into new-cases
-           finally return (et:type-new :cases new-cases)))
+(et-defun et-expand-aliases (type: EtType &optional repeat: Integer) EtType
+  (if (eq 0 repeat) type
+    (cl-loop with next-repeat = (when (numberp repeat) (1- repeat))
+             for case in (et:type->cases type)
+             for val = (et:type-case->value case)
+             append (if (not (et:type-alias-p val)) (list case)
+                      (et:type->cases
+                       (et-expand-aliases (et:type-alias-expand val) next-repeat)))
+             into new-cases
+             finally return (et:type-new :cases new-cases))))
 
 
 ;;;; Helpers
@@ -902,7 +907,7 @@ a valid `et:type-case->value'."
            into cases
            finally return (et:type-new :cases cases)))
 
-(et-defun et-type-single (type: EtType) *et:type-dt|*et:type-alias
+(et-defun et-type-single (type: EtType) *et:type-dt|*et:type-alias|Nil
   "Assume type is a single case, and extract the case value."
   (when (eq 1 (length (et:type->cases type)))
     (et:type-case->value (car (et:type->cases type)))))
@@ -1135,7 +1140,7 @@ allowed and order does not matter.
 
 MK-SUPER builds the synthesized `&Cons' super value in the caller's
 language (a type or a matcher repr); see `et:dt-constraints'."
-  (let ((car-read (et-expand-all-aliases (nth 0 cons-args)))
+  (let ((car-read (et-expand-aliases (nth 0 cons-args)))
         (cdr-read (nth 2 cons-args)))
     (pcase (et:type->cases car-read)
       (`(,(cl-struct et:type-case
@@ -1833,7 +1838,7 @@ in GEN-REPLS, if it exists."
 
 (et:repr--deffactor S:SET set (dnf type)
   :parse (list (et:repr--parse-0 dnf) (et-parse-type type))
-  :to-type (et-any)
+  :to-type (if (et-subtype? type (et:repr--totype-0 dnf)) (et-any) (et-never))
   :print (format "{match %s to %s}" (et:repr--tostring-0 dnf) (et-pp-type type)))
 
 (et:repr--deffactor S:NOINFER noinfer (repr &optional env)
@@ -2074,6 +2079,15 @@ indeterminates slot."
   ;; (TYPE is always nil) <=> (TYPE is a subtype of Nil)
   (et:repr--indeterminate-if (et:repr--op-subtype? type (et Nil))
                              (et:repr--totype-0 yes) (et:repr--totype-0 no)))
+
+(et-defspec match (type &rest options)
+  (pcase options
+    ('nil 'Never)
+    (`([,pat ,out] . ,rest) `(extends? ,type ,pat ,out (match ,type ,@rest)))
+    (`([,(and genvec (pred vectorp)) ,pat ,out] . ,rest)
+     `(infer ,type ,genvec ,pat ,out (match ,type ,@rest)))
+    (`(,default) default)
+    (_ (error "Invalid format for switch"))))
 
 (et:repr--defop eval ([func :const] &rest args)
   :to-string (format "{eval %s on %s}" func (mapconcat #'et:repr--tostring-0 args ", "))
@@ -2507,8 +2521,7 @@ information necessary to give the user better failure diagnostics."
   (let* ((repls
           (cl-loop for gen in (et:match-matcher->generics matcher)
                    for uppers = (cl-loop for (op g type) in qs
-                                         when (and (eq op 'Q:LEQ) (eq g gen))
-                                         collect type)
+                                         collect (if (and (eq op 'Q:LEQ) (eq g gen)) type (et Any)))
                    when uppers
                    collect (cons gen (et-type-to-repr (apply #'et-supersect uppers)))))
          (mrepr (et:repr-substitute-generics (et:match-matcher->repr matcher) repls nil))
@@ -2778,8 +2791,8 @@ non-empty list => Might be subtype depending on the conditions."
       (et:algebra--subtype-1 sub super))))
 
 (et-defun et:algebra--subtype-1 (sub: EtType super: EtType) EtSubtypeResult
-  (setq sub (et-expand-all-aliases sub))
-  (setq super (et-expand-all-aliases super))
+  (setq sub (et-expand-aliases sub))
+  (setq super (et-expand-aliases super))
 
   (cl-loop for sub-case in (et:type->cases sub)
            collect
@@ -3229,7 +3242,7 @@ This returns an `et-match-result' in case matching fails."
 
 (et-defun et:algebra-funcall (func-type: EtType arglist-type: EtType) *et:match-result<EtType>
   "Determine the return type of calling FUNC-TYPE with ARGLIST-TYPE."
-  (setq func-type (et-expand-all-aliases func-type))
+  (setq func-type (et-expand-aliases func-type))
 
   (cl-loop for case in (et:type->cases func-type)
            for val = (et:type-case->value case)
@@ -3574,7 +3587,7 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defun et-expand-aliases-at-depth (type: EtType depth: Integer) EtType
   (if (<= depth 0) type
-    (cl-loop for case in (et:type->cases (et-expand-all-aliases type))
+    (cl-loop for case in (et:type->cases (et-expand-aliases type))
              for dt = (et:type-case->value case)
              for new-dt =
              (et:type-dt-new
