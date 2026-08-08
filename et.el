@@ -114,7 +114,7 @@
              (Tuple @S:POLY EtGeneric)
              (Tuple @S:NOINFER EtRepr Alist<EtGeneric~EtRepr>)
              (TupleStar @S:OP Var List)
-             (Tuple @S:SET EtRepr EtType)))
+             (Tuple @S:SET EtRepr EtType @SUB|@SUPER)))
 
  (@alias EtReprCase (&List EtReprFactor))
  (@alias EtReprDnf (&List EtReprCase))
@@ -1345,8 +1345,8 @@ check (see the `R:FN' constraint)."
                 for role in (et:dt-arg-roles super-name super-args)
                 ;; Skipping duplicates is especially helpful for ConsFull/VectorFull,
                 ;; where arguments are often duplicated
-                unless (member (cons sub-arg super-arg) already-checked)
-                collect (cons sub-arg super-arg) into already-checked
+                unless (member (list sub-arg super-arg role) already-checked)
+                collect (list sub-arg super-arg role) into already-checked
                 and collect
                 (pcase role
                   ;; Const args must be equal to match
@@ -1389,8 +1389,8 @@ never be read for any purpose other than assertions."
 ;; \(`S:POLY' NAME) - A scoped polymorphic datatype
 ;; \(`S:OP' OP ARGS...) - Apply a custom operation to the arguments. In
 ;;   matchers, this is deferred by wrapping it in an `S:NOINFER'.
-;; \(`S:SET' MATCHER TYPE) - Match a custom MATCHER against TYPE. As a
-;;   type, this converts to `Any'.
+;; \(`S:SET' MATCHER TYPE DIRECTION) - Match a custom MATCHER against
+;;   TYPE. As a type, this converts to `Any'.
 
 
 ;;;; Parsing
@@ -1518,9 +1518,11 @@ never be read for any purpose other than assertions."
      (list 'typeof (or (alist-get (intern (match-string 1 s)) et:repr--test-variables)
                        (error "Invalid test variable: %s" (match-string 1 s))))))
 
-   ;; Var=Type  ->  Matcher set
-   ((string-match "^\\([-a-zA-Z0-9]*\\)=\\(.*\\)$" s)
-    (et:repr--parse-0 (list 'set (intern (match-string 1 s)) (match-string 2 s))))
+   ;; Var<:Type  ->  Matcher set
+   ((string-match "^\\([-a-zA-Z0-9]*\\):>:\\(.*\\)$" s)
+    (et:repr--parse-0 (list 'set (intern (match-string 1 s)) (match-string 2 s) 'SUB)))
+   ((string-match "^\\([-a-zA-Z0-9]*\\):<:\\(.*\\)$" s)
+    (et:repr--parse-0 (list 'set (intern (match-string 1 s)) (match-string 2 s) 'SUPER)))
 
    ;; Name or Name<...> or *struct or *struct<...>
    ((string-match "^\\*?\\([-&:a-zA-Z0-9]+\\)\\(?:<\\(.*\\)>\\)?$" s)
@@ -1555,14 +1557,16 @@ never be read for any purpose other than assertions."
 (et-defun et:repr--split-at-depth (s: String delim: String) List<String>
   "Split string S on character DELIM at depth 0 only.
 Depth tracks < > and { } nesting."
-  (let ((depth 0) (start 0) (result '()))
+  (let ((depth 0) (start 0) (result '()) (prev nil))
     (dotimes (i (length s))
       (let ((c (aref s i)))
-        (cond ((memq c '(?< ?{)) (cl-incf depth))
+        (cond ((eq prev ?:))
+              ((memq c '(?< ?{)) (cl-incf depth))
               ((memq c '(?> ?})) (cl-decf depth))
               ((and (eq c delim) (= depth 0))
                (push (substring s start i) result)
-               (setq start (1+ i))))))
+               (setq start (1+ i))))
+        (setq prev c)))
     (push (substring s start) result)
     (nreverse result)))
 
@@ -1662,8 +1666,8 @@ in GEN-REPLS, if it exists."
       (`(S:ALIAS ,name . ,args)
        (et-q (((S:ALIAS ,name . ,(mapcar sub args))))))
       (`(S:POLY ,_name) factor)
-      (`(S:SET ,matcher ,type)
-       (et-q (((S:SET ,(funcall sub matcher) ,type)))))
+      (`(S:SET ,matcher ,type ,direction)
+       (et-q (((S:SET ,(funcall sub matcher) ,type ,direction)))))
       (`(S:NOINFER ,tr ,env)
        (et-q (((S:NOINFER ,tr ,(cl-loop for (g . r) in env
                                         collect (cons g (funcall sub r))))))))
@@ -1788,6 +1792,46 @@ in GEN-REPLS, if it exists."
          (format "%s<%s>" name-str (string-join strs ", ")))))))
 
 
+;;;; Indeterminate helpers
+
+(defmacro et:repr--capture-indeterminates (&rest body)
+  `(let* ((val-and-indes
+           (let* ((et:repr--totype-indeterminates nil))
+             (cons (progn ,@body) et:repr--totype-indeterminates))))
+     (cl-callf append et:repr--totype-indeterminates (cdr val-and-indes))
+     val-and-indes))
+
+(defmacro et:repr--indeterminate-if (cond yes no)
+  `(pcase-let* ((answer-and-indes (et:repr--capture-indeterminates ,cond)))
+     (if (cdr answer-and-indes) (et-union ,yes ,no)
+       (if (car answer-and-indes) ,yes ,no))))
+
+(et-defun et:repr--op-subtype? (sub: EtType super: EtType) Boolean
+  "Determine subtype, making note of any indeterminates."
+  (let* ((indes-or-no (et-subtype-indeterminates sub super)))
+    (if (not (listp indes-or-no)) nil
+      (cl-callf append et:repr--totype-indeterminates indes-or-no)
+      (null indes-or-no))))
+
+(defmacro et:repr--record-indeterminates (&rest body)
+  "Run BODY while recording subtype indeterminates.
+
+The advice strategy is perhaps a slightly unhinged way of achieving
+this, but the alternatives are either:
+
+1. Make `et-subtype?' inherintly mutate global state (gross)
+
+2. Write duplicate versions of several functions with
+`et-subtype?' -> `et:repr--op-subtype?'
+
+3. Modify the original functions to return indeterminates (objectively
+the correct option, but I am too lazy at the moment.) A clean eventual
+solution would involve modifying `et-match-result' to have an
+indeterminates slot."
+  `(et-with-advice #'et-subtype? :override #'et:repr--op-subtype?
+     ,@body))
+
+
 ;;;; Repr factor definitions
 
 (defmacro et:repr--deffactor (repr-sym spec-sym arglist &rest plist)
@@ -1836,10 +1880,13 @@ in GEN-REPLS, if it exists."
   :to-type (or (alist-get var et:repr--totype-gen-repls) (error "Generic %s not defined" var))
   :print (format "@%s" var))
 
-(et:repr--deffactor S:SET set (dnf type)
-  :parse (list (et:repr--parse-0 dnf) (et-parse-type type))
-  :to-type (if (et-subtype? type (et:repr--totype-0 dnf)) (et-any) (et-never))
-  :print (format "{match %s to %s}" (et:repr--tostring-0 dnf) (et-pp-type type)))
+(et:repr--deffactor S:SET set (dnf type direction)
+  :parse (list (et:repr--parse-0 dnf) (et-parse-type type) direction)
+  :to-type (let* ((dnf-t (et:repr--totype-0 dnf)))
+             (if (if (eq direction 'SUPER) (et-subtype? dnf-t type) (et-subtype? type dnf-t))
+                 (et-any) (et-never)))
+  :print (format "{%s %s %s}" (et:repr--tostring-0 dnf)
+                 (if (eq direction 'SUPER) ":<:" ":>:") (et-pp-type type)))
 
 (et:repr--deffactor S:NOINFER noinfer (repr &optional env)
   :parse (list (et:repr--parse-0 repr)
@@ -1981,43 +2028,6 @@ in GEN-REPLS, if it exists."
 
 ;;;; Op definitions
 
-(defmacro et:repr--capture-indeterminates (&rest body)
-  `(let* ((val-and-indes
-           (let* ((et:repr--totype-indeterminates nil))
-             (cons (progn ,@body) et:repr--totype-indeterminates))))
-     (cl-callf append et:repr--totype-indeterminates (cdr val-and-indes))
-     val-and-indes))
-
-(defmacro et:repr--indeterminate-if (cond yes no)
-  `(pcase-let* ((answer-and-indes (et:repr--capture-indeterminates ,cond)))
-     (if (cdr answer-and-indes) (et-union ,yes ,no)
-       (if (car answer-and-indes) ,yes ,no))))
-
-(et-defun et:repr--op-subtype? (sub: EtType super: EtType) Boolean
-  "Determine subtype, making note of any indeterminates."
-  (let* ((indes-or-no (et-subtype-indeterminates sub super)))
-    (if (not (listp indes-or-no)) nil
-      (cl-callf append et:repr--totype-indeterminates indes-or-no)
-      (null indes-or-no))))
-
-(defmacro et:repr--record-indeterminates (&rest body)
-  "Run BODY while recording subtype indeterminates.
-
-The advice strategy is perhaps a slightly unhinged way of achieving
-this, but the alternatives are either:
-
-1. Make `et-subtype?' inherintly mutate global state (gross)
-
-2. Write duplicate versions of several functions with
-`et-subtype?' -> `et:repr--op-subtype?'
-
-3. Modify the original functions to return indeterminates (objectively
-the correct option, but I am too lazy at the moment.) A clean eventual
-solution would involve modifying `et-match-result' to have an
-indeterminates slot."
-  `(et-with-advice #'et-subtype? :override #'et:repr--op-subtype?
-     ,@body))
-
 (et:repr--defop subtract (a b)
   :to-string (format "{%s - %s}" (et:repr--tostring-0 a) (et:repr--tostring-0 b))
   (et-subtract a b))
@@ -2080,14 +2090,14 @@ indeterminates slot."
   (et:repr--indeterminate-if (et:repr--op-subtype? type (et Nil))
                              (et:repr--totype-0 yes) (et:repr--totype-0 no)))
 
-(et-defspec match (type &rest options)
-  (pcase options
-    ('nil 'Never)
-    (`([,pat ,out] . ,rest) `(extends? ,type ,pat ,out (match ,type ,@rest)))
-    (`([,(and genvec (pred vectorp)) ,pat ,out] . ,rest)
-     `(infer ,type ,genvec ,pat ,out (match ,type ,@rest)))
-    (`(,default) default)
-    (_ (error "Invalid format for switch"))))
+;; (et-defspec match (type &rest options)
+;;   (pcase options
+;;     ('nil 'Never)
+;;     (`([,pat ,out] . ,rest) `(extends? ,type ,pat ,out (match ,type ,@rest)))
+;;     (`([,(and genvec (pred vectorp)) ,pat ,out] . ,rest)
+;;      `(infer ,type ,genvec ,pat ,out (match ,type ,@rest)))
+;;     (`(,default) default)
+;;     (_ (error "Invalid format for switch"))))
 
 (et:repr--defop eval ([func :const] &rest args)
   :to-string (format "{eval %s on %s}" func (mapconcat #'et:repr--tostring-0 args ", "))
@@ -2196,7 +2206,7 @@ DNF is the struct representing the matcher."
                (dolist (arg args) (et:match-matcher-new :generics generics :repr arg)))
               (`(S:GENERIC ,(pred genericp)))
               (`(S:POLY ,(pred symbolp)))
-              (`(S:SET ,_ ,(pred et:type-p)))
+              (`(S:SET ,_ ,(pred et:type-p) ,(or 'SUB 'SUPER)))
               (`(S:NOINFER ,(pred et:repr-p) ,_))
               (`(S:OP . ,_))
               (_ (error "Invalid match factor: %s" factor))))))))
@@ -2378,7 +2388,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
                                     :typeofs (et:type-case->typeofs case))
                            into cases finally return (et:type-new :label (et:type->label exp) :cases cases)))
                ;; result-1 has the stack trace we want
-               result-1))))
+               (or result-1 (et:match-failed))))))
 
 (defun et:match--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
   "sub-3 and super-3 are similar enough that combining them is simpler."
@@ -2391,8 +2401,9 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
     (`(S:GENERIC ,var)
      (let* ((q (list (if is-super 'Q:LEQ 'Q:GEQ) var (et-type case))))
        (et:match-succeeded (list q))))
-    (`(S:SET ,mr ,type)
-     (funcall (if is-super #'et:match--super-constraints-0 #'et:match--sub-constraints-0)
+    (`(S:SET ,mr ,type ,direction)
+     (funcall (if (xor is-super (eq 'SUPER direction))
+                  #'et:match--super-constraints-0 #'et:match--sub-constraints-0)
               (et:match-matcher-new :repr mr :generics generics) type))
     (`(,(or 'S:NOINFER 'S:OP 'S:POLY) . ,_)
      (let* ((req (list (if is-super 'R:LEQ 'R:GEQ)
@@ -3614,11 +3625,12 @@ lazily because `List' is not yet defined when this file loads.")
 ;; All functions are a subtype of AnyFn
 (et-defalias AnyFn [] (Function Never Any))
 (et-defalias IdFn [T] (Function T T))
+(et-defalias Sink [T] (Function (Args T) Nil))
+
+(et-defalias Indirect [T] T)
 
 (et-defalias Vector [(= E Any)] VectorFull<E~E>)
 (et-defalias WriteVector [(= E Any)] VectorFull<Any~E>)
-
-(et-defalias Indirect [T] T)
 
 
 ;;;; Cons aliases
@@ -3628,6 +3640,7 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias ListFresh [(= E Any)] (or Nil (ConsFresh E (ListFresh E))))
 (et-defalias List [(= E Any)] (or Nil (Cons E (List E))))
+(et-defalias ListFull [R W] (or Nil (ConsFull R W (ListFull R W) Never)))
 
 (et-defalias Tree [(= E Any)] (or (List (Tree E)) E))
 (et-defalias ConsTree [(= E Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
@@ -3641,11 +3654,28 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
 (et-defspec Args* (&rest args) (et:type-tuple-star-spec '&Cons args))
 
+(et-defalias ListWithLast [E Last]
+  (or (Cons Last Nil)
+      (Cons E ListWithLast<E~Last>)))
+
 (et-defalias Sexp []
   (or Symbol String Number
       (Cons Sexp Sexp)
       (Vector Sexp)))
 (et-defalias Sexps [] List<Sexp>)
+
+
+;;;; Seq aliases
+
+(et-defalias SeqFull [R W]
+  (or ListFull<R~W>
+      VectorFull<R~W>
+      String^{R:>:Integer}^{W:<:Integer}
+      BoolVector^{R:>:Boolean}^{W:<:Any}
+      CharTable^{R:>:Any}^{W:<:Any}))
+
+(et-defalias SeqRead [(= E Any)] SeqFull<E~Never>)
+(et-defalias SeqWrite [(= E Any)] SeqFull<Any~E>)
 
 
 ;;;; Emacs aliases
