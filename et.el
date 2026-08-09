@@ -31,7 +31,7 @@
   "Perform extra debug checks.")
 
 (defmacro et (&rest args)
-  `(et-parse-type (et-q ,(if (eq (length args) 1) (car args) args))))
+  `(et-parse-type (et-q ,(if (length= args 1) (car args) args))))
 
 
 ;;; ============================================================
@@ -114,7 +114,7 @@
              (Tuple @S:POLY EtGeneric)
              (Tuple @S:NOINFER EtRepr Alist<EtGeneric~EtRepr>)
              (TupleStar @S:OP Var List)
-             (Tuple @S:SET EtRepr EtType @SUB|@SUPER)))
+             (Tuple @S:SET EtRepr EtType @SUB|@SUPER|@EQ)))
 
  (@alias EtReprCase (&List EtReprFactor))
  (@alias EtReprDnf (&List EtReprCase))
@@ -909,7 +909,7 @@ a valid `et:type-case->value'."
 
 (et-defun et-type-single (type: EtType) *et:type-dt|*et:type-alias|Nil
   "Assume type is a single case, and extract the case value."
-  (when (eq 1 (length (et:type->cases type)))
+  (when (length= (et:type->cases type) 1)
     (et:type-case->value (car (et:type->cases type)))))
 
 
@@ -1028,7 +1028,7 @@ a valid `et:type-case->value'."
                       (if-let* ((name (car args))
                                 (plist (get name 'et-struct))
                                 (arg-count (length (plist-get plist :generics))))
-                          (if (eq (length (cdr args)) arg-count)
+                          (if (length= (cdr args) arg-count)
                               (cons 'CONST (make-list (length (cdr args)) 'ISO))
                             (error "Struct %s takes %s arguments" name arg-count))
                         (error "Not a struct: %s" name)))
@@ -1519,10 +1519,9 @@ never be read for any purpose other than assertions."
                        (error "Invalid test variable: %s" (match-string 1 s))))))
 
    ;; Var<:Type  ->  Matcher set
-   ((string-match "^\\([-a-zA-Z0-9]*\\):>:\\(.*\\)$" s)
-    (et:repr--parse-0 (list 'set (intern (match-string 1 s)) (match-string 2 s) 'SUB)))
-   ((string-match "^\\([-a-zA-Z0-9]*\\):<:\\(.*\\)$" s)
-    (et:repr--parse-0 (list 'set (intern (match-string 1 s)) (match-string 2 s) 'SUPER)))
+   ((string-match "^\\([-a-zA-Z0-9]*\\):\\([<>=]\\):\\(.*\\)$" s)
+    (et:repr--parse-0 (list 'set (intern (match-string 1 s)) (match-string 3 s)
+                            (pcase (match-string 2 s) (">" 'SUB) ("<" 'SUPER) ("=" 'EQ)))))
 
    ;; Name or Name<...> or *struct or *struct<...>
    ((string-match "^\\*?\\([-&:a-zA-Z0-9]+\\)\\(?:<\\(.*\\)>\\)?$" s)
@@ -1629,17 +1628,20 @@ in GEN-REPLS, if it exists."
       collect (pcase factor
                 (`(S:DT ConsFull ,lr ,_lw ,rr ,_rw)
                  (let* ((never (et-parse-repr 'Never gens)))
-                   (et-q (S:DT ConsFull ,(funcall sub lr) ,never ,(funcall sub rr) ,never))))
+                   (et-ql S:DT ConsFull ,(funcall sub lr) ,never ,(funcall sub rr) ,never)))
 
                 (`(S:DT VectorFull ,r ,_w)
                  (let* ((never (et-parse-repr 'Never gens)))
-                   (et-q (S:DT VectorFull ,(funcall sub r) ,never))))
+                   (et-ql S:DT VectorFull ,(funcall sub r) ,never)))
 
                 (`(S:ALIAS ,name . ,args)
-                 (et-q (S:ALIAS ,(et:type-alias-ro-name name) . ,(mapcar sub args))))
+                 (et-ql S:ALIAS ,(et:type-alias-ro-name name) . ,(mapcar sub args)))
+
+                (`(S:SET ,dnf ,type EQ)
+                 (et-ql S:SET ,dnf ,type SUB))
 
                 (`(S:DT ,name . ,args)
-                 (et-q (S:DT ,name ,@(et:dt-map-type-args name args sub))))
+                 (et-ql S:DT ,name ,@(et:dt-map-type-args name args sub)))
 
                 (_ factor)))
      into new-dnf
@@ -1751,7 +1753,7 @@ in GEN-REPLS, if it exists."
      (let ((elems (list (et:repr--tostring-0 left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
-                 (when (and (= (length d) 1) (= (length (car d)) 1))
+                 (when (and (length= d 1) (length= (car d) 1))
                    (pcase (car (car d))
                      ((or `(S:DT ConsFull ,car-sub ,_1 ,cdr-sub ,_2)
                           `(S:ALIAS ,(or 'Cons '&Cons 'WriteCons '&WriteCons) ,car-sub ,cdr-sub))
@@ -1759,8 +1761,8 @@ in GEN-REPLS, if it exists."
                       (setq right-sub cdr-sub)
                       t))))))
        (let ((tail-nil-p
-              (and (= (length right-sub) 1)
-                   (= (length (car right-sub)) 1)
+              (and (length= right-sub 1)
+                   (length= (car right-sub) 1)
                    (equal (car (car right-sub)) '(S:DT Literal nil)))))
          (if tail-nil-p
              (format "(%s)" (mapconcat #'identity elems " "))
@@ -1883,10 +1885,12 @@ indeterminates slot."
 (et:repr--deffactor S:SET set (dnf type direction)
   :parse (list (et:repr--parse-0 dnf) (et-parse-type type) direction)
   :to-type (let* ((dnf-t (et:repr--totype-0 dnf)))
-             (if (if (eq direction 'SUPER) (et-subtype? dnf-t type) (et-subtype? type dnf-t))
+             (if (and (or (eq direction 'SUB) (et:repr--op-subtype? dnf-t type))
+                      (or (eq direction 'SUPER) (et:repr--op-subtype? type dnf-t)))
                  (et-any) (et-never)))
   :print (format "{%s %s %s}" (et:repr--tostring-0 dnf)
-                 (if (eq direction 'SUPER) ":<:" ":>:") (et-pp-type type)))
+                 (pcase direction ('SUPER ":<:") ('SUB ":>:") ('EQ ":=:"))
+                 (et-pp-type type)))
 
 (et:repr--deffactor S:NOINFER noinfer (repr &optional env)
   :parse (list (et:repr--parse-0 repr)
@@ -2090,14 +2094,14 @@ indeterminates slot."
   (et:repr--indeterminate-if (et:repr--op-subtype? type (et Nil))
                              (et:repr--totype-0 yes) (et:repr--totype-0 no)))
 
-;; (et-defspec match (type &rest options)
-;;   (pcase options
-;;     ('nil 'Never)
-;;     (`([,pat ,out] . ,rest) `(extends? ,type ,pat ,out (match ,type ,@rest)))
-;;     (`([,(and genvec (pred vectorp)) ,pat ,out] . ,rest)
-;;      `(infer ,type ,genvec ,pat ,out (match ,type ,@rest)))
-;;     (`(,default) default)
-;;     (_ (error "Invalid format for switch"))))
+(et-defspec oneof (type &rest options)
+  (pcase options
+    ('nil 'Never)
+    (`([,pat ,out] . ,rest) `(extends? ,type ,pat ,out (match ,type ,@rest)))
+    (`([,(and genvec (pred vectorp)) ,pat ,out] . ,rest)
+     `(infer ,type ,genvec ,pat ,out (match ,type ,@rest)))
+    (`(,default) default)
+    (_ (error "Invalid format for switch"))))
 
 (et:repr--defop eval ([func :const] &rest args)
   :to-string (format "{eval %s on %s}" func (mapconcat #'et:repr--tostring-0 args ", "))
@@ -2206,7 +2210,7 @@ DNF is the struct representing the matcher."
                (dolist (arg args) (et:match-matcher-new :generics generics :repr arg)))
               (`(S:GENERIC ,(pred genericp)))
               (`(S:POLY ,(pred symbolp)))
-              (`(S:SET ,_ ,(pred et:type-p) ,(or 'SUB 'SUPER)))
+              (`(S:SET ,_ ,(pred et:type-p) ,(or 'SUB 'SUPER 'EQ)))
               (`(S:NOINFER ,(pred et:repr-p) ,_))
               (`(S:OP . ,_))
               (_ (error "Invalid match factor: %s" factor))))))))
@@ -2221,7 +2225,7 @@ DNF is the struct representing the matcher."
 (defmacro et-matcher (genvec &rest args)
   (declare (indent 1) (et ($expand)))
   (or (vectorp genvec) (error "Write the generics as a vector"))
-  `(et-parse-matcher (et-q ,(if (eq (length args) 1) (car args) args))
+  `(et-parse-matcher (et-q ,(if (length= args 1) (car args) args))
                      ,genvec))
 
 (et-defun et-parse-matcher (spec: Any genvec: &Vector<Any> &optional extra-gens: List<EtGeneric>)
@@ -2402,8 +2406,9 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
      (let* ((q (list (if is-super 'Q:LEQ 'Q:GEQ) var (et-type case))))
        (et:match-succeeded (list q))))
     (`(S:SET ,mr ,type ,direction)
-     (funcall (if (xor is-super (eq 'SUPER direction))
-                  #'et:match--super-constraints-0 #'et:match--sub-constraints-0)
+     (funcall (if (eq 'EQ direction) #'et:match--iso-constraints-0
+                (if (xor is-super (eq 'SUPER direction))
+                    #'et:match--super-constraints-0 #'et:match--sub-constraints-0))
               (et:match-matcher-new :repr mr :generics generics) type))
     (`(,(or 'S:NOINFER 'S:OP 'S:POLY) . ,_)
      (let* ((req (list (if is-super 'R:LEQ 'R:GEQ)
@@ -2537,7 +2542,7 @@ information necessary to give the user better failure diagnostics."
                    collect (cons gen (et-type-to-repr (apply #'et-supersect uppers)))))
          (mrepr (et:repr-substitute-generics (et:match-matcher->repr matcher) repls nil))
          (diagnostic
-          (when (and repls (eq (length repls) (length (et:match-matcher->generics matcher))))
+          (when (and repls (length= repls (length (et:match-matcher->generics matcher))))
             (et:match-sub-constraints (et:match-matcher-new :repr mrepr) type))))
     (or (when (not (et:match-result->success diagnostic)) diagnostic)
         (et:match-failed))))
@@ -3630,17 +3635,14 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias Indirect [T] T)
 
 (et-defalias Vector [(= E Any)] VectorFull<E~E>)
-(et-defalias WriteVector [(= E Any)] VectorFull<Any~E>)
 
 
 ;;;; Cons aliases
 
 (et-defalias Cons [(= L Any) (= R L)] (ConsFull L L R R))
-(et-defalias WriteCons [(= L Any) (= R L)] (ConsFull Never L Never R))
 
 (et-defalias ListFresh [(= E Any)] (or Nil (ConsFresh E (ListFresh E))))
 (et-defalias List [(= E Any)] (or Nil (Cons E (List E))))
-(et-defalias ListFull [R W] (or Nil (ConsFull R W (ListFull R W) Never)))
 
 (et-defalias Tree [(= E Any)] (or (List (Tree E)) E))
 (et-defalias ConsTree [(= E Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
@@ -3667,15 +3669,12 @@ lazily because `List' is not yet defined when this file loads.")
 
 ;;;; Seq aliases
 
-(et-defalias SeqFull [R W]
-  (or ListFull<R~W>
-      VectorFull<R~W>
-      String^{R:>:Integer}^{W:<:Integer}
-      BoolVector^{R:>:Boolean}^{W:<:Any}
-      CharTable^{R:>:Any}^{W:<:Any}))
+(et-defalias OrdSeq [E]
+  (or List<E> Vector<E>
+      String^{E:=:Integer}
+      BoolVector^{E:=:Boolean}))
 
-(et-defalias SeqRead [(= E Any)] SeqFull<E~Never>)
-(et-defalias SeqWrite [(= E Any)] SeqFull<Any~E>)
+(et-defalias Seq [(= E Any)] (or OrdSeq<E> CharTable^{E:=:Any}))
 
 
 ;;;; Emacs aliases
