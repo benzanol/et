@@ -1,5 +1,6 @@
 ;; -*- lexical-binding: t; -*-
 
+
 ;;; ============================================================
 ;;; Buffer discovery and creation
 
@@ -22,8 +23,9 @@
 
  (@def make-indirect-buffer
        (base-buffer: Buffer|String name: String
-        &optional clone: Any inhibit-buffer-hooks: Any)
+                     &optional clone: Any inhibit-buffer-hooks: Any)
        Buffer))
+
 
 ;;; ============================================================
 ;;; Buffer properties and modification state
@@ -39,15 +41,10 @@
 
  (@def buffer-base-buffer (&optional buffer: Buffer) Buffer|Nil)
 
- ;; The result type is the type of the variable named by VARIABLE. The type
- ;; language cannot yet select a result type from a symbol argument's identity.
- (@def buffer-local-value (variable: Symbol buffer: Buffer) Todo)
+ (@def buffer-local-value (variable: [<= V Symbol] buffer: Buffer) (global-value V))
 
- ;; Each association value has the type of its corresponding variable symbol.
- ;; The type language cannot express symbol-indexed types within a heterogeneous
- ;; collection.
  (@def buffer-local-variables (&optional buffer: Buffer)
-       ListFresh<(or Symbol ConsFresh<Symbol~Todo>)>)
+       ListFresh<(or Symbol ConsFresh<Symbol~Any>)>)
 
  (@def buffer-modified-p (&optional buffer: Buffer) Boolean|@autosaved)
 
@@ -64,6 +61,7 @@
        Nil)
 
  (@def buffer-chars-modified-tick (&optional buffer: Buffer) Integer))
+
 
 ;;; ============================================================
 ;;; Buffer lifecycle and editing state
@@ -97,6 +95,7 @@
 
  (@def kill-all-local-variables (&optional kill-permanent: Any) Nil))
 
+
 ;;; ============================================================
 ;;; Overlays
 
@@ -105,12 +104,12 @@
 
  (@def make-overlay
        (beg: IntOrMarker end: IntOrMarker
-        &optional buffer: Buffer front-advance: Any rear-advance: Any)
+             &optional buffer: Buffer front-advance: Any rear-advance: Any)
        Overlay)
 
  (@def move-overlay
        (overlay: Overlay beg: IntOrMarker end: IntOrMarker
-        &optional buffer: Buffer)
+                 &optional buffer: Buffer)
        Overlay)
 
  (@def delete-overlay (overlay: Overlay) Nil)
@@ -148,5 +147,6 @@
  ;; fixed property lists. The type language cannot express an anonymous
  ;; recursive result type without introducing a supporting alias.
  (@def overlay-tree (&optional buffer: Buffer) Todo))
+
 
 ;;; ============================================================

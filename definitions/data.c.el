@@ -225,16 +225,12 @@
 
 (et-declare
  (@def +
-       ([(<= Nums &List<NumOrMarker>)] &rest numbers-or-markers: Nums)
-       (extends? Nums Nil 0
-                 (extends? Nums &List<IntOrMarker> Integer Number)))
- ;; The result is Integer exactly when every supplied argument is an integer
- ;; or marker, including the optional first argument. The declaration language
- ;; cannot capture the complete optional-and-rest argument tuple as one type.
+       (&rest numbers-or-markers: [(<= Nums &List<NumOrMarker>)])
+       (extends? Nums Nil 0 (extends? Nums &List<IntOrMarker> Integer Number)))
  (@def -
-       (&optional number-or-marker: NumOrMarker
-                  &rest more-numbers-or-markers: &List<NumOrMarker>)
-       Todo)
+       (&optional number-or-marker: [<= Num NumOrMarker]
+                  &rest more-numbers-or-markers: [<= Nums &List<NumOrMarker>])
+       (extends? Num IntOrMarker (extends? Nums &List<IntOrMarker> Integer Number) Number))
  (@def *
        ([(<= Nums &List<NumOrMarker>)] &rest numbers-or-markers: Nums)
        (extends? Nums Nil 1

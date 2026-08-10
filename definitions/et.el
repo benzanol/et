@@ -32,7 +32,9 @@
                           (func-type (plist-get decls :definition)))
                 (when (et:type-p func-type) func-type))
               ;; From recommendation
-              (et-cur-recommendation)
+              (when-let* ((rec (et-cur-recommendation))
+                          (just-fn (et-supersect rec (et AnyFn))))
+                (unless (et-never-p just-fn) just-fn))
               ;; All params are Any
               (progn (setq untyped-input (et-untyped-func-input params))
                      (et-dt 'Function untyped-input (et Any)))))

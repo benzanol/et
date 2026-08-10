@@ -25,11 +25,13 @@
  (@check progn ($tail 1))
  (@check prog1 ($prog1 ($at 1) ($tail 2)))
 
- (@check setq ($todo))
+ (@check setq ($pcase
+               `(,(and sym (pred symbolp)) ,val . ,rest)
+               ($bind [return ($symbol-set ($eval (et-literal sym)) ($at 2))]
+                      ($if-eval rest ($recurse rest)
+                                ($var return)))))
 
- (@check quote
-         ($pcase
-          `(,obj) ($eval (et-literal obj))))
+ (@check quote ($pcase `(,obj) ($eval (et-literal obj))))
 
  (@alias LexicalEnvironment True|Nil) ;todo
  (@def make-interpreted-closure
@@ -55,14 +57,13 @@
  (@check let
          ($pcase
           `(,forms . ,_body)
-          ($infer-binds (et-check-let-inits 1) ($tail 2))))
+          ($infer-binds (et-parse-let-inits 1) ($tail 2))))
 
  (@check let*
          ($pcase
           `(nil . ,_body) ($tail 2)
           `((,first . ,rest) . ,body)
-          ($exp `(let (,first)
-                   (let* ,rest ,@body)))))
+          ($exp `(let (,first) (let* ,rest ,@body)))))
 
  (@check while
          ($pcase
@@ -88,11 +89,11 @@
           `(,(and err-var (pred symbolp)) ,val) ($ignore ($at 2))
 
           `(,(and err-var (pred symbolp)) ,val (,pat . ,body) . ,rest)
-          ($temp-var var ($at 2)
-                     ($branches
-                      ($bind err-var ($eval (if (eq pat :success) (et-chk ($var var)) (et Any)))
-                             ($tail 3 1))
-                      ($recurse `(,err-var (:var ,var) ,@rest))))))
+          ($bind [return ($at 2)]
+                 ($branches
+                  ($bind [_ err-var ($if-eval (eq pat :success) ($var return) ($type Any))]
+                         ($tail 3 1))
+                  ($recurse `(,err-var (:var ,return) ,@rest))))))
 
  (@def signal (error-symbol: NonNilSymbol data: Any) Never)
 
@@ -126,6 +127,12 @@
  (@def func-arity (function: AnyFn) Cons<Integer~Integer|@many|@unevalled>)
 
  (@def special-variable-p (symbol: Symbol) Boolean))
+
+(et-defun et-parse-let-inits (rel: EtRel) Alist<Var~EtCheckFn>
+  (let* ((forms (et-cur-expr rel)))
+    (cl-loop for (sym _expr) in forms
+             for pos upfrom 0
+             collect (cons sym `(lambda () (et-check-at t ,rel ,pos 1))))))
 
 (defvar et--tuple-to-tailed-stack nil)
 (et-defun et-tuple-to-tailed (tuple: EtType) EtType

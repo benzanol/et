@@ -143,23 +143,13 @@
  (@def ngettext
        ([(<= S String) (<= P String)] msgid: S msgid-plural: P n: Integer)
        S|P)
- ;; The accepted data argument types depend on directives in FORMAT-STRING.
- ;; The type language cannot yet derive a rest-argument tuple from a string value.
- (@def message (format-string: String|Nil &rest args: Todo) String|Nil)
- ;; The accepted data argument types depend on directives in FORMAT-STRING.
- ;; The type language cannot yet derive a rest-argument tuple from a string value.
- (@def message-box (format-string: String|Nil &rest args: Todo) String|Nil)
- ;; The accepted data argument types depend on directives in FORMAT-STRING.
- ;; The type language cannot yet derive a rest-argument tuple from a string value.
- (@def message-or-box (format-string: String|Nil &rest args: Todo) String|Nil)
+ (@def message (format-string: String|Nil &rest args: &List) String|Nil)
+ (@def message-box (format-string: String|Nil &rest args: &List) String|Nil)
+ (@def message-or-box (format-string: String|Nil &rest args: &List) String|Nil)
  (@def current-message () String|Nil)
  (@def propertize (string: String &rest properties: &PlistOf<Symbol~Any>) String)
- ;; The accepted object types and argument count depend on directives in STRING.
- ;; The type language cannot yet derive a rest-argument tuple from a string value.
- (@def format (string: String &rest objects: Todo) String)
- ;; The accepted object types and argument count depend on directives in STRING.
- ;; The type language cannot yet derive a rest-argument tuple from a string value.
- (@def format-message (string: String &rest objects: Todo) String))
+ (@def format (string: String &rest objects: &List) String)
+ (@def format-message (string: String &rest objects: &List) String))
 
 ;;; ============================================================
 ;;; Character and region operations

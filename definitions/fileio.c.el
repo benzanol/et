@@ -1,5 +1,6 @@
 ;; -*- lexical-binding: t; -*-
 
+
 ;;; ============================================================
 ;;; File name handling
 
@@ -36,14 +37,15 @@
 
  (@def substitute-in-file-name (filename: String) String))
 
+
 ;;; ============================================================
 ;;; File operations
 
 (et-declare
  (@def copy-file
        (file: String newname: String
-             &optional ok-if-already-exists: Any keep-time: Any
-             preserve-uid-gid: Any preserve-permissions: Any)
+              &optional ok-if-already-exists: Any keep-time: Any
+              preserve-uid-gid: Any preserve-permissions: Any)
        Nil)
 
  (@def make-directory-internal (directory: String) Nil)
@@ -65,6 +67,7 @@
  (@def make-symbolic-link
        (target: String linkname: String &optional ok-if-already-exists: Any)
        Nil))
+
 
 ;;; ============================================================
 ;;; File status and access
@@ -90,6 +93,7 @@
 
  (@def file-regular-p (filename: String) Boolean))
 
+
 ;;; ============================================================
 ;;; File metadata
 
@@ -100,7 +104,7 @@
 
  (@def set-file-selinux-context
        (filename: String
-        context: (&Tuple String|Nil String|Nil String|Nil String|Nil))
+                  context: (&Tuple String|Nil String|Nil String|Nil String|Nil))
        Boolean)
 
  (@def file-acl (filename: String) String|Nil)
@@ -121,18 +125,19 @@
 
  (@def set-file-times
        (filename: String
-        &optional timestamp: (or Nil Number
-                                 (&Cons Integer Integer)
-                                 (&Cons Integer (&Cons Integer Integer))
-                                 (&Tuple Integer Integer)
-                                 (&Tuple Integer Integer Integer)
-                                 (&Tuple Integer Integer Integer Integer))
-        flag: Nil|@nofollow)
+                  &optional timestamp: (or Nil Number
+                                           (&Cons Integer Integer)
+                                           (&Cons Integer (&Cons Integer Integer))
+                                           (&Tuple Integer Integer)
+                                           (&Tuple Integer Integer Integer)
+                                           (&Tuple Integer Integer Integer Integer))
+                  flag: Nil|@nofollow)
        Boolean)
 
  (@def unix-sync () Nil)
 
  (@def file-newer-than-file-p (file1: String file2: String) Boolean))
+
 
 ;;; ============================================================
 ;;; File contents
@@ -140,22 +145,25 @@
 (et-declare
  (@def insert-file-contents
        (filename: String
-                 &optional visit: Any beg: Integer|Nil end: Integer|Nil
-                 replace: Any)
+                  &optional visit: Any beg: Integer|Nil end: Integer|Nil
+                  replace: Any)
        (Tuple String Integer))
 
  ;; END is a buffer position only when START is a position; it is ignored
  ;; when START is nil or a string. The type language cannot yet express this
  ;; dependency between parameter types.
  (@def write-region
-       (start: Nil|String|IntOrMarker end: Todo filename: String
-              &optional append: Any visit: Any lockname: String|Nil
-              mustbenew: Any)
+       ([] start: [<= S Nil|String|IntOrMarker]
+        end: (match S [IntOrMarker IntOrMarker] [Nil|String Nil])
+        filename: String
+        &optional append: Any visit: Any lockname: String|Nil
+        mustbenew: Any)
        Nil)
 
  (@def car-less-than-car
        (a: &Cons<NumOrMarker~Any> b: &Cons<NumOrMarker~Any>)
        Boolean))
+
 
 ;;; ============================================================
 ;;; Visited files
@@ -168,11 +176,15 @@
        (or -1 0 (Cons Integer Integer)
            (Tuple Integer Integer Integer Integer)))
 
- ;; TIME-FLAG accepts the special fixnum flags -1 and 0, or a Lisp timestamp,
- ;; but other fixnums are rejected even though integers can otherwise be
- ;; timestamps. The type language cannot distinguish this representation- and
- ;; value-dependent subset without integer refinements.
- (@def set-visited-file-modtime (&optional time-flag: Todo) Nil))
+ (@def set-visited-file-modtime
+       (&optional time-flag: (or Nil Number
+                                 (&Cons Integer Integer)
+                                 (&Cons Integer (&Cons Integer Integer))
+                                 (&Tuple Integer Integer)
+                                 (&Tuple Integer Integer Integer)
+                                 (&Tuple Integer Integer Integer Integer)))
+       Nil))
+
 
 ;;; ============================================================
 ;;; Auto-save
@@ -185,6 +197,7 @@
  (@def clear-buffer-auto-save-failure () Nil)
 
  (@def recent-auto-save-p () Boolean))
+
 
 ;;; ============================================================
 ;;; Miscellaneous i/o
@@ -199,5 +212,6 @@
  (@def file-system-info
        (filename: String)
        Nil|(Tuple Integer Integer Integer)))
+
 
 ;;; ============================================================

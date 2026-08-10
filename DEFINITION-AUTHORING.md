@@ -195,6 +195,13 @@ relationship that the current type language cannot express, including:
 This list describes common blockers, not an automatic rejection rule. Use an
 existing facility when it expresses the behavior accurately.
 
+### Format-string functions
+
+Do not encode or verify how many data arguments are required by directives in
+a format string. Declare variadic data arguments to format-string functions as
+an unconstrained rest list (`&List`). A format-dependent argument count is not
+an authoring blocker and must not cause the declaration to contain `Todo`.
+
 ### Approximation rules
 
 - Preserve every part of the declaration that can be expressed accurately.

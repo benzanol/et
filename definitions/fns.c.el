@@ -13,26 +13,12 @@
 ;;; Lengths and string comparison
 
 (et-declare
- (@def length
-       (sequence: (or &List &Vector String CharTable BoolVector
-                      ByteCodeFunction (Emacs record)))
-       Integer)
+ (@def length (sequence: (or &Seq ByteCodeFunction (Emacs record))) Integer)
  (@def safe-length (list: Any) Integer)
- (@def length<
-       (sequence: (or &List &Vector String CharTable BoolVector
-                      ByteCodeFunction (Emacs record))
-                  length: Integer)
-       Boolean)
- (@def length>
-       (sequence: (or &List &Vector String CharTable BoolVector
-                      ByteCodeFunction (Emacs record))
-                  length: Integer)
-       Boolean)
- (@def length=
-       (sequence: (or &List &Vector String CharTable BoolVector
-                      ByteCodeFunction (Emacs record))
-                  length: Integer)
-       Boolean)
+ (@def length< (sequence: (or &Seq ByteCodeFunction (Emacs record)) length: Integer) Boolean)
+ (@def length> (sequence: (or &Seq ByteCodeFunction (Emacs record)) length: Integer) Boolean)
+ (@def length= (sequence: (or &Seq ByteCodeFunction (Emacs record)) length: Integer) Boolean)
+
  (@def proper-list-p (object: Any) Integer|Nil)
  (@def string-bytes (string: String) Integer)
  (@def string-distance
@@ -64,25 +50,13 @@
 ;;; Sequence construction and copying
 
 (et-declare
- ;; The final argument is an arbitrary shared tail while preceding arguments
- ;; are copied sequences. Rest-position distinctions and mixed sharing and
- ;; freshening are not yet expressible.
- (@def append (&rest sequences: Todo) Todo)
+ ;; nontrivial
+ (@def append ([E] &rest sequences: &ListWithLast<&List<E>~List<E>>) List<E>)
  (@def concat
        (&rest sequences: &List<(or String &List<Integer> &Vector<Integer>)>)
        String)
- ;; The result element type is the union of the element types of heterogeneous
- ;; input sequences. The type language cannot yet derive an element type across
- ;; a rest list of differently shaped containers.
- (@def vconcat
-       (&rest sequences: &List<(or &List &Vector String BoolVector ByteCodeFunction)>)
-       VectorFresh<Todo>)
- ;; The result preserves the input container kind and element types while
- ;; shallowly freshening its outer structure. That kind-preserving shallow-copy
- ;; relationship is not yet expressible.
- (@def copy-sequence
-       (arg: (or &List &Vector String CharTable BoolVector (Emacs record)))
-       Todo))
+ (@def vconcat ([E] &rest sequences: &List<&OrdSeq<E>>) VectorFresh<E>)
+ (@def copy-sequence (arg: [<= S (or &Seq (Emacs record))]) (freshen-shallow S)))
 
 
 ;;; ============================================================
@@ -101,95 +75,58 @@
 ;;; Subsequences and list access
 
 (et-declare
- ;; The result freshens both the alist spine and each association pair while
- ;; sharing the keys and values. Selective shallow freshening is not yet
- ;; expressible.
- (@def copy-alist (alist: &List) Todo)
+ ;; nontrivial
+ (@def copy-alist ([L R] alist: &List<&Cons<L~R>>) ListFresh<ConsFresh<L~R>>)
  (@def substring
        (string: [<= T (or String &Vector)] &optional from: Integer|Nil to: Integer|Nil)
        (freshen-shallow T))
  (@def substring-no-properties
        (string: String &optional from: Integer|Nil to: Integer|Nil)
        String)
+
+ ;; nontrivial
  (@def take ([E] n: Integer list: &List<E>) ListFresh<E>)
  (@def ntake ([E] n: Integer list: List<E>) List<E>)
- ;; The result is a particular existing tail of LIST and must preserve the
- ;; input spine's writeability. Substructure identity and mutability
- ;; preservation are not yet expressible.
- (@def nthcdr ([E] n: Integer list: &List<E>) Todo)
+ (@def nthcdr ([E] n: Integer list: &List<E>) &List<E>)
  (@def nth ([E] n: Integer list: &List<E>) E|Nil)
-
- (@alias EltSeq [] (or &List &Vector String BoolVector CharTable))
- (@alias EltOf [<= T EltSeq]
-         (infer T [E] &List<E> E
-                (infer T [E] &Vector<E> E
-                       (extends? T String Integer
-                                 (extends? T BoolVector Boolean
-                                           (extends? T CharTable Integer
-                                                     Never))))))
- (@def elt (sequence: [<= S EltSeq] n: Integer) EltOf<S>))
+ (@def elt ([E] sequence: &Seq<E> n: Integer) E|Nil))
 
 
 ;;; ============================================================
 ;;; Membership, association, and deletion
 
 (et-declare
- ;; The result is nil or a particular existing tail of LIST, preserving the
- ;; tail's writeability. Existing-substructure identity is not yet expressible.
- (@def member (elt: Any list: &List) Todo)
- ;; The result is nil or a particular existing tail of LIST, preserving the
- ;; tail's writeability. Existing-substructure identity is not yet expressible.
- (@def memq (elt: Any list: &List) Todo)
- ;; The result is nil or a particular existing tail of LIST, preserving the
- ;; tail's writeability. Existing-substructure identity is not yet expressible.
- (@def memql (elt: Any list: &List) Todo)
- ;; The result is an existing association cell selected from ALIST. The type
- ;; language cannot preserve association-cell identity and writeability.
- (@def assq (key: Any alist: &List) Todo)
- ;; The result is an existing association cell selected from ALIST. The type
- ;; language cannot preserve association-cell identity and writeability.
- (@def assoc
-       (key: Any alist: &List
-             &optional testfn: (or Nil (fn (Args Any Any) Any)))
-       Todo)
- ;; The result is an existing association cell selected from ALIST. The type
- ;; language cannot preserve association-cell identity and writeability.
- (@def rassq (key: Any alist: &List) Todo)
- ;; The result is an existing association cell selected from ALIST. The type
- ;; language cannot preserve association-cell identity and writeability.
- (@def rassoc (key: Any alist: &List) Todo)
- ;; The function destructively splices LIST and may return an existing tail.
- ;; Destructive spine updates and returned-substructure identity are not yet
- ;; expressible.
- (@def delq (elt: Any list: List) Todo)
- ;; Lists are destructively spliced, whereas vectors and strings are copied,
- ;; and the result preserves the input container kind. This conditional
- ;; mutation, freshness, and kind relationship is not yet expressible.
- (@def delete (elt: Any seq: (or List &Vector String)) Todo))
+ ;; nontrivial
+ (@def member ([E] elt: Any list: &List<E>) &List<E>)
+ (@def memq   ([E] elt: Any list: &List<E>) &List<E>)
+ (@def memql  ([E] elt: Any list: &List<E>) &List<E>)
+ (@def assq ([K V] key: K alist: &List<&Cons<K~V>>) Nil|&Cons<K~V>)
+ (@def assoc ([K V] key: K alist: &List<&Cons<K~V>>
+              &optional testfn: (or Nil (fn (Args V V) Any)))
+       Nil|&Cons<K~V>)
+ (@def rassq ([K V] key: V alist: &List<&Cons<K~V>>) Nil|&Cons<K~V>)
+ (@def rassoc ([K V] key: V alist: &List<&Cons<K~V>>
+               &optional testfn: (or Nil (fn (Args V V) Any)))
+       Nil|&Cons<K~V>)
+ (@def delq ([E] elt: Any list: List<E>) List<E>)
+ (@def delete ([E] elt: E seq: List<E>) List<E>))
 
 
 ;;; ============================================================
 ;;; Reversing and sorting
 
 (et-declare
- ;; Lists, vectors, and bool-vectors are modified in place while strings are
- ;; copied, and the result preserves the input container kind and element type.
- ;; This conditional mutation and kind-preserving relationship is not yet
- ;; expressible.
- (@def nreverse (seq: (or List Vector String BoolVector)) Todo)
- ;; The result is a fresh container of the same kind and element type as SEQ.
- ;; Kind-preserving freshening across sequence variants is not yet expressible.
- (@def reverse (seq: (or &List &Vector String BoolVector)) Todo)
- ;; KEY's input is SEQ's element type and LESSP compares KEY's output, while a
- ;; nil KEY makes LESSP compare the elements directly. The result preserves
- ;; SEQ's kind and element type, but its identity depends on :in-place and on
- ;; the legacy calling convention. These callback dependencies and
- ;; value-dependent freshness and mutation are not yet expressible.
+ ;; nontrivial
+ (@def nreverse (seq: [<= S OrdSeq]) S)
+ (@def reverse (seq: [<= S &OrdSeq]) (freshen-shallow S))
  (@def sort
-       (seq: (or List Vector)
-             &key key: Todo lessp: Todo
-             reverse: Boolean in-place: Boolean)
-       Todo))
+       ([P E K] seq: [<= S (if-non-nil? P List<E>|Vector<E> &List<E>|&Vector<E>)]
+        &key
+        key: (or (fn (Args E) K) Nil&{K:=:E})
+        lessp: (fn (Args K K) Any)
+        reverse: Boolean
+        in-place: P)
+       S))
 
 
 ;;; ============================================================
@@ -226,18 +163,18 @@
 ;;; Mutable sequences and list concatenation
 
 (et-declare
- ;; ITEM's type depends on ARRAY's writable element type, and the result is the
- ;; same mutated array. Cross-kind writable-element relationships and return
- ;; identity are not yet expressible.
+ ;; nontrivial
  (@def fillarray
-       (array: (or WriteVector String CharTable BoolVector) item: Todo)
-       Todo)
+       ([<= A (or Vector String CharTable BoolVector)]
+        array: A
+        item: (oneof A
+                     [[E] WriteVector<E> E]
+                     [String Integer]
+                     [CharTable Any]
+                     [BoolVector Any]))
+       A)
  (@def clear-string (string: String) Nil)
- ;; Every non-final argument must be a writable list and is destructively
- ;; linked to the following value, while the final argument is an arbitrary
- ;; shared tail. Rest-position mutation and returned-argument identity are not
- ;; yet expressible.
- (@def nconc (&rest lists: Todo) Todo))
+ (@def nconc ([E] &rest lists: List<List<E>>) List<E>))
 
 
 ;;; ============================================================
@@ -248,9 +185,9 @@
  ;; kinds. The type language has no common element-typed sequence abstraction
  ;; for that callback relationship.
  (@def mapconcat
-       (function: (fn (Args Todo) (or String &List<Integer> &Vector<Integer>))
-                  sequence: (or &List &Vector BoolVector String ByteCodeFunction)
-                  &optional separator: (or Nil String &List<Integer> &Vector<Integer>))
+       ([E] function: (fn (Args E) &OrdSeq<Integer>)
+        sequence: (or &OrdSeq<E>)
+        &optional separator: (or Nil &OrdSeq<Integer>))
        String)
  ;; FUNCTION's input depends on SEQUENCE's element type across four container
  ;; kinds, and each result-list element depends on FUNCTION's output. Those
@@ -361,7 +298,7 @@
  ;; The result is a fresh table preserving the source table's test, weakness,
  ;; key type, value type, and shared entries. Hash-table parameterization and
  ;; shallow freshening are not yet expressible.
- (@def copy-hash-table (table: (Emacs hash-table)) Todo)
+ (@def copy-hash-table (table: (Emacs hash-table)) (Emacs hash-table))
  (@def hash-table-count (table: (Emacs hash-table)) Integer)
  (@def hash-table-rehash-size (table: (Emacs hash-table)) Number)
  (@def hash-table-rehash-threshold (table: (Emacs hash-table)) Number)
