@@ -5,19 +5,14 @@
 ;;; Data type predicates
 
 (et-declare
- (@def eq ([A B] obj1: A obj2: B)
-       (or Nil (and True (bindsof (and A B)))))
+ (@def eq ([A B] obj1: A obj2: B) (or Nil (when (and A B) True)))
  (@def null ([T] object: T) (is? T Nil))
  (@def type-of (object: Any) NonNilSymbol)
  (@def cl-type-of (object: Any) NonNilSymbol)
  (@def consp ([T] object: T) (is? T Cons))
- (@def atom ([T] object: T)
-       (or (and True (bindsof (subtract T Cons)))
-           (and Nil (bindsof (and T Cons)))))
+ (@def atom ([T] object: T) (isnt? T Cons))
  (@def listp ([T] object: T) (is? T Nil|Cons))
- (@def nlistp ([T] object: T)
-       (or (and True (bindsof (subtract T Nil|Cons)))
-           (and Nil (bindsof (and T Nil|Cons)))))
+ (@def nlistp ([T] object: T) (isnt? T Nil|Cons))
  (@def bare-symbol-p ([T] object: T) (is-a? T Symbol))
  (@def symbol-with-pos-p ([T] object: T) (is? T (Emacs symbol-with-pos)))
  (@def symbolp ([T] object: T) (is? T Symbol))
@@ -29,10 +24,8 @@
  (@def char-table-p ([T] object: T) (is? T CharTable))
  (@def vector-or-char-table-p ([T] object: T) (is? T Vector|CharTable))
  (@def bool-vector-p ([T] object: T) (is? T BoolVector))
- (@def arrayp ([T] object: T)
-       (is? T String|Vector|CharTable|BoolVector))
- (@def sequencep ([T] object: T)
-       (is? T Nil|Cons|String|Vector|CharTable|BoolVector))
+ (@def arrayp ([T] object: T) (is? T String|Vector|CharTable|BoolVector))
+ (@def sequencep ([T] object: T) (is? T Nil|Cons|String|Vector|CharTable|BoolVector))
  (@def bufferp ([T] object: T) (is? T Buffer))
  (@def markerp ([T] object: T) (is? T Marker))
  (@def user-ptrp ([T] object: T) (is? T (Emacs user-ptr)))
@@ -44,8 +37,7 @@
  (@def char-or-string-p ([T] object: T) (is-a? T String|Integer))
  (@def integerp ([T] object: T) (is? T Integer))
  (@def integer-or-marker-p ([T] object: T) (is? T IntOrMarker))
- (@def natnump ([T] object: T)
-       (is? T (or 0 (and Integer Positive))))
+ (@def natnump ([T] object: T) (is-a? T Integer))
  (@def numberp ([T] object: T) (is? T Number))
  (@def number-or-marker-p ([T] object: T) (is? T NumOrMarker))
  (@def floatp ([T] object: T) (is-a? T Number))
@@ -59,11 +51,11 @@
 
 (et-declare
  (@def car ([T] list: (or (and Nil (set T Nil)) (&Cons T Any))) T)
- (@def car-safe ([O] object: O) (infer O [T] (&Cons T Any) T Nil))
- (@def cdr ([T] list: (or (and Nil (set T Nil)) (&Cons Any T))) T)
- (@def cdr-safe ([O] object: O) (infer O [T] (&Cons Any T) T Nil))
- (@def setcar ([T] cell: WriteCons<T~Never> newcar: T) T)
- (@def setcdr ([T] cell: WriteCons<Never~T> newcdr: T) T))
+ (@def car-safe ([O] object: O) (infer O [T] &Cons<T~Any> T Nil))
+ (@def cdr ([T] list: (or (and Nil (set T Nil)) &Cons<Any~T>)) T)
+ (@def cdr-safe ([O] object: O) (infer O [T] &Cons<Any~T> T Nil))
+ (@def setcar ([A B] cell: Cons<A~B> newcar: A) A)
+ (@def setcdr ([A B] cell: Cons<A~B> newcdr: B) B))
 
 
 ;;; ============================================================
@@ -72,8 +64,8 @@
 (et-declare
  (@def boundp (symbol: Symbol) Boolean)
  (@def fboundp (symbol: Symbol) Boolean)
- (@def makunbound ([(<= S Var)] symbol: S) S)
- (@def fmakunbound ([(<= S Var)] symbol: S) S)
+ (@def makunbound (symbol: [<= S Var]) S)
+ (@def fmakunbound (symbol: [<= S Var]) S)
  (@def symbol-function (symbol: Symbol) Any)
  (@def symbol-plist (symbol: Symbol) Any)
  (@def symbol-name (symbol: Symbol) String)
@@ -97,13 +89,10 @@
  (@def subr-type (subr: Subr) Nil|Tuple<@function~List<Sexp>~Sexp>)
  (@def subr-native-comp-unit (subr: Subr)
        (or Nil (Emacs native-comp-unit)))
- ;; The unit's file slot is mutable and the setter accepts any Lisp value.
- ;; Field-dependent result types are needed to recover its current type.
- (@def native-comp-unit-file (comp-unit: (Emacs native-comp-unit)) Todo)
+ (@def native-comp-unit-file (comp-unit: (Emacs native-comp-unit)) Any)
  (@def native-comp-unit-set-file (comp-unit: (Emacs native-comp-unit) new-file: Any)
        (Emacs native-comp-unit))
- (@def interactive-form (cmd: Any)
-       (or Nil (&Tuple @interactive Any)))
+ (@def interactive-form (cmd: Any) &Tuple<@interactive~Any>?)
  (@def command-modes (command: Any) &List<Symbol>))
 
 
@@ -115,29 +104,22 @@
  ;; while non-symbols are returned unchanged. A conditional replacement
  ;; operation over union members is needed to express that result.
  (@def indirect-variable (object: Any) Todo)
- ;; A variable's value depends on the identity of SYMBOL. Symbol-property
- ;; dependent result types are needed to replace this return approximation.
- (@def symbol-value (symbol: Symbol) Todo)
+ (@def symbol-value (symbol: Symbol) Any)
  (@def set ([T] symbol: Var newval: T) T)
  (@def add-variable-watcher
-       (symbol: Var
-                watch-function: (fn (Args Symbol Any
-                                          (or @set @let @unlet @makunbound @defvaralias)
-                                          Buffer|Nil)
-                                    Any))
+       ([] symbol: Var
+        watch-function:
+        (fn (Args Symbol Any (or @set @let @unlet @makunbound @defvaralias) Buffer?) Any))
        Nil)
  (@def remove-variable-watcher
-       (symbol: Var
-                watch-function: (fn (Args Symbol Any
-                                          (or @set @let @unlet @makunbound @defvaralias)
-                                          Buffer|Nil)
-                                    Any))
+       ([] symbol: Var
+        watch-function: 
+        (fn (Args Symbol Any (or @set @let @unlet @makunbound @defvaralias) Buffer?)
+            Any))
        Nil)
  (@def get-variable-watchers
        (symbol: Symbol)
-       (List (fn (Args Symbol Any
-                       (or @set @let @unlet @makunbound @defvaralias)
-                       Buffer|Nil)
+       (List (fn (Args Symbol Any (or @set @let @unlet @makunbound @defvaralias) Buffer?)
                  Any))))
 
 
@@ -146,58 +128,31 @@
 
 (et-declare
  (@def default-boundp (symbol: Symbol) Boolean)
- ;; A default value depends on the identity of SYMBOL. Symbol-property
- ;; dependent result types are needed to replace this return approximation.
- (@def default-value (symbol: Symbol) Todo)
+ (@def default-value (symbol: Symbol) Any)
  (@def set-default ([T] symbol: Var value: T) T)
- (@def make-variable-buffer-local ([(<= V Var)] variable: V) V)
- (@def make-local-variable ([(<= V Var)] variable: V) V)
- (@def kill-local-variable ([(<= V Var)] variable: V) V)
- (@def local-variable-p
-       (variable: Symbol &optional buffer: Buffer|Nil)
-       Boolean)
- (@def local-variable-if-set-p
-       (variable: Symbol &optional buffer: Buffer|Nil)
-       Boolean)
- (@def variable-binding-locus (variable: Symbol) Buffer|Terminal|Nil))
+ (@def make-variable-buffer-local (variable: [<= V Var]) V)
+ (@def make-local-variable (variable: [<= V Var]) V)
+ (@def kill-local-variable (variable: [<= V Var]) V)
+ (@def local-variable-p (variable: Symbol &optional buffer: Buffer?) Boolean)
+ (@def local-variable-if-set-p (variable: Symbol &optional buffer: Buffer?) Boolean)
+ (@def variable-binding-locus (variable: Symbol) Buffer|Terminal?))
 
 
 ;;; ============================================================
 ;;; Function indirection
 
 (et-declare
- ;; Symbols are replaced by arbitrarily typed function-cell values while
- ;; non-symbols are returned unchanged. A conditional replacement operation
- ;; over unions is needed to express that result.
- (@def indirect-function (object: Any &optional noerror: Any) Todo))
+ ;; nontrivial
+ (@def indirect-function (object: Any &optional noerror: Any) Any))
 
 
 ;;; ============================================================
 ;;; Array elements
 
 (et-declare
- ;; Char tables lack an element parameter, and closures and records have
- ;; index-dependent layouts. Element lookup needs generic char tables,
- ;; existential records, and index-dependent result types.
- (@def aref
-       ([T]
-        array: (or &Vector<T>
-                   (and String (set T Integer))
-                   (and BoolVector (set T Boolean))
-                   (and CharTable (set T Todo))
-                   (and Closure (set T Todo))
-                   (and Todo (set T Todo)))
-        idx: Integer)
-       T)
- ;; Records include Struct values with arbitrary names and generic arguments.
- ;; Existential Struct types are needed for the record branch of ARRAY.
- (@def aset
-       ([T]
-        array: (or WriteVector<T>
-                   (and String (set T Integer))
-                   BoolVector CharTable Todo)
-        idx: Integer newelt: T)
-       T))
+ ;; nontrivial
+ (@def aref ([T] array: ArefSeq<T> idx: Integer) T)
+ (@def aset ([T] array: AsetSeq<T> idx: Integer newelt: T) T))
 
 
 ;;; ============================================================
@@ -224,52 +179,32 @@
 ;;; Arithmetic operations
 
 (et-declare
- (@def +
-       (&rest numbers-or-markers: [(<= Nums &List<NumOrMarker>)])
-       (extends? Nums Nil 0 (extends? Nums &List<IntOrMarker> Integer Number)))
- (@def -
-       (&optional number-or-marker: [<= Num NumOrMarker]
-                  &rest more-numbers-or-markers: [<= Nums &List<NumOrMarker>])
-       (extends? Num IntOrMarker (extends? Nums &List<IntOrMarker> Integer Number) Number))
- (@def *
-       ([(<= Nums &List<NumOrMarker>)] &rest numbers-or-markers: Nums)
-       (extends? Nums Nil 1
-                 (extends? Nums &List<IntOrMarker> Integer Number)))
- (@def /
-       ([(<= N NumOrMarker) (<= Ds &List<NumOrMarker>)]
-        number: N &rest divisors: Ds)
-       (extends? N IntOrMarker
-                 (extends? Ds &List<IntOrMarker> Integer Number)
-                 Number))
+ (@def + (&rest numbers-or-markers: [(<= Nums &List<NumOrMarker>)])
+       (switch Nums [Nil 0] [&List<IntOrMarker> Integer] Number))
+ (@def - (&optional number-or-marker: [<= Num NumOrMarker]
+                    &rest more-numbers-or-markers: [<= Nums &List<NumOrMarker>])
+       (switch Nums [Nil 0] [&List<IntOrMarker> Integer] Number))
+ (@def * ([(<= Nums &List<NumOrMarker>)] &rest numbers-or-markers: Nums)
+       (switch Nums [Nil 1] [&List<IntOrMarker> Integer] Number))
+ (@def / ([(<= N NumOrMarker) (<= Ds &List<NumOrMarker>)] number: N &rest divisors: Ds)
+       (extends? N IntOrMarker (extends? Ds &List<IntOrMarker> Integer Number) Number))
  (@def % (x: IntOrMarker y: IntOrMarker) Integer)
- (@def mod
-       ([(<= X NumOrMarker) (<= Y NumOrMarker)] x: X y: Y)
-       (extends? X IntOrMarker
-                 (extends? Y IntOrMarker Integer Number)
-                 Number))
+ (@def mod ([(<= X NumOrMarker) (<= Y NumOrMarker)] x: X y: Y)
+       (extends? X IntOrMarker (extends? Y IntOrMarker Integer Number) Number))
  (@def max
-       ([(<= N NumOrMarker) (<= Ns &List<NumOrMarker>)]
-        number-or-marker: N &rest numbers-or-markers: Ns)
-       (extends? N IntOrMarker
-                 (extends? Ns &List<IntOrMarker> Integer Number)
-                 Number))
- (@def min
-       ([(<= N NumOrMarker) (<= Ns &List<NumOrMarker>)]
-        number-or-marker: N &rest numbers-or-markers: Ns)
-       (extends? N IntOrMarker
-                 (extends? Ns &List<IntOrMarker> Integer Number)
-                 Number))
+       ([(<= N NumOrMarker) (<= Ns &List<NumOrMarker>)] number-or-marker: N
+        &rest numbers-or-markers: Ns)
+       (extends? &Cons<N~Ns> &List<IntOrMarker> Integer Number))
+ (@def min ([(<= N NumOrMarker) (<= Ns &List<NumOrMarker>)]
+            number-or-marker: N &rest numbers-or-markers: Ns)
+       (extends? &Cons<N~Ns> &List<IntOrMarker> Integer Number))
  (@def logand (&rest ints-or-markers: &List<IntOrMarker>) Integer)
  (@def logior (&rest ints-or-markers: &List<IntOrMarker>) Integer)
  (@def logxor (&rest ints-or-markers: &List<IntOrMarker>) Integer)
  (@def logcount (value: Integer) Integer)
  (@def ash (value: Integer count: Integer) Integer)
- (@def 1+
-       ([(<= N NumOrMarker)] number: N)
-       (extends? N IntOrMarker Integer Number))
- (@def 1-
-       ([(<= N NumOrMarker)] number: N)
-       (extends? N IntOrMarker Integer Number))
+ (@def 1+ (number: [<= N NumOrMarker]) (extends? N IntOrMarker Integer Number))
+ (@def 1- (number: [<= N NumOrMarker]) (extends? N IntOrMarker Integer Number))
  (@def lognot (number: Integer) Integer)
  (@def byteorder () 66|108))
 
@@ -278,6 +213,7 @@
 ;;; Bool vector operations
 
 (et-declare
+ ;; todo: are the return types wrong?
  (@def bool-vector-exclusive-or
        ([(<= C BoolVector|Nil)] a: BoolVector b: BoolVector &optional c: C)
        (if-nil? C BoolVector BoolVector|Nil))

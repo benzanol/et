@@ -1489,6 +1489,10 @@ never be read for any purpose other than assertions."
 (et-defun et:repr--parse-atom (s: String) EtRepr
   "Parse a single type atom into an `et-type'."
   (cond
+   ;; Ends with question mark
+   ((string-match "^\\(.*\\)\\?$" s)
+    (et:repr--parse-0 (list 'or 'Nil (match-string 1 s))))
+
    ;; Literal number
    ((string-match "^[0-9]+\\(\\.[0-9]+\\)?$" s)
     (et:repr--parse-0 (list 'Literal (string-to-number s)) nil))
@@ -2094,12 +2098,14 @@ indeterminates slot."
   (et:repr--indeterminate-if (et:repr--op-subtype? type (et Nil))
                              (et:repr--totype-0 yes) (et:repr--totype-0 no)))
 
-(et-defspec oneof (type &rest options)
+(et-defspec switch (type &rest options)
   (pcase options
     ('nil 'Never)
-    (`([,pat ,out] . ,rest) `(extends? ,type ,pat ,out (match ,type ,@rest)))
-    (`([,(and genvec (pred vectorp)) ,pat ,out] . ,rest)
-     `(infer ,type ,genvec ,pat ,out (match ,type ,@rest)))
+    ((or `([,pat ,out] . ,rest) (and `([,pat] . ,rest) (let out pat)))
+     `(extends? ,type ,pat ,out (switch ,type ,@rest)))
+    ((or `([,(and genvec (pred vectorp)) ,pat ,out] . ,rest)
+         (and `([,(and genvec (pred vectorp)) ,pat] . ,rest) (let out pat)))
+     `(infer ,type ,genvec ,pat ,out (switch ,type ,@rest)))
     (`(,default) default)
     (_ (error "Invalid format for switch"))))
 
@@ -2107,10 +2113,19 @@ indeterminates slot."
   :to-string (format "{eval %s on %s}" func (mapconcat #'et:repr--tostring-0 args ", "))
   (apply func args))
 
+(et:repr--defop when (cond then)
+  :to-string (format "{when %s then %s}" (et:repr--tostring-0 cond) (et:repr--tostring-0 then))
+  (et:algebra-when cond then))
+
 (et:repr--defop is? (type is)
   :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
   (et-union (et:algebra-when (et-supersect type is) (et True))
             (et:algebra-when (et-subtract type is) (et Nil))))
+
+(et:repr--defop isnt? (type is)
+  :to-string (format "{%s isn't %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
+  (et-union (et:algebra-when (et-supersect type is) (et Nil))
+            (et:algebra-when (et-subtract type is) (et True))))
 
 ;; Same as 'is', but the 'nil' case doesn't necessarily mean the value IS NOT the type
 (et:repr--defop is-a? (type is)
@@ -3623,60 +3638,6 @@ lazily because `List' is not yet defined when this file loads.")
 
 ;;; ============================================================
 ;;; Define aliases
-;;;; Basic aliases
-
-(et-defalias Boolean [] (or Nil True))
-
-;; All functions are a subtype of AnyFn
-(et-defalias AnyFn [] (Function Never Any))
-(et-defalias IdFn [T] (Function T T))
-(et-defalias Sink [T] (Function (Args T) Nil))
-
-(et-defalias Indirect [T] T)
-
-(et-defalias Vector [(= E Any)] VectorFull<E~E>)
-
-
-;;;; Cons aliases
-
-(et-defalias Cons [(= L Any) (= R L)] (ConsFull L L R R))
-
-(et-defalias ListFresh [(= E Any)] (or Nil (ConsFresh E (ListFresh E))))
-(et-defalias List [(= E Any)] (or Nil (Cons E (List E))))
-
-(et-defalias Tree [(= E Any)] (or (List (Tree E)) E))
-(et-defalias ConsTree [(= E Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
-
-(et-defalias Alist [K V] (List (Cons K V)))
-
-(et-defalias PlistOf [K V] (or Nil (Cons K (Cons V (PlistOf K V)))))
-
-(et-defspec Tuple (&rest args) (et:type-tuple-spec 'Cons args))
-(et-defspec Args (&rest args) (et:type-tuple-spec '&Cons args))
-(et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
-(et-defspec Args* (&rest args) (et:type-tuple-star-spec '&Cons args))
-
-(et-defalias ListWithLast [E Last]
-  (or (Cons Last Nil)
-      (Cons E ListWithLast<E~Last>)))
-
-(et-defalias Sexp []
-  (or Symbol String Number
-      (Cons Sexp Sexp)
-      (Vector Sexp)))
-(et-defalias Sexps [] List<Sexp>)
-
-
-;;;; Seq aliases
-
-(et-defalias OrdSeq [E]
-  (or List<E> Vector<E>
-      String^{E:=:Integer}
-      BoolVector^{E:=:Boolean}))
-
-(et-defalias Seq [(= E Any)] (or OrdSeq<E> CharTable^{E:=:Any}))
-
-
 ;;;; Emacs aliases
 
 (defvar et-aliased-emacs-types
@@ -3697,6 +3658,86 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias Font [] (or FontSpec FontEntity FontObject))
 (et-defalias IntOrMarker [] (or Integer Marker))
 (et-defalias NumOrMarker [] (or Number Marker))
+
+
+;;;; Cons aliases
+
+(et-defalias Cons [(= L Any) (= R Any)] (ConsFull L L R R))
+
+(et-defalias ListFresh [(= E Any)] (or Nil (ConsFresh E (ListFresh E))))
+(et-defalias List [(= E Any)] (or Nil (Cons E (List E))))
+
+(et-defalias Tree [(= E Any)] (or (List (Tree E)) E))
+(et-defalias ConsTree [(= E Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
+
+(et-defalias Alist [K V] (List (Cons K V)))
+
+(et-defalias PlistOf [K V] (or Nil (Cons K (Cons V (PlistOf K V)))))
+
+(et-defspec Tuple (&rest args) (et:type-tuple-spec 'Cons args))
+(et-defspec Args (&rest args) (et:type-tuple-spec '&Cons args))
+(et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
+(et-defspec Args* (&rest args) (et:type-tuple-star-spec '&Cons args))
+
+(et-defalias ListWithLast [E Last]
+  (or (Cons Last Nil)
+      (Cons E ListWithLast<E~Last>)))
+
+
+;;;; Misc aliases
+
+(et-defalias Boolean [] (or Nil True))
+;; Most places that take a boolean can actually take anything.
+;; Use Bool for these instead of Any to make it more clear
+(et-defalias Bool [] Any)
+
+;; All functions are a subtype of AnyFn
+(et-defalias AnyFn [] (Function Never Any))
+(et-defalias IdFn [T] (Function T T))
+(et-defalias Sink [T] (Function (Args T) Nil))
+
+(et-defalias Indirect [T] T)
+
+(et-defalias Vector [(= E Any)] VectorFull<E~E>)
+(et-defalias VectorW [(= W Any)] VectorFull<Any~W>)
+
+(et-defalias Sexp []
+  (or Symbol String Number
+      (Cons Sexp Sexp)
+      (Vector Sexp)))
+(et-defalias Sexps [] List<Sexp>)
+
+
+;;;; Seq aliases
+
+(et-defalias ConcatSeq [(= E Any)] (or List<E> Vector<E> String^{E:=:Integer}))
+(et-defalias OrdSeq [(= E Any)] (or ConcatSeq<E> BoolVector^{E:=:Boolean}))
+(et-defalias EltSeq [(= E Any)] (or OrdSeq<E> CharTable^{E:=:Any}))
+(et-defalias LenSeq [(= E Any)] (or EltSeq<E> (and (Emacs record) E:=:Any)))
+(et-defalias MapSeq [E] (or OrdSeq<E> Closure^{E:=:Any}))
+
+(et-defalias ArefSeq [E]
+  (or &Vector<E>
+      String^{E:>:Integer}
+      BoolVector^{E:>:Boolean}
+      CharTable^{E:>:Any}
+      Closure^{E:>:Any}
+      (and (Emacs record) E:>:Any)))
+(et-defalias AsetSeq [E]
+  (or VectorW<E>
+      String^{E:<:Integer}
+      BoolVector^{E:<:Boolean}
+      CharTable^{E:<:Any}
+      (and (Emacs record) E:<:Never)))
+
+(et-defalias FillableArray [E]
+  (or VectorW<E> String^{E:<:Integer}
+      CharTable^{E:<:Integer}
+      BoolVector^{E:<:Any}))
+
+(et-defalias StringOrBuffer [(<= Idx IntOrMarker)]
+  (or String^{Idx:<:Integer}
+      Buffer^{Idx:<:IntOrMarker}))
 
 
 ;;; ============================================================
