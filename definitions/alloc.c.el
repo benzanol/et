@@ -27,7 +27,6 @@
  ;; SLOTS, and INIT. The type language cannot yet represent value-dependent
  ;; record schemas.
  (@def make-record (type: Any slots: Integer init: Any) Todo)
-
  ;; The result's runtime record type and ordered slot types depend on TYPE
  ;; and SLOTS. The type language cannot yet represent value-dependent record
  ;; schemas.

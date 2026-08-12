@@ -18,27 +18,26 @@
  (@def length< (sequence: &LenSeq length: Integer) Boolean)
  (@def length> (sequence: &LenSeq length: Integer) Boolean)
  (@def length= (sequence: &LenSeq length: Integer) Boolean)
-
  (@def proper-list-p (object: Any) Integer?)
  (@def string-bytes (string: String) Integer)
  (@def string-distance
-       (string1: String string2: String &optional bytecompare: Boolean)
+       (string1: String string2: String &optional bytecompare: Bool)
        Integer)
  (@def string-equal (s1: Symbol|String s2: Symbol|String) Boolean)
  (@def compare-strings
        (str1: String start1: Integer? end1: Integer?
               str2: String start2: Integer? end2: Integer?
-              &optional ignore-case: Boolean)
+              &optional ignore-case: Bool)
        Integer|True)
  (@def string-lessp (string1: Symbol|String string2: Symbol|String) Boolean)
  (@def string-version-lessp (string1: Symbol|String string2: Symbol|String) Boolean)
  (@def string-collate-lessp
        (s1: Symbol|String s2: Symbol|String
-            &optional locale: String|Nil ignore-case: Boolean)
+            &optional locale: String? ignore-case: Bool)
        Boolean)
  (@def string-collate-equalp
        (s1: Symbol|String s2: Symbol|String
-            &optional locale: String|Nil ignore-case: Boolean)
+            &optional locale: String? ignore-case: Bool)
        Boolean))
 
 
@@ -75,7 +74,6 @@
        (string: [<= T (or String &Vector)] &optional from: Integer? to: Integer?)
        (freshen-shallow T))
  (@def substring-no-properties (string: String &optional from: Integer? to: Integer?) String)
-
  ;; nontrivial
  (@def take ([E] n: Integer list: &List<E>) ListFresh<E>)
  (@def ntake ([E] n: Integer list: List<E>) List<E>)
@@ -92,14 +90,14 @@
  (@def member ([E] elt: Any list: &List<E>) &List<E>)
  (@def memq   ([E] elt: Any list: &List<E>) &List<E>)
  (@def memql  ([E] elt: Any list: &List<E>) &List<E>)
- (@def assq ([K V] key: K alist: &List<&Cons<K~V>>) Nil|&Cons<K~V>)
+ (@def assq ([K V] key: K alist: &List<&Cons<K~V>>) &Cons<K~V>?)
  (@def assoc ([K V] key: K alist: &List<&Cons<K~V>>
               &optional testfn: (or Nil (fn (Args V V) Any)))
-       Nil|&Cons<K~V>)
- (@def rassq ([K V] key: V alist: &List<&Cons<K~V>>) Nil|&Cons<K~V>)
+       &Cons<K~V>?)
+ (@def rassq ([K V] key: V alist: &List<&Cons<K~V>>) &Cons<K~V>?)
  (@def rassoc ([K V] key: V alist: &List<&Cons<K~V>>
                &optional testfn: (or Nil (fn (Args V V) Any)))
-       Nil|&Cons<K~V>)
+       &Cons<K~V>?)
  (@def delq ([E] elt: Any list: List<E>) List<E>)
  (@def delete ([E] elt: E seq: List<E>) List<E>))
 
@@ -116,7 +114,7 @@
         &key
         key: (or (fn (Args E) K) Nil&{K:=:E})
         lessp: (fn (Args K K) Any)
-        reverse: Boolean
+        reverse: Bool
         in-place: P)
        S))
 
@@ -129,7 +127,7 @@
  (@def plist-get
        ([K V] plist: &PlistOf<K~V> prop: K
         &optional predicate: (or Nil (fn (Args K K) Any)))
-       V|Nil)
+       V?)
  (@def get (symbol: Symbol propname: Any) Any)
  ;; The result widens the plist's key and value types for a new property and may
  ;; be either the original plist after mutation or a fresh head containing the
@@ -182,7 +180,7 @@
 
 (et-declare
  (@def yes-or-no-p (prompt: String) Boolean)
- (@def load-average (&optional use-floats: Boolean) List<Number>))
+ (@def load-average (&optional use-floats: Bool) List<Number>))
 
 
 ;;; ============================================================
@@ -199,7 +197,7 @@
 
 (et-declare
  (@def widget-put ([V] widget: Cons property: Any value: V) V)
- (@def widget-get (widget: Nil|&Cons property: Any) Any)
+ (@def widget-get (widget: &Cons? property: Any) Any)
  (@def widget-apply (widget: &Cons property: Any &rest args: &List) Any)
  (@def locale-info (item: Symbol) (or Nil String &Vector<String> (Tuple Integer Integer))))
 
@@ -209,20 +207,20 @@
 
 (et-declare
  (@def base64-encode-region
-       (beg: IntOrMarker end: IntOrMarker &optional no-line-break: Boolean)
+       (beg: IntOrMarker end: IntOrMarker &optional no-line-break: Bool)
        Integer)
  (@def base64url-encode-region
-       (beg: IntOrMarker end: IntOrMarker &optional no-pad: Boolean)
+       (beg: IntOrMarker end: IntOrMarker &optional no-pad: Bool)
        Integer)
  (@def base64-encode-string
-       (string: String &optional no-line-break: Boolean)
+       (string: String &optional no-line-break: Bool)
        String)
  (@def base64url-encode-string
-       (string: String &optional no-pad: Boolean)
+       (string: String &optional no-pad: Bool)
        String)
  (@def base64-decode-region
        (beg: IntOrMarker end: IntOrMarker
-             &optional base64url: Boolean ignore-invalid: Boolean)
+             &optional base64url: Bool ignore-invalid: Bool)
        Integer)
  (@def base64-decode-string
        (string: String &optional base64url: Bool ignore-invalid: Bool)
@@ -310,8 +308,8 @@
        (&optional buffer-or-name: StringOrBuffer?)
        (Tuple Integer Integer Number))
  (@def string-search
-       (needle: String haystack: String &optional start-pos: Integer|Nil)
-       Integer|Nil)
+       (needle: String haystack: String &optional start-pos: Integer?)
+       Integer?)
  (@def object-intervals
        (object: StringOrBuffer)
        List<Tuple<Integer~Integer~&List>>)

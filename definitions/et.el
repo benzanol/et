@@ -4,9 +4,9 @@
 ;;; ============================================================
 ;;; Function checkers
 
-(et-defvar et:checker--checking-defun Nil|Var nil)
+(et-defvar et:checker--checking-defun Var? nil)
 
-(et-defvar et-checking-defun Var|Nil nil
+(et-defvar et-checking-defun Var? nil
   "The defun currently being processed.")
 
 (et-set-checker #'defun #'et:checker--defun)

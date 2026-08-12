@@ -11,8 +11,8 @@
  (@def cl-type-of (object: Any) NonNilSymbol)
  (@def consp ([T] object: T) (is? T Cons))
  (@def atom ([T] object: T) (isnt? T Cons))
- (@def listp ([T] object: T) (is? T Nil|Cons))
- (@def nlistp ([T] object: T) (isnt? T Nil|Cons))
+ (@def listp ([T] object: T) (is? T Cons?))
+ (@def nlistp ([T] object: T) (isnt? T Cons?))
  (@def bare-symbol-p ([T] object: T) (is-a? T Symbol))
  (@def symbol-with-pos-p ([T] object: T) (is? T (Emacs symbol-with-pos)))
  (@def symbolp ([T] object: T) (is? T Symbol))
@@ -25,7 +25,7 @@
  (@def vector-or-char-table-p ([T] object: T) (is? T Vector|CharTable))
  (@def bool-vector-p ([T] object: T) (is? T BoolVector))
  (@def arrayp ([T] object: T) (is? T String|Vector|CharTable|BoolVector))
- (@def sequencep ([T] object: T) (is? T Nil|Cons|String|Vector|CharTable|BoolVector))
+ (@def sequencep ([T] object: T) (is? T Cons|String|Vector|CharTable|BoolVector?))
  (@def bufferp ([T] object: T) (is? T Buffer))
  (@def markerp ([T] object: T) (is? T Marker))
  (@def user-ptrp ([T] object: T) (is? T (Emacs user-ptr)))
@@ -78,7 +78,7 @@
        (Emacs symbol-with-pos))
  (@def fset ([T] symbol: Var definition: T) T)
  (@def defalias
-       ([(<= S Var)] symbol: S definition: Any &optional docstring: String|Nil)
+       ([(<= S Var)] symbol: S definition: Any &optional docstring: String?)
        S)
  (@def setplist ([P] symbol: Var newplist: P) P)
  (@def subr-arity (subr: Subr)
@@ -86,7 +86,7 @@
  (@def subr-name (subr: Subr) String)
  (@def native-comp-function-p ([T] object: T) (is-a? T AnyFn))
  (@def subr-native-lambda-list (subr: Subr) True|&List)
- (@def subr-type (subr: Subr) Nil|Tuple<@function~List<Sexp>~Sexp>)
+ (@def subr-type (subr: Subr) Tuple<@function~List<Sexp>~Sexp>?)
  (@def subr-native-comp-unit (subr: Subr)
        (or Nil (Emacs native-comp-unit)))
  (@def native-comp-unit-file (comp-unit: (Emacs native-comp-unit)) Any)
@@ -172,7 +172,7 @@
 
 (et-declare
  (@def number-to-string (number: Number) String)
- (@def string-to-number (string: String &optional base: Integer|Nil) Number))
+ (@def string-to-number (string: String &optional base: Integer?) Number))
 
 
 ;;; ============================================================
@@ -215,24 +215,24 @@
 (et-declare
  ;; todo: are the return types wrong?
  (@def bool-vector-exclusive-or
-       ([(<= C BoolVector|Nil)] a: BoolVector b: BoolVector &optional c: C)
-       (if-nil? C BoolVector BoolVector|Nil))
+       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-union
-       ([(<= C BoolVector|Nil)] a: BoolVector b: BoolVector &optional c: C)
-       (if-nil? C BoolVector BoolVector|Nil))
+       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-intersection
-       ([(<= C BoolVector|Nil)] a: BoolVector b: BoolVector &optional c: C)
-       (if-nil? C BoolVector BoolVector|Nil))
+       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-set-difference
-       ([(<= C BoolVector|Nil)] a: BoolVector b: BoolVector &optional c: C)
-       (if-nil? C BoolVector BoolVector|Nil))
+       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-subsetp (a: BoolVector b: BoolVector) Boolean)
  (@def bool-vector-not
-       (a: BoolVector &optional b: BoolVector|Nil)
+       (a: BoolVector &optional b: BoolVector?)
        BoolVector)
  (@def bool-vector-count-population (a: BoolVector) Integer)
  (@def bool-vector-count-consecutive
-       (a: BoolVector b: Boolean i: Integer)
+       (a: BoolVector b: Bool i: Integer)
        Integer))
 
 

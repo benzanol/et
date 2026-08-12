@@ -88,6 +88,36 @@ The structure in the target definition file is:
 ;;; ============================================================
 ```
 
+Within one `et-declare` form, place definitions directly next to each other.
+Do not put blank lines between definitions in the same `et-declare` form.
+Keep a definition's explanatory comment directly above that definition, also
+without a blank separator line.
+
+## Type syntax
+
+Do not nest list-based type syntax inside arrow-bracket type syntax. Once a
+type expression uses arrow brackets, write nested type constructors with arrow
+brackets too:
+
+```elisp
+List<Cons<Integer~Integer>>
+```
+
+Do not write `List<(Cons Integer Integer)>`.
+
+For an inline union with `Nil`, use the optional `?` suffix. Write `String?`
+or `&Cons<K~V>?`, not `String|Nil`, `Nil|String`, or
+`Nil|&Cons<K~V>`. If `Nil` is part of a larger inline union, put `?` at the
+end of the complete union: write `Cons|String|Vector?`, not
+`Cons?|String|Vector`. This rule applies only to inline syntax; list-based
+syntax may still use forms such as `(or Nil String)`.
+
+Use `Bool` for a parameter that controls behavior through Lisp truthiness,
+where `nil` means false and any non-nil value means true. `Bool` is an alias
+for `Any`; its name documents that the unrestricted value is used as a
+truthiness flag. Do not use `Boolean` for such parameters. Reserve `Boolean`
+for values that must actually be `nil` or `t`, including boolean return types.
+
 ## Pass 1: File skeleton
 
 The skeleton agent owns the entire new target definition file. Its task is

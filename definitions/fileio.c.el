@@ -84,7 +84,7 @@
        (filename: String &optional flag: @nofollow?)
        Integer?)
  (@def set-file-modes
-       (filename: String mode: Integer &optional flag: Nil|@nofollow)
+       (filename: String mode: Integer &optional flag: @nofollow?)
        Nil)
  (@def set-default-file-modes (mode: Integer) Nil)
  (@def default-file-modes () Integer)
@@ -96,7 +96,7 @@
                                            (&Tuple Integer Integer)
                                            (&Tuple Integer Integer Integer)
                                            (&Tuple Integer Integer Integer Integer))
-                  flag: Nil|@nofollow)
+                  flag: @nofollow?)
        Boolean)
  (@def unix-sync () Nil)
  (@def file-newer-than-file-p (file1: String file2: String) Boolean))

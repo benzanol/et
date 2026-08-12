@@ -28,14 +28,14 @@
  (@def field-string (&optional pos: IntOrMarker?) String)
  (@def field-string-no-properties (&optional pos: IntOrMarker?) String)
  (@def field-beginning ([] &optional pos: IntOrMarker?
-                        escape-from-edge: Boolean limit: IntOrMarker?)
+                        escape-from-edge: Bool limit: IntOrMarker?)
        Integer)
  (@def field-end ([] &optional pos: IntOrMarker?
-                  escape-from-edge: Boolean limit: IntOrMarker?)
+                  escape-from-edge: Bool limit: IntOrMarker?)
        Integer)
  (@def constrain-to-field
        ([] new-pos: IntOrMarker? old-pos: IntOrMarker
-        &optional escape-from-edge: Boolean only-in-line: Boolean
+        &optional escape-from-edge: Bool only-in-line: Bool
         inhibit-capture-property: Symbol?)
        Integer)
  (@def pos-bol (&optional n: Integer?) Integer)
@@ -93,8 +93,8 @@
  (@def insert-and-inherit (&rest args: &List<String|Integer>) Nil)
  (@def insert-before-markers (&rest args: &List<String|Integer>) Nil)
  (@def insert-before-markers-and-inherit (&rest args: &List<String|Integer>) Nil)
- (@def insert-char (character: Integer &optional count: Integer? inherit: Boolean) Nil)
- (@def insert-byte (byte: Integer count: Integer &optional inherit: Boolean) Nil))
+ (@def insert-char (character: Integer &optional count: Integer? inherit: Bool) Nil)
+ (@def insert-byte (byte: Integer count: Integer &optional inherit: Bool) Nil))
 
 
 ;;; ============================================================
@@ -116,7 +116,7 @@
        Boolean)
  (@def subst-char-in-region
        (start: IntOrMarker end: IntOrMarker fromchar: Integer tochar: Integer
-               &optional noundo: Boolean)
+               &optional noundo: Bool)
        Nil)
  (@def translate-region-internal
        (start: IntOrMarker end: IntOrMarker table: String|CharTable)
@@ -160,7 +160,7 @@
  (@def transpose-regions
        (startr1: IntOrMarker endr1: IntOrMarker
                  startr2: IntOrMarker endr2: IntOrMarker
-                 &optional leave-markers: Boolean)
+                 &optional leave-markers: Bool)
        Nil))
 
 
