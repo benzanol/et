@@ -22,14 +22,12 @@ Before making changes, read all of:
 
 - `et.el`
 - `et-check.el`
-- `definitions/eval.c.el`
 - The assigned Emacs source file
 - This contract
 
 Use `et.el` and `et-check.el` as the authority for the available type language,
 aliases, declaration syntax, checker behavior, and current implementation
-capabilities. Use `definitions/eval.c.el` as the formatting and declaration
-style reference.
+capabilities.
 
 The task must provide both the Emacs source path and the target definition
 path. Do not infer a missing path.
@@ -37,7 +35,6 @@ path. Do not infer a missing path.
 ## Scope and ownership
 
 - Edit only the assigned target definition file.
-- Never edit `definitions/eval.c.el` or `definitions/pcase.el`.
 - Do not add aliases, checker shortcuts, helper functions, or type-system
   features while authoring definitions.
 - Do not fix unrelated problems found in the source or definition files.
@@ -342,3 +339,21 @@ Each file-authoring agent reports:
 - Any unresolved ambiguity that prevented file completion
 
 Do not perform work outside the assigned pass or target file during handoff.
+## Directories
+### Definition directories
+Within `./definitions`, files are separated into one of the following sub-directories:
+
+`c-core/` — C primitives that implement the Lisp runtime and basic editor model, such as evaluation,
+objects, buffers, markers, and text properties.
+`c-subsystems/` — C primitives for specialized facilities, such as JSON, XML, SQLite, tree-sitter,
+networking, images, and sound.
+`bundled/` — Lisp files loaded at startup that do not provide a corresponding feature, such
+as subr.el.
+`preload/` — Lisp libraries whose features are already loaded in a clean emacs -Q.
+`included-core/` — Non-preloaded features providing general-purpose Lisp programming utilities.
+`included-libraries/` — Non-preloaded features serving a specific format, service, editor facility, or application domain.
+`packages/` - Packages not included with emacs, but that can be downloaded from package repositories such as `elpa` or `melpa`
+
+Empty files should be prefixed with `0:`.
+Files that have had pass-1 done but not pass-2 should be prefixed with `1:`
+Files that have had pass-2 done but still contain todos should be prefixed with `2:`
