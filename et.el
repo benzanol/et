@@ -55,7 +55,7 @@
                 :predicate (Function Any True|List)))
  (@alias EtDatatypeName (or @Any @Literal @NonNil
                             @Symbol @NonNilSymbol @Var @Number @Integer @Positive @Negative @String
-                            @ConsRW @ConsFresh @VectorRW @VectorFresh @PlistRW
+                            @ConsRW @ConsFresh @VectorRW @VectorFresh @HashTableRW @HashTableFresh @PlistRW
                             @Function @DynFunction
                             @Struct))
  (@alias EtDatatypeArgs &List)
@@ -1007,9 +1007,14 @@ a valid `et:type-case->value'."
       ;; VectorRW<ELEM-READ ELEM-WRITE>: same idea as ConsRW
       (VectorRW :args (CO CONTRA) :overlap (VectorFresh) :intersect t
                 :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
-      ;; Same idea as ConsFresh
       (VectorFresh :args (CO) :overlap nil :intersect t
                    :predicate (lambda (v e) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+
+      ;; HashTableRW<KEY-READ KEY-WRITE VAL-READ VAL-WRITE>: same idea as ConsRW
+      (HashTableRW :args (CO CONTRA CO CONTRA) :overlap (HashTableFresh) :intersect t
+                   :predicate (lambda (val kr _kw vr _vw) (et:dt--hash-table-predicate val kr vr)))
+      (HashTableFresh :args (CO CO) :overlap nil :intersect t
+                      :predicate #'et:dt--hash-table-predicate)
 
       ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
       ;; input and output type.
@@ -1053,6 +1058,12 @@ a valid `et:type-case->value'."
              ;; a literal can never be an emacs datatype, so predicate=nil
              :predicate nil)))
   "Datatypes.")
+
+(et-defun et:dt--hash-table-predicate ([T] value: Any key-read: T value-read: T) Alist<Any~T>
+  (when (hash-table-p value)
+    (or (cl-loop for key being the hash-keys of value using (hash-values item)
+                 nconc (list (cons key key-read) (cons item value-read)))
+        t)))
 
 
 ;;;; Datatype helpers
@@ -1347,6 +1358,9 @@ check (see the `R:FN' constraint)."
        (et:match-result-and (funcall co (car sub-args) (car super-args))
                             (funcall co (cadr sub-args) (caddr super-args))))
       (`(VectorFresh VectorRW) (funcall co (car sub-args) (car super-args)))
+      (`(HashTableFresh HashTableRW)
+       (et:match-result-and (funcall co (car sub-args) (car super-args))
+                            (funcall co (cadr sub-args) (caddr super-args))))
 
       (`(DynFunction Function)
        (let* ((func-input (car super-args))
@@ -1687,6 +1701,10 @@ in GEN-REPLS, if it exists."
                 (`(S:DT ConsRW ,lr ,_lw ,rr ,_rw)
                  (let* ((never (et-parse-repr 'Never gens)))
                    (et-ql S:DT ConsRW ,(funcall sub lr) ,never ,(funcall sub rr) ,never)))
+
+                (`(S:DT HashTableRW ,kr ,_kw ,vr ,_vw)
+                 (let* ((never (et-parse-repr 'Never gens)))
+                   (et-ql S:DT HashTableRW ,(funcall sub kr) ,never ,(funcall sub vr) ,never)))
 
                 (`(S:DT VectorRW ,r ,_w)
                  (let* ((never (et-parse-repr 'Never gens)))
@@ -3645,6 +3663,7 @@ lazily because `List' is not yet defined when this file loads.")
       (pcase name
         ('ConsFresh (et:type-alias-new :name 'Cons :args (mapcar #'et:algebra-unfreshen-type args)))
         ('VectorFresh (et:type-alias-new :name 'Vector :args (mapcar #'et:algebra-unfreshen-type args)))
+        ('HashTableFresh (et:type-alias-new :name 'HashTable :args (mapcar #'et:algebra-unfreshen-type args)))
         (_ (et:type-dt-new :name name :args args))))
     (et:algebra--unfreshen-canonical-loops))))
 
@@ -3657,6 +3676,9 @@ lazily because `List' is not yet defined when this file loads.")
         ('ConsRW
          (let* ((new-args (list (et:algebra-freshen-type (car args)) (et:algebra-freshen-type (caddr args)))))
            (et:type-dt-new :name 'ConsFresh :args new-args)))
+        ('HashTableRW
+         (let* ((new-args (list (et:algebra-freshen-type (car args)) (et:algebra-freshen-type (caddr args)))))
+           (et:type-dt-new :name 'HashTableFresh :args new-args)))
         ('VectorRW (et:type-alias-new :name 'VectorFresh :args (list (et:algebra-freshen-type (car args)))))
         (_ (et:type-dt-new :name name :args args)))))))
 
@@ -3669,6 +3691,8 @@ lazily because `List' is not yet defined when this file loads.")
         ('ConsRW
          (let* ((new-args (list (car args) (et:algebra-freshen-type-shallow (caddr args)))))
            (et:type-dt-new :name 'ConsFresh :args new-args)))
+        ('HashTableRW
+         (et:type-dt-new :name 'HashTableFresh :args (list (car args) (caddr args))))
         ('VectorRW
          (et:type-dt-new :name 'VectorFresh :args (list (car args))))
 
@@ -3774,7 +3798,10 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias Indirect [T] T)
 
 (et-defalias Vector [(= E Any)] VectorRW<E~E>)
-(et-defalias VectorW [(= W Any)] VectorRW<Any~W>)
+(et-defalias VectorW [E] VectorRW<Any~E>)
+
+(et-defalias HashTable [(= K Any) (= V Any)] HashTableRW<K~K~V~V>)
+(et-defalias HashTableW [K V] HashTableRW<Any~K~Any~V>)
 
 (et-defalias Sexp []
   (or Symbol String Number
