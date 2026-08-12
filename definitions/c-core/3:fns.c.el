@@ -125,25 +125,19 @@
 (et-declare
  ;; nontrivial
  (@def plist-get
-       ([K V] plist: &PlistOf<K~V> prop: K
+       ([K V] plist: &PlistLike<K~V> prop: K
         &optional predicate: (or Nil (fn (Args K K) Any)))
-       V?)
- (@def get (symbol: Symbol propname: Any) Any)
- ;; The result widens the plist's key and value types for a new property and may
- ;; be either the original plist after mutation or a fresh head containing the
- ;; new pair. Type widening together with conditional return identity and mixed
- ;; mutation and freshening is not yet expressible.
+       V)
+ (@def get (symbol: Symbol propname: Any) Any) ;; todo
  (@def plist-put
-       ([K V P W] plist: PlistOf<K~V> prop: P val: W
+       ([K V] plist: [<= P PlistLike<K~V>] prop: K val: V
         &optional predicate: (or Nil (fn (Args K P) Any)))
-       Todo)
- (@def put ([V] symbol: Symbol propname: Any value: V) V)
- ;; The result is nil or the particular existing tail beginning at PROP.
- ;; Existing-substructure identity is not yet expressible.
+       P)
+ (@def put ([V] symbol: Symbol propname: Any value: V) V) ;; todo
  (@def plist-member
        ([K V] plist: &PlistOf<K~V> prop: K
         &optional predicate: (or Nil (fn (Args K K) Any)))
-       Todo)
+       Any)
  (@def eql (obj1: Any obj2: Any) Boolean)
  (@def equal (o1: Any o2: Any) Boolean)
  (@def equal-including-properties (o1: Any o2: Any) Boolean)
@@ -241,35 +235,22 @@
 ;;; Hash tables
 
 (et-declare
- ;; A newly created table's key and value types must remain fresh and become
- ;; constrained by later gethash and puthash calls. Fresh container generics
- ;; for hash tables are not yet represented by the type language.
- (@def make-hash-table (&rest keyword-args: &List) Todo)
- ;; The result is a fresh table preserving the source table's test, weakness,
- ;; key type, value type, and shared entries. Hash-table parameterization and
- ;; shallow freshening are not yet expressible.
- (@def copy-hash-table (table: (Emacs hash-table)) (Emacs hash-table))
- (@def hash-table-count (table: (Emacs hash-table)) Integer)
- (@def hash-table-rehash-size (table: (Emacs hash-table)) Number)
- (@def hash-table-rehash-threshold (table: (Emacs hash-table)) Number)
- (@def hash-table-size (table: (Emacs hash-table)) Integer)
- (@def hash-table-test (table: (Emacs hash-table)) Symbol)
- (@def hash-table-weakness
-       (table: (Emacs hash-table))
-       (or Nil @key @value @key-or-value @key-and-value))
- (@def hash-table-p ([T] obj: T) (is? T (Emacs hash-table)))
- (@def clrhash (table: (Emacs hash-table)) (Emacs hash-table))
- ;; The found value depends on TABLE's unrepresented value type, while a miss
- ;; returns DFLT. Hash-table key/value parameterization and lookup-dependent
- ;; result selection are not yet expressible.
- (@def gethash
-       (key: Any table: (Emacs hash-table) &optional dflt: Any)
-       Todo)
- (@def puthash ([V] key: Any value: V table: (Emacs hash-table)) V)
- (@def remhash (key: Any table: (Emacs hash-table)) Nil)
- (@def maphash
-       (function: (fn (Args Any Any) Any) table: (Emacs hash-table))
-       Nil)
+ ;; nontrivial
+ (@def make-hash-table (&rest keyword-args: &List) HashTableFresh<Any~Any>) ; todo
+ (@def copy-hash-table (table: [<= H &HashTable]) (freshen-shallow H))
+ (@def hash-table-count (table: &HashTable) Integer)
+ (@def hash-table-rehash-size (table: &HashTable) Number)
+ (@def hash-table-rehash-threshold (table: &HashTable) Number)
+ (@def hash-table-size (table: &HashTable) Integer)
+ (@def hash-table-test (table: &HashTable) Symbol)
+ (@def hash-table-weakness (table: &HashTable) (or Nil @key @value @key-or-value @key-and-value))
+ (@def hash-table-p ([T] obj: T) (is? T &HashTable))
+ (@def clrhash (table: [<= H &HashTable]) H)
+ (@def gethash ([V] key: Any table: &HashTable<Any~V> &optional dflt: V?) V)
+ (@def puthash ([K V] key: K value: V table: HashTableW<K~V>) V)
+ (@def remhash ([K] key: K table: HashTableW<K~Never>) Nil)
+ (@def maphash ([K V] function: (fn (Args K V) Any) table: &HashTable<K~V>) Nil)
+ ;; todo
  (@def define-hash-table-test
        (name: Symbol test: (fn (Args Any Any) Any)
               hash: (fn (Args Any) Any))
