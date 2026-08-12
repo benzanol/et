@@ -22,9 +22,7 @@
 ;;; Commentary:
 ;;; Code:
 
-(require 'cl-lib)
 (require 'et-macros)
-(require 'seq)
 
 
 (defvar et-debug nil
@@ -239,7 +237,7 @@ expression that is not actually in the buffer, ensure that
 
 (defun et:result--resolve-path (rel)
   (et-declare (rel EtRel) (@return EtPath))
-
+  (seq-copy 1 )
   (if et:result--sticky-path et:result--path
     (if-let* ((flat (flatten-tree (list rel))))
         (append et:result--path (list (+ et:result--path-offset (car flat))) (cdr flat))
@@ -3738,6 +3736,12 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias StringOrBuffer [(<= Idx IntOrMarker)]
   (or String^{Idx:<:Integer}
       Buffer^{Idx:<:IntOrMarker}))
+
+
+;;;; Specific aliases
+
+(et-defalias VariableEvent [] (or @set @let @unlet @makunbound @defvaralias))
+(et-defalias VariableWatcher [] (fn (Args Symbol Any VariableEvent Buffer?)))
 
 
 ;;; ============================================================

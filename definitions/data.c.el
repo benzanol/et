@@ -100,27 +100,13 @@
 ;;; Symbol values and watchers
 
 (et-declare
- ;; Symbols are replaced by a different symbol at the end of an alias chain,
- ;; while non-symbols are returned unchanged. A conditional replacement
- ;; operation over union members is needed to express that result.
- (@def indirect-variable (object: Any) Todo)
+ ;; nontrivial
+ (@def indirect-variable (object: [T]) (replace-in T Var Symbol))
  (@def symbol-value (symbol: Symbol) Any)
  (@def set ([T] symbol: Var newval: T) T)
- (@def add-variable-watcher
-       ([] symbol: Var
-        watch-function:
-        (fn (Args Symbol Any (or @set @let @unlet @makunbound @defvaralias) Buffer?) Any))
-       Nil)
- (@def remove-variable-watcher
-       ([] symbol: Var
-        watch-function: 
-        (fn (Args Symbol Any (or @set @let @unlet @makunbound @defvaralias) Buffer?)
-            Any))
-       Nil)
- (@def get-variable-watchers
-       (symbol: Symbol)
-       (List (fn (Args Symbol Any (or @set @let @unlet @makunbound @defvaralias) Buffer?)
-                 Any))))
+ (@def add-variable-watcher ([] symbol: Var watch-function: VariableWatcher) Nil)
+ (@def remove-variable-watcher ([] symbol: Var watch-function: VariableWatcher) Nil)
+ (@def get-variable-watchers (symbol: Symbol) List<VariableWatcher>))
 
 
 ;;; ============================================================
@@ -213,7 +199,8 @@
 ;;; Bool vector operations
 
 (et-declare
- ;; todo: are the return types wrong?
+ ;; If c is nil, always return the vector.
+ ;; If c is a vector, return the vector only if it changed.
  (@def bool-vector-exclusive-or
        ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
        (if-nil? C BoolVector BoolVector?))
@@ -227,13 +214,9 @@
        ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
        (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-subsetp (a: BoolVector b: BoolVector) Boolean)
- (@def bool-vector-not
-       (a: BoolVector &optional b: BoolVector?)
-       BoolVector)
+ (@def bool-vector-not (a: BoolVector &optional b: BoolVector?) BoolVector)
  (@def bool-vector-count-population (a: BoolVector) Integer)
- (@def bool-vector-count-consecutive
-       (a: BoolVector b: Bool i: Integer)
-       Integer))
+ (@def bool-vector-count-consecutive (a: BoolVector b: Bool i: Integer) Integer))
 
 
 ;;; ============================================================
