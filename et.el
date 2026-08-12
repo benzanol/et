@@ -55,7 +55,7 @@
                 :predicate (Function Any True|List)))
  (@alias EtDatatypeName (or @Any @Literal @NonNil
                             @Symbol @NonNilSymbol @Var @Number @Integer @Positive @Negative @String
-                            @ConsFull @ConsFresh @VectorFull @VectorFresh @Plist
+                            @ConsRW @ConsFresh @VectorRW @VectorFresh @PlistRW
                             @Function @DynFunction
                             @Struct))
  (@alias EtDatatypeArgs &List)
@@ -910,6 +910,14 @@ a valid `et:type-case->value'."
   (when (length= (et:type->cases type) 1)
     (et:type-case->value (car (et:type->cases type)))))
 
+(et-defun et-type-single-literals (type: EtType) List<Any>|@NO
+  "Assume type is a union of literal values, and extract those values."
+  (cl-loop for case in (et:type->cases type)
+           collect
+           (pcase (et:type-case->value case)
+             ((cl-struct et:type-dt (name 'Literal) (args `(,val))) val)
+             (_ (cl-return 'NO)))))
+
 
 ;;;; Parse/print type
 
@@ -944,7 +952,11 @@ a valid `et:type-case->value'."
 
 (defun et-any () (et-dt 'Any))
 (defun et-never () (et:type-new :cases nil))
-(defun et-literal (val) (et-dt 'Literal val))
+
+(defun et-literal (val)
+  (if (consp val)
+      (et-alias '&Cons (et-literal (car val)) (et-literal (cdr val)))
+    (et-dt 'Literal val)))
 
 (defun et:type-tuple-spec (cons args)
   (if (null args) (et-ql Nil)
@@ -978,25 +990,23 @@ a valid `et:type-case->value'."
       (Negative :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (< v 0))))
       (String :args nil :overlap nil :predicate stringp)
 
-      ;; ConsFull<CAR-READ CAR-WRITE CDR-READ CDR-WRITE> is a cons cell.
+      ;; ConsRW<CAR-READ CAR-WRITE CDR-READ CDR-WRITE> is a cons cell.
       ;; CAR-READ/CDR-READ are the output types of calling car/cdr on
       ;; the cons cell. CAR-WRITE/CDR-WRITE are the types that are valid
       ;; to write to the cons cell. The most general cons cell is thus
-      ;; ConsFull<Any Never Any Never>.
-      (ConsFull :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction Plist) :intersect t
-                :predicate (lambda (v l _1 r _2) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
-      ;; When you create a new cons cell with cons/list/quote/etc, you
+      ;; ConsRW<Any Never Any Never>.
+      (ConsRW :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction PlistRW) :intersect t)
+      ;; When you create a new cons cell with cons/list/etc, you
       ;; get a ConsFresh. This can be thought of as an "undetermined"
       ;; cons cell: in that it knows what it contains, but it has not
       ;; yet decided what can be written to it. A ConsFresh can be
-      ;; converted to a ConsFull as long as the read types of the
-      ;; ConsFull are supertypes of the arg types of the ConsFresh.
-      (ConsFresh :args (CO CO) :overlap (Function DynFunction Plist) :intersect t
-                 :predicate (lambda (v l r) (when (consp v) `((,(car v) . ,l) (,(cdr v) . ,r)))))
+      ;; converted to a ConsRW as long as the read types of the
+      ;; ConsRW are supertypes of the arg types of the ConsFresh.
+      (ConsFresh :args (CO CO) :overlap (Function DynFunction PlistRW) :intersect t)
 
-      ;; VectorFull<ELEM-READ ELEM-WRITE>: same idea as ConsFull
-      (VectorFull :args (CO CONTRA) :overlap (VectorFresh) :intersect t
-                  :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
+      ;; VectorRW<ELEM-READ ELEM-WRITE>: same idea as ConsRW
+      (VectorRW :args (CO CONTRA) :overlap (VectorFresh) :intersect t
+                :predicate (lambda (v e _) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
       ;; Same idea as ConsFresh
       (VectorFresh :args (CO) :overlap nil :intersect t
                    :predicate (lambda (v e) (when (vectorp v) (or (cl-loop for x across v collect (cons x e)) t))))
@@ -1011,17 +1021,22 @@ a valid `et:type-case->value'."
       ;; OUTPUT-REPR as the output.
       (DynFunction :args (CONST CONST) :overlap nil)
 
-      ;; Plist<PROP1 VAL1 PROP2 VAL2 ...> is a covariant, unordered
-      ;; plist.
-      (Plist
+      ;; PlistRW<KEY1 VAL1-R VAL1-W KEY2 VAL2-R VAL2-W ...> is an unordered plist.
+      (PlistRW
        :args (lambda (args)
-               (cl-loop for (_prop _val) on args by #'cddr
-                        nconc (list 'CONST 'ISO)))
+               (unless (eq 0 (mod (length args) 3))
+                 (error "PlistRW must have a multiple of 3 arguments"))
+               (cl-loop for (_key _r _w) on args by #'cdddr
+                        nconc (list 'ISO 'CO 'CONTRA)))
        :overlap nil
-       :predicate et:dt--literal-is-plist
-       :intersect et:dt--plist-intersect-args)
+       :intersect et:dt--plist-intersect-args
+       :predicate (lambda (value &rest args)
+                    (when (null value)
+                      (or (cl-loop for (_key read _write) on args by #'cdddr
+                                   collect (cons nil read))
+                          t))))
 
-      ;; Struct<NAME~GENERCIC-PARAMS...>
+      ;; Struct<NAME~GENERIC-PARAMS...>
       (Struct :args (lambda (args)
                       (if-let* ((name (car args))
                                 (plist (get name 'et-struct))
@@ -1091,84 +1106,122 @@ FUNC is called with one argument, the current argument"
 
 
 ;;;; Plist helpers
+;;;;; Entries
+
+(defun et:dt--plist-entries (args)
+  "Return the PlistRW entries in ARGS as (KEY READ WRITE) lists."
+  (cl-loop for (key read write) on args by #'cdddr
+           collect (list key read write)))
+
+(defun et:dt--plist-flatten-entries (entries)
+  "Flatten PlistRW ENTRIES into datatype arguments."
+  (apply #'append entries))
+
+(defun et:dt--plist-key-equivalent-p (key1 key2)
+  "Return whether the concrete key types KEY1 and KEY2 are equivalent."
+  (or (equal key1 key2)
+      (and (et-subtype? key1 key2)
+           (et-subtype? key2 key1))))
+
+
 ;;;;; Intersect args
 
-(defun et:dt--plist-intersect-args (args1 args2 intersect _union)
-  (let* ((all-props (cl-loop for (p) on (append args1 args2) by #'cddr collect p)))
-    (cl-loop for prop in (delete-dups all-props)
-             for val1 = (plist-get args1 prop)
-             for val2 = (plist-get args2 prop)
-             for intersection = (if val1 (if val2 (funcall intersect val1 val2) val1) val2)
-             when (et-never-p intersection) return 'INVALID
-             nconc (list prop intersection))))
-
-
-;;;;; Literal is plist
-
-(defun et:dt--literal-is-plist (v &rest plist-args)
-  "Predicate for a `Literal' value V being a subtype of a Plist.
-
-PLIST-ARGS are the Plist datatype's arguments (K1 V1 K2 V2 ...). This is
-the `:predicate' of the Plist datatype, so it follows that contract: a
-nil return fails the match, a t return succeeds it, and a list of
-\(SUB-VAL . ARG) pairs requires each literal SUB-VAL to be a subtype of
-ARG (see the `Literal' case of `et:dt-constraints').
-
-V matches when it is a plist and, for each key, its value is a subtype
-of that key's type. A key absent from V yields a nil value, so a key is
-\"optional\" exactly when its type admits nil. Extra keys in V are
-allowed, and order does not matter."
-  (when (plistp v)
-    (or (cl-loop for (prop val) on plist-args by #'cddr
-                 collect (cons (plist-get v prop) val))
-        t)))
+(defun et:dt--plist-intersect-args (args1 args2 intersect union)
+  "Intersect two unordered PlistRW argument lists."
+  (let ((remaining2 (et:dt--plist-entries args2))
+        result)
+    (cl-loop
+     for entry1 in (et:dt--plist-entries args1)
+     for entry2 = (cl-find-if
+                   (lambda (entry)
+                     (et:dt--plist-key-equivalent-p (car entry1) (car entry)))
+                   remaining2)
+     if entry2
+     do (let ((read (funcall intersect (nth 1 entry1) (nth 1 entry2)))
+              (write (funcall union (nth 2 entry1) (nth 2 entry2))))
+          (when (et-never-p read)
+            (cl-return-from et:dt--plist-intersect-args 'INVALID))
+          (push (list (car entry1) read write) result)
+          (setq remaining2 (delq entry2 remaining2)))
+     else
+     do (push entry1 result))
+    (et:dt--plist-flatten-entries
+     (nconc (nreverse result) remaining2))))
 
 
 ;;;;; Type is plist
 
-(defun et:dt--cons-is-plist (cons-args plist-args co mk-super)
-  "Constraints for ConsFull to be a subtype of Plist.
+(defun et:dt--cons-is-plist (cons-name cons-args plist-args co mk-super)
+  "Return constraints for a cons datatype to be a subtype of PlistRW."
+  (let ((key-type (nth 0 cons-args))
+        (cdr-type (nth (pcase cons-name
+                         ('ConsFresh 1)
+                         ('ConsRW 2))
+                       cons-args))
+        (entries (et:dt--plist-entries plist-args)))
+    (cl-loop
+     for entry in entries
+     for key-result = (funcall co key-type (car entry))
+     when (et:match-result->success key-result)
+     do (let* ((rest (delq entry (copy-sequence entries)))
+               (tail-result
+                (funcall co cdr-type
+                         (funcall mk-super
+                                  (nth 1 entry)
+                                  (nth 2 entry)
+                                  (et:dt--plist-flatten-entries rest))))
+               (result (et:match-result-and key-result tail-result)))
+          (when (et:match-result->success result)
+            (cl-return result)))
+     finally return
+     (funcall co cdr-type (funcall mk-super nil nil plist-args)))))
 
-A plist is a flat list (K1 V1 K2 V2 ...).  The ConsFull car is a key.
-If it matches a required Plist key, the cdr must be a cons whose car
-satisfies that key's value type and whose cdr covers the remaining
-keys.  If it does not match, the cdr must be a cons (skipping the
-value) whose cdr still covers all required keys.  Extra keys are
-allowed and order does not matter.
+(defun et:dt--plist-is-plist (sub-args super-args co contra iso)
+  "Return constraints for one unordered PlistRW to subtype another."
+  (cl-labels
+      ((match (supers subs)
+         (if (null supers)
+             (et:match-succeeded nil)
+           (pcase-let ((`(,super-key ,super-read ,super-write) (car supers)))
+             (cl-loop
+              for sub in subs
+              for entry-result =
+              (et:match-result-and
+               (funcall iso (nth 0 sub) super-key)
+               (funcall co (nth 1 sub) super-read)
+               (funcall contra (nth 2 sub) super-write))
+              when (et:match-result->success entry-result)
+              do (let ((rest-result (match (cdr supers) (delq sub (copy-sequence subs)))))
+                   (when (et:match-result->success rest-result)
+                     (cl-return
+                      (et:match-result-and entry-result rest-result))))
+              finally return (et:match-failed))))))
+    (match (et:dt--plist-entries super-args)
+           (et:dt--plist-entries sub-args))))
 
-MK-SUPER builds the synthesized `&Cons' super value in the caller's
-language (a type or a matcher repr); see `et:dt-constraints'."
-  (let ((car-read (et-expand-aliases (nth 0 cons-args)))
-        (cdr-read (nth 2 cons-args)))
-    (pcase (et:type->cases car-read)
-      (`(,(cl-struct et:type-case
-                     (value (cl-struct et:type-dt (name 'Literal) (args `(,prop))))))
-       (let* ((pval (plist-get plist-args prop))
-              (rest-plist (copy-tree plist-args)))
-         (when pval (cl-remf rest-plist prop))
-         (funcall co cdr-read (funcall mk-super pval rest-plist))))
-      (_ (et:match-failed)))))
 
-(defun et:dt-cons-plist-super-type (car rest-plist)
-  "Build the type `&Cons<CAR~tail>', where tail is `Plist<REST-PLIST>' or Any.
-CAR is the matched value type, or nil for any value.  Used as the
-MK-SUPER argument of `et:dt--cons-is-plist' when matching against types."
-  (et-alias '&Cons (or car (et-any))
-            (if rest-plist (apply #'et-dt 'Plist rest-plist) (et-any))))
+(defun et:dt-cons-plist-super-type (read write rest-plist)
+  "Build the value cons required by a PlistRW entry."
+  (let ((never (et-never)))
+    (et-dt 'ConsRW
+           (or read (et-any))
+           (or write never)
+           (if rest-plist (apply #'et-dt 'PlistRW rest-plist) (et-any))
+           never)))
 
-(defun et:dt-cons-plist-super-matcher (car rest-plist scope)
-  "Build the matcher repr `&Cons<CAR~tail>', tail being `Plist<REST-PLIST>' or Any.
-CAR is the matched value repr, or nil for any value.  SCOPE is the
-generic scope of the enclosing matcher.  Used as the MK-SUPER argument
-of `et:dt--cons-is-plist' when matching against matchers."
-  (let ((any-mr (et:repr-new :generics scope :dnf (et-q (((S:DT Any)))))))
+(defun et:dt-cons-plist-super-matcher (read write rest-plist scope)
+  "Build the value-cons matcher required by a PlistRW entry."
+  (let ((any-mr (et:repr-new :generics scope :dnf (et-q (((S:DT Any))))))
+        (never-mr (et:repr-new :generics scope :dnf nil)))
     (et:repr-new
      :generics scope
-     :dnf (et-q (((S:ALIAS &Cons
-                           ,(or car any-mr)
-                           ,(if rest-plist
-                                (et:repr-new :generics scope :dnf (et-q (((S:DT Plist ,@rest-plist)))))
-                              any-mr))))))))
+     :dnf (et-q (((S:DT ConsRW
+                        ,(or read any-mr)
+                        ,(or write never-mr)
+                        ,(if rest-plist
+                             (et:repr-new :generics scope :dnf (et-q (((S:DT PlistRW ,@rest-plist)))))
+                           any-mr)
+                        ,never-mr)))))))
 
 
 ;;;; Overlapping
@@ -1188,7 +1241,7 @@ This is what is meant by \"nontrivial\"."
     (pcase (plist-get (alist-get a et:dt--datatypes) :overlap)
       ('t t)
       ;; A cons can only be a function if its car is `lambda'
-      ((guard (and (memq a '(ConsFull ConsFresh)) (memq b '(Function DynFunction))))
+      ((guard (and (memq a '(ConsRW ConsFresh)) (memq b '(Function DynFunction))))
        (et-subtype? (et @lambda) (car (et:type-dt->args a-dt))))
       ;; Is an emacs internal datatype a function
       ((guard (and (memq a '(Function DynFunction)) (eq b 'Emacs)))
@@ -1256,11 +1309,11 @@ matcher and another might be a type.
 Also, (funcall CO-LITERAL val super-arg) checks if the literal val is a
 subtype of super-arg.
 
-The ConsFull/Plist case is the only one that synthesizes a brand new
+The ConsRW/Plist case is the only one that synthesizes a brand new
 super value (a `&Cons') instead of passing existing super-args to CO.
 Since super-args may be either types or matcher reprs depending on the
 caller, MK-SUPER builds that synthesized super value in the caller's
-language. See `et:dt--cons-is-plist'.
+language. See `et:dt--cons-fresh-is-plist'.
 
 DYN-FN (a function or nil) handles a `DynFunction' sub against a
 `Function' super whose args are matcher reprs, which cannot be resolved
@@ -1290,10 +1343,10 @@ check (see the `R:FN' constraint)."
       (`(Positive Number) (valid-if t))
       (`(Negative Number) (valid-if t))
 
-      (`(ConsFresh ConsFull)
+      (`(ConsFresh ConsRW)
        (et:match-result-and (funcall co (car sub-args) (car super-args))
                             (funcall co (cadr sub-args) (caddr super-args))))
-      (`(VectorFresh VectorFull) (funcall co (car sub-args) (car super-args)))
+      (`(VectorFresh VectorRW) (funcall co (car sub-args) (car super-args)))
 
       (`(DynFunction Function)
        (let* ((func-input (car super-args))
@@ -1314,15 +1367,8 @@ check (see the `R:FN' constraint)."
       (`(,_ Symbol) (valid-if (memq sub-name '(NonNilSymbol Var))))
       (`(,_ NonNilSymbol) (valid-if (eq sub-name 'Var)))
 
-      (`(ConsFull Plist)
-       (et:dt--cons-is-plist sub-args super-args co mk-super))
-
-      (`(Plist Plist)
-       (cl-loop for (prop super-val) on super-args by #'cddr
-                for sub-val = (plist-get sub-args prop)
-                unless sub-val return (valid-if nil)
-                collect (funcall co sub-val super-val) into results
-                finally return (apply #'et:match-result-and results)))
+      (`(,(or 'ConsFresh 'ConsRW) PlistRW) (et:dt--cons-is-plist sub-name sub-args super-args co mk-super))
+      (`(PlistRW PlistRW) (et:dt--plist-is-plist sub-args super-args co contra iso))
 
       (`(Struct Struct)
        (apply
@@ -1341,7 +1387,7 @@ check (see the `R:FN' constraint)."
        (cl-loop for sub-arg in sub-args
                 for super-arg in super-args
                 for role in (et:dt-arg-roles super-name super-args)
-                ;; Skipping duplicates is especially helpful for ConsFull/VectorFull,
+                ;; Skipping duplicates is especially helpful for ConsRW/VectorRW,
                 ;; where arguments are often duplicated
                 unless (member (list sub-arg super-arg role) already-checked)
                 collect (list sub-arg super-arg role) into already-checked
@@ -1415,6 +1461,12 @@ never be read for any purpose other than assertions."
 
 (et-defun et:repr--parse-factor (name: Symbol args: &List<EtSpec>) EtRepr
   (or
+   ;; Literal cons -> &Cons
+   ;; In the future, this should also work for vectors,
+   ;; but we might want a VectorTuple type or something similar for that
+   (when (and (eq name 'Literal) (consp (car args)))
+     (et:repr--parse-0 `(&Cons (Literal ,(caar args)) (Literal ,(cdar args)))))
+
    ;; and/or
    (when (memq name '(and or))
      (let* ((ps (mapcar #'et:repr--parse-0 args))
@@ -1498,6 +1550,10 @@ never be read for any purpose other than assertions."
    ;; Parenthesized expression
    ((string-match "^{\\(.*\\)}$" s)
     (et:repr--parse-string (substring s 1 -1)))
+
+   ;; Keyword
+   ((string-match "^:[a-zA-Z0-9].*$" s)
+    (et:repr--parse-0 (list 'Literal (intern s))))
 
    ;; @symbol  ->  Literal symbol
    ((string-match "^@\\(.*\\)$" s)
@@ -1628,13 +1684,19 @@ in GEN-REPLS, if it exists."
      (cl-loop
       for factor in case
       collect (pcase factor
-                (`(S:DT ConsFull ,lr ,_lw ,rr ,_rw)
+                (`(S:DT ConsRW ,lr ,_lw ,rr ,_rw)
                  (let* ((never (et-parse-repr 'Never gens)))
-                   (et-ql S:DT ConsFull ,(funcall sub lr) ,never ,(funcall sub rr) ,never)))
+                   (et-ql S:DT ConsRW ,(funcall sub lr) ,never ,(funcall sub rr) ,never)))
 
-                (`(S:DT VectorFull ,r ,_w)
+                (`(S:DT VectorRW ,r ,_w)
                  (let* ((never (et-parse-repr 'Never gens)))
-                   (et-ql S:DT VectorFull ,(funcall sub r) ,never)))
+                   (et-ql S:DT VectorRW ,(funcall sub r) ,never)))
+
+                (`(S:DT PlistRW . ,args)
+                 (let* ((never (et-parse-repr 'Never gens)))
+                   (cl-loop for (key r _w) on args by #'cdddr
+                            nconc (list key (funcall sub r) never) into new
+                            finally return (et-ql S:DT PlistRW ,@new))))
 
                 (`(S:ALIAS ,name . ,args)
                  (et-ql S:ALIAS ,(et:type-alias-ro-name name) . ,(mapcar sub args)))
@@ -1750,14 +1812,14 @@ in GEN-REPLS, if it exists."
      (if (null args) (format "*%s" name)
        (format "*%s<%s>" name (string-join (mapcar #'et:repr--tostring-0 args) " "))))
 
-    ((or `(ConsFull ,left-sub ,_1 ,right-sub ,_2)
+    ((or `(ConsRW ,left-sub ,_1 ,right-sub ,_2)
          `(,(or 'Cons '&Cons 'WriteCons '&WriteCons) ,left-sub ,right-sub))
      (let ((elems (list (et:repr--tostring-0 left-sub))))
        (while (pcase right-sub
                 ((and (pred listp) d)
                  (when (and (length= d 1) (length= (car d) 1))
                    (pcase (car (car d))
-                     ((or `(S:DT ConsFull ,car-sub ,_1 ,cdr-sub ,_2)
+                     ((or `(S:DT ConsRW ,car-sub ,_1 ,cdr-sub ,_2)
                           `(S:ALIAS ,(or 'Cons '&Cons 'WriteCons '&WriteCons) ,car-sub ,cdr-sub))
                       (nconc elems (list (et:repr--tostring-0 car-sub)))
                       (setq right-sub cdr-sub)
@@ -2457,7 +2519,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          (lambda (type ms) (et:match--iso-constraints-0 (make-matcher ms) type))
          (lambda (literal ms) (et:match--sub-constraints-0 (make-matcher ms) (et-literal literal)))
          ;; The synthesized super (Plist side, m-args) is a matcher repr
-         (lambda (car rest-plist) (et:dt-cons-plist-super-matcher car rest-plist generics))
+         (lambda (read write rest-plist)
+           (et:dt-cons-plist-super-matcher read write rest-plist generics))
          ;; A DynFunction type against a Function matcher factor can only
          ;; be resolved once the matcher's generics are known, so record
          ;; an R:FN constraint for constraint satisfaction.
@@ -3229,8 +3292,8 @@ returning A itself is a valid approximation."
 ;;;; Infer
 
 (defmacro et-infer (type genvec matcher-spec output-spec)
-  `(let* ((matcher ,(et-parse-matcher matcher-spec genvec))
-          (result (et:algebra-infer matcher ,type ,(et-parse-repr output-spec (et-genvec-generics genvec)))))
+  `(let* ((matcher (et-matcher ,genvec ,matcher-spec))
+          (result (et:algebra-infer matcher ,type (et-parse-repr ',output-spec ',(et-genvec-generics genvec)))))
      (when (et:match-result->success result)
        (et:match-result->value result))))
 
@@ -3591,10 +3654,10 @@ lazily because `List' is not yet defined when this file loads.")
     type
     (lambda (name args)
       (pcase name
-        ('ConsFull
+        ('ConsRW
          (let* ((new-args (list (et:algebra-freshen-type (car args)) (et:algebra-freshen-type (caddr args)))))
            (et:type-dt-new :name 'ConsFresh :args new-args)))
-        ('VectorFull (et:type-alias-new :name 'VectorFresh :args (list (et:algebra-freshen-type (car args)))))
+        ('VectorRW (et:type-alias-new :name 'VectorFresh :args (list (et:algebra-freshen-type (car args)))))
         (_ (et:type-dt-new :name name :args args)))))))
 
 (et-defun et:algebra-freshen-type-shallow (type: EtType) EtType
@@ -3603,10 +3666,10 @@ lazily because `List' is not yet defined when this file loads.")
     type
     (lambda (name args)
       (pcase name
-        ('ConsFull
+        ('ConsRW
          (let* ((new-args (list (car args) (et:algebra-freshen-type-shallow (caddr args)))))
            (et:type-dt-new :name 'ConsFresh :args new-args)))
-        ('VectorFull
+        ('VectorRW
          (et:type-dt-new :name 'VectorFresh :args (list (car args))))
 
         (_ (et:type-dt-new :name name :args args)))))))
@@ -3660,7 +3723,7 @@ lazily because `List' is not yet defined when this file loads.")
 
 ;;;; Cons aliases
 
-(et-defalias Cons [(= L Any) (= R Any)] (ConsFull L L R R))
+(et-defalias Cons [(= L Any) (= R Any)] (ConsRW L L R R))
 
 (et-defalias ListFresh [(= E Any)] (or Nil (ConsFresh E (ListFresh E))))
 (et-defalias List [(= E Any)] (or Nil (Cons E (List E))))
@@ -3670,8 +3733,6 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias Alist [K V] (List (Cons K V)))
 
-(et-defalias PlistOf [K V] (or Nil (Cons K (Cons V (PlistOf K V)))))
-
 (et-defspec Tuple (&rest args) (et:type-tuple-spec 'Cons args))
 (et-defspec Args (&rest args) (et:type-tuple-spec '&Cons args))
 (et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
@@ -3680,6 +3741,22 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias ListWithLast [E Last]
   (or (Cons Last Nil)
       (Cons E ListWithLast<E~Last>)))
+
+
+;;;; Plist aliases
+
+(et-defspec Plist (&rest args)
+  (when (eq 1 (mod (length args) 2))
+    (error "Plist must have an even number of arguments"))
+  (cl-loop for (key type) on args by #'cddr
+           nconc (list key type type) into new
+           finally return `(PlistRW ,@new)))
+
+(et-defalias PlistOf [K V] (or Nil (Cons K (Cons V (PlistOf K V)))))
+
+(et-defalias PlistLike [K V]
+  (or PlistOf<K~V>^{V:>:Nil}
+      Plist<K~V>))
 
 
 ;;;; Misc aliases
@@ -3696,8 +3773,8 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias Indirect [T] T)
 
-(et-defalias Vector [(= E Any)] VectorFull<E~E>)
-(et-defalias VectorW [(= W Any)] VectorFull<Any~W>)
+(et-defalias Vector [(= E Any)] VectorRW<E~E>)
+(et-defalias VectorW [(= W Any)] VectorRW<Any~W>)
 
 (et-defalias Sexp []
   (or Symbol String Number
