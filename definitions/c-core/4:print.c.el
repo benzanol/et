@@ -1,5 +1,6 @@
 ;; -*- lexical-binding: t; -*-
 
+
 ;;; ============================================================
 ;;; Character output
 
@@ -7,6 +8,7 @@
  (@def write-char
        (character: Integer &optional printcharfun: True|Buffer|Marker|fn1<Integer>?)
        Integer))
+
 
 ;;; ============================================================
 ;;; Object printing
@@ -18,10 +20,10 @@
  (@def prin1
        ([T] object: T
         &optional printcharfun: True|Buffer|Marker|fn1<Integer>?
-        overrides: True|List<Cons<Symbol~Any>>?)
+        overrides: True|&List<&Cons<Symbol~Any>>?)
        T)
  (@def prin1-to-string
-       (object: Any &optional noescape: Bool overrides: True|List<Cons<Symbol~Any>>?)
+       (object: Any &optional noescape: Bool overrides: True|&List<&Cons<Symbol~Any>>?)
        String)
  (@def princ
        ([T] object: T &optional printcharfun: True|Buffer|Marker|fn1<Integer>?)
@@ -33,16 +35,19 @@
  (@def external-debugging-output (character: Integer) Integer)
  (@def redirect-debugging-output (file: String? &optional append: Bool) Nil))
 
+
 ;;; ============================================================
 ;;; Error messages
 
 (et-declare
- (@def error-message-string (obj: Cons<Symbol~Any>) String))
+ (@def error-message-string (obj: &Cons<Symbol~Any>) String))
+
 
 ;;; ============================================================
 ;;; Print preprocessing
 
 (et-declare
  (@def print--preprocess (object: Any) Nil))
+
 
 ;;; ============================================================
