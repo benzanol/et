@@ -22,7 +22,10 @@
 ;;; Commentary:
 ;;; Code:
 
+(require 'cl-lib)
 (require 'et-macros)
+(require 'seq)
+(require 'subr-x)
 
 
 (defvar et-debug nil
@@ -237,7 +240,6 @@ expression that is not actually in the buffer, ensure that
 
 (defun et:result--resolve-path (rel)
   (et-declare (rel EtRel) (@return EtPath))
-  (seq-copy 1 )
   (if et:result--sticky-path et:result--path
     (if-let* ((flat (flatten-tree (list rel))))
         (append et:result--path (list (+ et:result--path-offset (car flat))) (cdr flat))
@@ -2014,6 +2016,11 @@ indeterminates slot."
               (et-parse-repr out (append (et-genvec-generics genvec) et:repr--parsing-generics)))
       (list 'Function (et:repr--parse-0 in) (et:repr--parse-0 out)))))
 
+;; fn0 (with no args) is equivalent to fn (with no args). Prefer the latter.
+(et-defspec fn0 (&optional ret) `(fn Nil ,ret))
+(et-defspec fn1 (arg &optional ret) `(fn (Args ,arg) ,ret))
+(et-defspec fn2 (arg1 arg2 &optional ret) `(fn (Args ,arg1 ,arg2) ,ret))
+
 
 ;;;; Op macros
 
@@ -2176,6 +2183,7 @@ indeterminates slot."
   (et:repr--indeterminate-if (et:repr--op-subtype? type (et Nil))
                              (et:repr--totype-0 yes) (et:repr--totype-0 no)))
 
+;; Take THE FIRST matching case
 (et-defspec switch (type &rest options)
   (pcase options
     ('nil 'Never)
@@ -2186,6 +2194,20 @@ indeterminates slot."
      `(infer ,type ,genvec ,pat ,out (switch ,type ,@rest)))
     (`(,default) default)
     (_ (error "Invalid format for switch"))))
+
+;; Must be exhaustive
+(et-defspec map-cases (type &rest cases)
+  (cl-loop for (genvec case output) in cases
+           for idx upfrom 1
+           for case-gen = (intern (format "@:%s" idx))
+           for gs = (append genvec nil)
+           do (cl-loop for g in gs when (memq g gens)
+                       do (error "Generic %s used multiple times" g))
+           collect case-gen into gens
+           append (append genvec nil) into gens
+           collect case into cases
+           collect `(extends? ,case-gen Never Never ,output) into outputs
+           return `(infer ,type [,@gens] (or ,@cases) (or ,@outputs) Never)))
 
 (et:repr--defop eval ([func :const] &rest args)
   :to-string (format "{eval %s on %s}" func (mapconcat #'et:repr--tostring-0 args ", "))
@@ -3782,6 +3804,13 @@ lazily because `List' is not yet defined when this file loads.")
   (or PlistOf<K~V>^{V:>:Nil}
       Plist<K~V>))
 
+(et-defalias PlistPut [PL PK PV]
+  (infer PL [K V] PlistOf<K~V> PlistOf<K|PK~V|PV>
+         (and PL Plist<PK~PV>)))
+(et-defalias AlistPut [PL PK PV]
+  (infer PL [K V] Alist<K~V> Alist<K|PK~V|PV>
+         Never))
+
 
 ;;;; Misc aliases
 
@@ -3808,6 +3837,22 @@ lazily because `List' is not yet defined when this file loads.")
       (Cons Sexp Sexp)
       (Vector Sexp)))
 (et-defalias Sexps [] List<Sexp>)
+
+(et-defalias ColorTriple [] (Tuple Integer Integer Integer))
+
+
+;;;; Time aliases
+
+(et-defalias Timestamp []
+  (or Nil Number (&Cons Integer Integer) (&Cons Integer (&Cons Integer Integer))
+      (&Tuple Integer Integer) (&Tuple Integer Integer Integer)
+      (&Tuple Integer Integer Integer Integer)))
+
+(et-defalias TimeOutput []
+  (or Integer (Cons Integer Integer) (Tuple Integer Integer Integer Integer)))
+
+(et-defalias Timezone []
+  (or Nil True @wall String Integer (&Tuple Integer String)))
 
 
 ;;;; Seq aliases
@@ -3840,6 +3885,25 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias StringOrBuffer [(<= Idx IntOrMarker)]
   (or String^{Idx:<:Integer}
       Buffer^{Idx:<:IntOrMarker}))
+
+
+;;;; Completion aliases
+
+(et-defalias CompletionPredicate [] fn1<String|Symbol>)
+
+(et-defalias CompletionFunction []
+  (fn [<= A Boolean|@lambda|@metadata|Cons<@boundaries~String>]
+      (Args String CompletionPredicate? A)
+      (switch A
+              [Nil Boolean|String]
+              [True &List<String>]
+              [@lambda Bool]
+              [@metadata Cons<@metadata~Alist<Symbol~Any>>]
+              [Cons<@boundaries~String> Cons<@boundaries~Cons<Integer~Integer>>]
+              Any)))
+
+(et-defalias CompletionTable []
+  (or List<String> Obarray HashTable<String|Symbol~Any> CompletionFunction))
 
 
 ;;;; Specific aliases

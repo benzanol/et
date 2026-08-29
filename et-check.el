@@ -67,6 +67,9 @@
 ;;;; Symbol properties
 ;;;;; Deferred declare
 
+(et-defvar et-no-defer-declare Bool nil
+  "If non-nil, then don't defer the declare phase.")
+
 (et-defun et-run-deferred-declare (name: Symbol) Boolean
   (when (get name 'et-deferred-declare)
     (ignore (et-result-boundary (funcall (get name 'et-deferred-declare))))
@@ -75,7 +78,9 @@
 
 (defmacro et-deferred-declare (name &rest body)
   (declare (indent 1))
-  `(put ,name 'et-deferred-declare (lambda () ,@body)))
+  `(let* ((fn (lambda () ,@body)))
+     (if et-no-defer-declare (funcall fn)
+       (put ,name 'et-deferred-declare fn))))
 
 
 ;;;;; Function type
@@ -580,6 +585,11 @@ be used as the body of the checker function."
 (et-define-check-macro $exp (expr)
   `(et-check-expansion (et-cur-recommendation) ,expr))
 
+(et-define-check-macro $exps (exprs)
+  `(cl-loop for (expr . rest) on ,exprs
+            do (et-check-expansion (unless rest (et-cur-recommendation))
+                                   expr)))
+
 
 ;;; ============================================================
 ;;; Processing - `et:process'
@@ -605,7 +615,10 @@ be used as the body of the checker function."
 (defvar et:process--expr nil "The expression currently being processed.")
 
 (et-defun et-process-exprs (exprs: Sexps &key check test eval only-check) Nil
-  (let* ((identifications (et-identify-exprs exprs)))
+  ;; If checking is enabled for this file, that means we want diagnostics,
+  ;; so disable deferred identification IFF checking is enabled
+  (let* ((et-no-defer-declare check)
+         (identifications (et-identify-exprs exprs)))
 
     ;; Evaluate the buffer
     ;; This must occur first, in case the buffer defines custom type keywords, macros, etc
@@ -690,7 +703,7 @@ be used as the body of the checker function."
 
 ;;; ============================================================
 ;;; Core control flow - `et:flow'
-;;;; Check reading/setting a variable
+;;;; Check reading a variable
 
 (et-defun et:flow-check-var (var: EtVar) EtType
   "Check a variable.
@@ -709,8 +722,8 @@ type for it."
       (et-check-expr (et-cur-recommendation) sym nil))
      (_ (error "Unable to resolve single variable symbol"))))
 
-;; ^ Get
-;; v Set
+
+;;;; Check setting a variable
 
 (et-defun et:flow-check-set (var: EtVar type: EtType) EtType
   "Should be called whenever VAR is assigned to TYPE."
@@ -728,6 +741,68 @@ type for it."
           (et:flow-check-set var val)
         (et-fatal nil "Variable not in scope: %s" sym)))
      (_ (et-fatal 0 "Unable to resolve single variable symbol for set"))))
+
+
+;;;; Check places
+
+(et-declare
+ (@alias EtCheckedPlace (Cons EtType fn1<EtType>)))
+
+(et-defun et:flow-check-place (expr: Sexp) EtCheckedPlace
+  (if (symbolp expr)
+      (if-let* ((var (et-get-symbol-var expr)))
+          (cons (et:flow-check-var var)
+                (lambda (newtype)
+                  (et:flow-check-set var newtype)))
+        (et-fatal nil "Variable not in scope: %s" expr))
+    (if-let* ((fn (when (consp expr) (get (car expr) 'et-place-checker))))
+        (apply fn (cdr expr))
+      (et-fatal nil "Not a place: %s" (or (car-safe expr) expr)))))
+
+(put 'plist-get 'et-place-checker
+     (lambda (plist prop &optional _pred)
+       (pcase-let* ((pt (et-check-expansion nil prop))
+                    (`(,cur . ,update) (et:flow-check-place plist)))
+         (cons (or (et-infer cur [V] (PlistLike ,pt V) V)
+                   (et-fatal nil "Expected plist, got %s" cur))
+               (lambda (vt)
+                 (funcall update (et PlistPut ,cur ,pt ,vt)))))))
+
+(put 'alist-get 'et-place-checker
+     (lambda (key alist &optional _def _remove _pred) ; todo
+       (pcase-let* ((kt (et-check-expansion nil key))
+                    (`(,cur . ,update) (et:flow-check-place alist)))
+         (cons (or (et-infer cur [V] (Alist ,kt V) V)
+                   (et-fatal nil "Expected alist, got %s" cur))
+               (lambda (vt)
+                 (funcall update (et AlistPut ,cur ,kt ,vt)))))))
+
+(put 'car 'et-place-checker
+     (lambda (cons) ; todo
+       (pcase-let* ((`(,cur . ,update) (et:flow-check-place cons)))
+         (cons (or (et-infer cur [AW] (ConsRW Any AW Any Never) AW)
+                   (et-fatal nil "Expected cons, got %s" cur))
+               (lambda (car)
+                 (funcall update
+                          (et infer ,cur [DR DW] (ConsRW Any Never DR DW)
+                              (ConsRW ,car ,car DR DW) Never)))))))
+
+(put 'cdr 'et-place-checker
+     (lambda (cons) ; todo
+       (pcase-let* ((`(,cur . ,update) (et:flow-check-place cons)))
+         (cons (or (et-infer cur [DW] (ConsRW Any Never Any DW) DW)
+                   (et-fatal nil "Expected cons, got %s" cur))
+               (lambda (cdr)
+                 (funcall update
+                          (et infer ,cur [AR AW] (ConsRW AR AW Any Never)
+                              (ConsRW DR DW ,cdr ,cdr) Never)))))))
+
+;; V var
+;; (AList Symbol (PList :prop Integer :other String))
+;; V (alist-get 'key var)
+;; Nil|(PList :key Integer :other String)
+;; V (plist-get (alist-get 'key var) :prop)
+;; ERR - plist may not exist
 
 
 ;;;; Check a variable binding, determining the variable type
@@ -757,10 +832,12 @@ fresh types."
                       for var = (et:type-var-new :name sym :type (et-reify-type (funcall fn)))
                       collect (cons var nil))))
            (get-advice
-            (lambda (var)
-              (when-let* ((entry (assq var var-recs))
-                          (rec (et-cur-recommendation)))
-                (push rec (cdr entry)))))
+            #'ignore
+            ;; (lambda (var)
+            ;;   (when-let* ((entry (assq var var-recs))
+            ;;               (rec (et-cur-recommendation)))
+            ;;     (push rec (cdr entry))))
+            )
            (set-advice
             (lambda (var type)
               (when-let* ((entry (assq var var-recs)))
@@ -775,8 +852,8 @@ fresh types."
                for (_ . recs) in var-recs
                for union = (apply #'et-union recs)
                for type = (et-with-recommendation union (funcall fn))
-               for all = (et-union type union)
-               collect (cons sym all)))))
+               for final = (et:algebra-unfreshen-type (et-union type union))
+               collect (cons sym final)))))
 
 
 ;;;; Check branches
@@ -926,10 +1003,10 @@ to that symbol."
   (pcase (car forms)
     ((pred (not vectorp)) `(et-chk ,@forms))
     (`[,(and var (pred symbolp)) ,symbol ,chk]
-     `(let* ((,var (et:type-var-new :name ,symbol :type (et-chk ,chk))))
+     `(let* ((,var (et:type-var-new :name ,symbol :type (et:algebra-unfreshen-type (et-chk ,chk)))))
         (et-with-vars (list ,var) (et-chk ($bind ,@(cdr forms))))))
     (`[,(and var (pred symbolp)) ,chk]
-     `(let* ((,var (et:type-var-new :name ',var :type (et-chk ,chk))))
+     `(let* ((,var (et:type-var-new :name ',var :type (et:algebra-unfreshen-type (et-chk ,chk)))))
         (et-chk ($bind ,@(cdr forms)))))
     (_ (error "Invalid $bind format: %s" forms))))
 
@@ -956,8 +1033,8 @@ to that symbol."
 (et-define-check-macro $if-eval (cond then-chk &rest else-chks)
   `(if ,cond (et-chk ,then-chk) (et-chk ,@else-chks)))
 
-(et-define-check-macro $type (spec)
-  (et-parse-type spec))
+(et-define-check-macro $type (spec) (et-parse-type spec))
+(et-define-check-macro $nil () (et Nil))
 
 (et-define-check-macro $ignore (&rest chks)
   `(et-with-recommendation nil (et-chk ,@chks)))
@@ -981,9 +1058,9 @@ to that symbol."
   (let* ((typesym (gensym "type")))
     `(let* ((,typesym (et-chk ,chk)))
        (or (et:match-result->value
-            (et-infer ,(et-parse-matcher match genvec)
-                      ,typesym
-                      ,(et-parse-repr out (et-genvec-generics genvec))))
+            (et:algebra-infer (et-parse-matcher match genvec)
+                              typesym
+                              (et-parse-repr out (et-genvec-generics genvec))))
            (et-fatal "Expected %s, found %s" ',match ,typesym)))))
 
 (et-define-check-macro $progn (first-chk &rest chks)
@@ -998,7 +1075,7 @@ to that symbol."
            finally return `(prog1 (et-chk ,first-chk) ,@exprs)))
 
 
-;;;; Chk common control-flow patterns
+;;;; Conditionals
 
 (et-define-check-shortcut $if (cond-chk then-chk else-chk)
   `($bind [cond ,cond-chk]
@@ -1471,7 +1548,7 @@ Returns a plist with :constrain and :populate functions."
 (et-set-identifier '@variable #'et:identify-et-defvar)
 
 (et-defun et:identify-et-defvar (name: Var spec: EtSpec &rest _) EtIdentifyPlist
-  (list :declare (lambda () (et-set-global-var-type name (et-parse-type spec)))))
+  (list :declare (lambda () (et-set-global-var-type name (et-at 2 (et-parse-type spec))))))
 
 
 ;;;; @check/@def/def*
@@ -1490,7 +1567,8 @@ Returns a plist with :constrain and :populate functions."
 
 (et-set-identifier '@def #'et:identify-@def)
 
-(et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List ret: EtSpec &rest declares: Sexps) EtIdentifyPlist
+(et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List ret: EtSpec &rest declares: Sexps)
+          EtIdentifyPlist
   (dolist (name (if (vectorp names) (append names nil) (list names)))
     (et-deferred-declare name
       (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist ,ret (declare (et ,@declares))))))

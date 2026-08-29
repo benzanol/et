@@ -29,6 +29,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
+
 (defmacro et: (_spec expr) (declare (indent 1)) expr)
 (defmacro et! (_spec expr) (declare (indent 1)) expr)
 
