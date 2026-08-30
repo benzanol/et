@@ -634,7 +634,7 @@ be used as the body of the checker function."
                (let* ((et:process--phase :eval)
                       (et:process--expr expr))
                  (et-error-boundary pos
-                   (et-wrap-errors "Runtime error: %s" (eval expr))))))
+                   (et-wrap-errors "Runtime error: %s" (eval expr t))))))
 
     ;; For each expression, et:process--identify-expr returns a list of
     ;; process-plists. A process-plist describes how to process that
@@ -1010,11 +1010,33 @@ to that symbol."
         (et-chk ($bind ,@(cdr forms)))))
     (_ (error "Invalid $bind format: %s" forms))))
 
+(et-define-check-macro $cl-bind (pattern type-chk body-chk)
+  `(et-with-binds (et:helpers--cl-destructure ,pattern (et-chk ,type-chk))
+     (et-chk ,body-chk)))
+
+(et-defun et:helpers--cl-destructure (pat: Sexp type: EtType) Alist<Var~EtType>
+  (pcase pat
+    ('nil nil)
+    ((and (pred symbolp) (guard (not (eq pat t)))) (list (cons pat type)))
+    (`(&optional . ,rest) (et:helpers--cl-destructure rest type))
+    (`(&rest ,rest . ,more)
+     (when more (error "Multiple parameters after &rest"))
+     (et:helpers--cl-destructure rest))
+    (`(,car . ,cdr)
+     (let* ((res (et:algebra-infers (et-parse-matcher '&Cons<A~B> [A B]) type
+                                    (list (et-parse-repr 'A '(A B)) (et-parse-repr 'B '(A B)))))
+            (val (et:match-result->value res)))
+       (if (et:match-result->success res)
+           (append (et:helpers--cl-destructure car (car val))
+                   (et:helpers--cl-destructure cdr (cadr val)))
+         (error "Cl destructure does not match. Expected cons, found %s" type))))
+    (other (error "Invalid cl destructure pattern: %s" other))))
+
 
 ;;;; Chk narrows
 
 (et-define-check-macro $when-is (type-chk is-chk &rest body-chks)
-  `(et-when-type (et-supersect (et:check-var-type ,type-chk) (et-chk ,is-chk))
+  `(et-when-type (et-supersect ,type-chk (et-chk ,is-chk))
      (et-chk ,@body-chks)))
 
 (et-define-check-macro $must-be (type-chk is-chk)
@@ -1085,7 +1107,7 @@ to that symbol."
 
 (et-define-check-shortcut $or (cond-chk else-chk)
   `($bind [cond ,cond-chk]
-          ($if ($var cond) ($var cond-var) ,else-chk)))
+          ($if ($var cond) ($var cond) ,else-chk)))
 
 (et-define-check-shortcut $and (cond-chk then-chk)
   `($if ,cond-chk ,then-chk ($type Nil)))
@@ -1138,7 +1160,7 @@ will be the result."
   (et-parse-type spec))
 
 (et:helper--define-utility-checker :eval (expr: Sexp)
-  (et-hint nil (et-pp (eval expr)))
+  (et-hint nil (et-pp (eval expr t)))
   (et Nil))
 
 (et:helper--define-utility-checker :var (var: EtVar)
@@ -1147,7 +1169,7 @@ will be the result."
 ;; Hinting
 
 (et:helper--define-utility-checker :pp (expr: Sexp)
-  (et-hint nil "%s" (eval expr))
+  (et-hint nil "%s" (eval expr t))
   (et Nil))
 
 (et:helper--define-utility-checker :narrows ()
@@ -1155,7 +1177,7 @@ will be the result."
   (et Nil))
 
 (et:helper--define-utility-checker :assert (expr: Sexp)
-  (if (eval expr) (et Nil)
+  (if (eval expr t) (et Nil)
     (et-fatal nil "Returned nil")))
 
 (et:helper--define-utility-checker :assert-error (_expr: Sexp)

@@ -20,7 +20,8 @@
 (defmacro et-clloop-pcase (body &rest pats)
   (declare (indent 1))
   (cl-loop for (pat chk) in pats
-           collect `(,pat (cons rest (lambda () (et-chk ,chk)))) into exprs
+           for expanded = (macroexpand-all `(et-chk ,chk))
+           collect `(,pat (cons rest (lambda () ,expanded))) into exprs
            finally return `(pcase ,body ,@exprs)))
 
 (et-defun et-clloop-parse (body) Cons<Sexps~fn>|Nil
@@ -28,10 +29,14 @@
     (et-clloop-pcase body
       ;; Empty
       ('nil ($nil))
+      ;; do
+      (`(do ,expr . ,rest)
+       ($progn ($exp expr) ($recurse rest)))
+      (`(return ,expr . ,rest)
+       ($progn ($exp expr) ($recurse rest))) ;todo
       ;; Assignment
-      (`(for ,var = ,expr1 . ,(or `(then . ,rest) rest))
-       ($bind [v var ($exp expr1)]
-              ($recurse rest)))
+      (`(for ,pat = ,expr1 . ,(or `(then . ,rest) rest))
+       ($cl-bind pat ($exp expr1) ($recurse rest)))
       ;; Looping
       (`(for ,var ,(or 'from 'upfrom 'downfrom) ,start
              ,(or 'to 'upto 'downto 'above 'below) ,end
@@ -41,11 +46,11 @@
                ($expect ($type Number) ($exp end))
                ($if-eval by ($expect ($type Integer) ($exp by)) ($nil))
                ($bind [_ var ($type Integer)] ($recurse rest))))
-      (`(for ,var ,(and in (or 'in 'on 'in-ref)) ,list
+      (`(for ,pat ,(and in (or 'in 'on 'in-ref)) ,list
              . ,(or `(by ,by . ,rest) rest))
-       ($bind [_ var ($infer [T] &List<T> T ($exp list))] ($recurse rest)))
-      (`(for ,var ,(and across (or 'across 'across-ref)) ,arr . ,rest)
-       ($bind [_ var ($infer [T] ArefSeq<T> T ($exp arr))] ($recurse rest)))
+       ($cl-bind pat ($infer [T] &List<T> T ($exp list)) ($recurse rest)))
+      (`(for ,pat ,(and across (or 'across 'across-ref)) ,arr . ,rest)
+       ($cl-bind pat ($infer [T] ArefSeq<T> T ($exp arr)) ($recurse rest)))
       (`(repeat ,times . ,rest)
        ($progn ($expect ($type Integer) ($exp times)) ($recurse rest)))
       (`(while ,cond . ,rest) ($loop ($if ($exp cond) ($exp rest) ($nil)))) ;todo

@@ -3337,6 +3337,24 @@ returning A itself is a valid approximation."
      (when (et:match-result->success result)
        (et:match-result->value result))))
 
+(defun et:algebra-infers (matcher type output-reprs &optional extra-repls)
+  (et-declare (matcher *et:match-matcher) (type EtType) (output-reprs &List<EtRepr>)
+              (extra-repls Alist<EtGeneric~EtType>)
+              (@return *et:match-result<List<EtType>>))
+  (let* ((gens-result (et-sub-match matcher type)))
+    (if (not (et:match-result->success gens-result)) gens-result
+
+      (cl-loop for gen in (et:match-matcher->generics matcher)
+               for gen-type in (et:match-result->value gens-result)
+               collect (cons gen gen-type) into new-repls
+               finally return
+               (et:match-result-new
+                :success t :value
+                (cl-loop for orepr in output-reprs
+                         collect (et-repr-to-type
+                                  orepr
+                                  (nconc new-repls extra-repls))))))))
+
 (defun et:algebra-infer (matcher type output-repr &optional extra-repls)
   "Infer TYPE against MATCHER, then convert OUTPUT-REPR to a type.
 
@@ -3347,22 +3365,11 @@ with the value determined by `et-sub-match', as well as EXTRA-REPLS if
 provided.
 
 This returns an `et-match-result' in case matching fails."
-  (declare (et (matcher *et:match-matcher) (type EtType) (output-repr EtRepr)
-               (extra-repls Alist<EtGeneric~EtType>)
-               (@return *et:match-result<EtType>)))
-
-  (let* ((gens-result (et-sub-match matcher type)))
-    (if (not (et:match-result->success gens-result)) gens-result
-
-      (cl-loop for gen in (et:match-matcher->generics matcher)
-               for gen-type in (et:match-result->value gens-result)
-               collect (cons gen gen-type) into new-repls
-               finally return
-               (et:match-result-new
-                :success t :value
-                (et-repr-to-type
-                 output-repr
-                 (nconc new-repls extra-repls)))))))
+  (et-declare (matcher *et:match-matcher) (type EtType) (output-repr EtRepr)
+              (extra-repls Alist<EtGeneric~EtType>)
+              (@return *et:match-result<EtType>))
+  (let* ((result (et:algebra-infers matcher type (list output-repr) extra-repls)))
+    (et-copy-with result :value (car (et:match-result->value result)))))
 
 
 ;;;; Funcall
