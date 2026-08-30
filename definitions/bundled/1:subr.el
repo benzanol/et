@@ -22,15 +22,20 @@
  (@check push)
  (@check pop)
  (@check static-if)
- (@check when)
- (@check unless)
+ (@check when
+         ($pcase
+          `(,_condition . ,_body) ($if ($at 1) ($tail 2) ($type Nil))))
+ (@check unless
+         ($pcase
+          `(,_condition . ,_body) ($if ($at 1) ($type Nil) ($tail 2))))
  (@def subr-primitive-p)
  (@def primitive-function-p)
- (@def xor)
+ (@def xor (&rest conditions: &List) Boolean)
  (@check dolist)
  (@check dotimes)
- (@check declare)
- (@check ignore-errors)
+ (@check declare ($type Nil))
+ (@check ignore-errors
+         ($branches ($tail 1) ($type Nil)))
  (@check ignore-error))
 
 
@@ -39,9 +44,9 @@
 
 (et-declare
  (@def gensym)
- (@def ignore)
+ (@def ignore (&rest arguments: &List) Nil)
  (@def always)
- (@def error)
+ (@def error (format: String &rest arguments: &List) Never)
  (@def user-error)
  (@def define-error)
  (@def frame-configuration-p)
@@ -56,14 +61,14 @@
 ;;; List functions
 
 (et-declare
- (@def caar)
- (@def cadr)
- (@def cdar)
+ (@def caar ([T] list: &List<&Cons<T~Any>>) T?)
+ (@def cadr ([T] list: &List<T>) T?)
+ (@def cdar ([T] list: &List<&Cons<Any~T>>) T?)
  (@def cddr)
  (@def caaar)
  (@def caadr)
  (@def cadar)
- (@def caddr)
+ (@def caddr ([T] list: &List<T>) T?)
  (@def cdaar)
  (@def cdadr)
  (@def cddar)
@@ -84,13 +89,13 @@
  (@def cddadr)
  (@def cdddar)
  (@def cddddr)
- (@def last)
- (@def butlast)
+ (@def last ([T] list: &List<T> &optional n: Integer) &List<T>)
+ (@def butlast ([T] list: &List<T> &optional n: Integer) ListFresh<T>)
  (@def nbutlast)
- (@def delete-dups)
+ (@def delete-dups ([T] list: List<T>) List<T>)
  (@def delete-consecutive-dups)
  (@def number-sequence)
- (@def copy-tree))
+ (@def copy-tree ([T] tree: T &optional vectors: Bool) (freshen-deep T)))
 
 
 ;;; ============================================================
@@ -102,9 +107,12 @@
  (@def assoc-delete-all)
  (@def assq-delete-all)
  (@def rassq-delete-all)
- (@def alist-get)
- (@def remove)
- (@def remq))
+ (@def alist-get
+       ([K V] key: K alist: &Alist<K~V>
+        &optional default: V remove: Bool testfn: (or Nil (fn (Args K K) Any)))
+       V?)
+ (@def remove ([T] element: Any sequence: &List<T>) ListFresh<T>)
+ (@def remq ([T] element: Any list: &List<T>) ListFresh<T>))
 
 
 ;;; ============================================================
@@ -257,8 +265,8 @@
 ;;; `when-let' and friends
 
 (et-declare
- (@check if-let*)
- (@check when-let*)
+ (@check if-let* ($expand))
+ (@check when-let* ($expand))
  (@check and-let*)
  (@check if-let)
  (@check when-let)
@@ -288,7 +296,10 @@
  (@def define-symbol-prop)
  (@def locate-eln-file)
  (@def symbol-file)
- (@def locate-library))
+ (@def locate-library
+       (library: String &optional nosuffix: Bool path: &List<String>
+                interactive-call: Bool)
+       String?))
 
 
 ;;; ============================================================
@@ -372,7 +383,7 @@
  (@def booleanp)
  (@def special-form-p)
  (@def plistp)
- (@def macrop)
+ (@def macrop (object: Any) Boolean)
  (@def compiled-function-p)
  (@def integer-or-null-p)
  (@def field-at-pos)
@@ -426,7 +437,8 @@
  (@check with-output-to-string)
  (@check with-local-quit)
  (@check while-no-input)
- (@check condition-case-unless-debug)
+ (@check condition-case-unless-debug
+         ($exp (cons 'condition-case (cdr (et-cur-expr)))))
  (@check with-demoted-errors)
  (@check combine-after-change-calls)
  (@def combine-change-calls-1)
@@ -441,12 +453,14 @@
 
 (et-declare
  (@check save-match-data)
- (@def match-string)
+ (@def match-string (subexp: Integer &optional string: String) String?)
  (@def match-string-no-properties)
  (@def match-substitute-replacement)
  (@def looking-back)
  (@def looking-at-p)
- (@def string-match-p)
+ (@def string-match-p
+       (regexp: String string: String &optional start: Integer?)
+       Integer?)
  (@def subregexp-context-p))
 
 
@@ -465,7 +479,7 @@
 
 (et-declare
  (@def subst-char-in-string)
- (@def string-replace)
+ (@def string-replace (from-string: String to-string: String in-string: String) String)
  (@def replace-regexp-in-string)
  (@def string-equal-ignore-case)
  (@def string-prefix-p)
@@ -586,8 +600,8 @@
 
 (et-declare
  (@def register-definition-prefixes)
- (@def flatten-tree)
- (@def flatten-list)
+ (@def flatten-tree ([T] tree: &Tree<T>) ListFresh<T>)
+ (@def flatten-list ([T] tree: &Tree<T>) ListFresh<T>)
  (@def string-trim-left)
  (@def string-trim-right)
  (@def string-trim)
