@@ -28,7 +28,7 @@
 (require 'subr-x)
 
 
-(defvar et-debug nil
+(et-defvar et-debug Bool nil
   "Perform extra debug checks.")
 
 (defmacro et (&rest args)
@@ -109,12 +109,12 @@
              EtMatchFunctionConstraint))
 
  (@alias EtReprFactor
-         (or (TupleStar @S:DT EtDatatypeName List)
-             (TupleStar @S:ALIAS EtAliasName List<EtType>)
+         (or (Tuple* @S:DT EtDatatypeName List)
+             (Tuple* @S:ALIAS EtAliasName List<EtType>)
              (Tuple @S:GENERIC EtGeneric)
              (Tuple @S:POLY EtGeneric)
              (Tuple @S:NOINFER EtRepr Alist<EtGeneric~EtRepr>)
-             (TupleStar @S:OP Var List)
+             (Tuple* @S:OP Var List)
              (Tuple @S:SET EtRepr EtType @SUB|@SUPER|@EQ)))
 
  (@alias EtReprCase (&List EtReprFactor))
@@ -589,9 +589,7 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
 (et-defvar et:type--polymorphs EtPolymorphicTypes nil
   "Polymorphic types in scope.")
 
-(defun et:type--make-polymorphs (matcher)
-  (declare (et (matcher *et:match-matcher) (@return EtPolymorphicTypes)))
-
+(et-defun et:type--make-polymorphs (matcher: *et:match-matcher) EtPolymorphicTypes
   (cl-loop for name in (et:match-matcher->generics matcher)
            when (assq name et:type--polymorphs)
            do (error "Polymorphic type `%s' is already defined" name)
@@ -976,8 +974,8 @@ a valid `et:type-case->value'."
 ;;; Datatypes - `et:dt'
 ;;;; Datatypes
 
-(defvar et:dt--datatypes
-  (et! Alist<EtDatatypeName~EtDatatypeProps>
+(et-defvar et:dt--datatypes
+    Alist<EtDatatypeName~EtDatatypeProps>
     '((Any :args nil :overlap t :predicate (lambda (v) t))
       ;; Literal<VALUE> is a type matching only the value VALUE
       ;; A literal CANNOT be ephemeral (like a buffer), it must be printable and readable
@@ -1058,7 +1056,7 @@ a valid `et:type-case->value'."
       (Emacs :args (CONST)
              :overlap nil
              ;; a literal can never be an emacs datatype, so predicate=nil
-             :predicate nil)))
+             :predicate nil))
   "Datatypes.")
 
 (et-defun et:dt--hash-table-predicate ([T] value: Any key-read: T value-read: T) Alist<Any~T>
@@ -1082,9 +1080,6 @@ corresponds to the role of each argument in `dt-args'. `CONST' indicates
 an argument which is a literal Lisp value. `CO'/`CONTRA'/`ISO' indicate
 that the argument is a type argument, and whether the type argument is
 covariant, contravariant, or isovariant."
-  (declare (et (dt-name Var) (dt-args &List)
-               (@return List<EtDatatypeRole>)))
-
   (pcase (plist-get (or (alist-get dt-name et:dt--datatypes)
                         (error "Invalid datatype: %s %s" dt-name dt-args))
                     :args)
@@ -1763,11 +1758,9 @@ in GEN-REPLS, if it exists."
                           ,gen-repls)))))
       (_ (error "Invalid matcher repr factor: %s" factor)))))
 
-(defun et:repr-substitute-generics (repr gen-repls generics)
-  (declare (et (repr EtRepr)
-               (gen-repls Alist<EtGeneric~EtRepr>)
-               (generics List<EtGeneric>)
-               (@return EtRepr)))
+(et-defun et:repr-substitute-generics
+    (repr: EtRepr gen-repls: Alist<EtGeneric~EtRepr> generics: List<EtGeneric>)
+    EtRepr
 
   (when et-debug
     (unless (seq-set-equal-p (mapcar #'car gen-repls) (et:repr->generics repr) #'eq)
@@ -2374,7 +2367,9 @@ same as [T (<= T Number)]."
 
 ;;;; Match results
 
-(defvar et:match--constraints-stack nil
+(et-defvar et:match--constraints-stack
+    (Alist (Tuple @sub|@super EtRepr EtType) EtConstrainResult)
+    nil
   "Stack of calls to `et--sub/super-constraints' for preventing loops.
 
 Used by `et-stop-recursion', with ELEM=(`sub'|`super' M-REPR TYPE).
@@ -2396,10 +2391,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (et-declare (@generics [T]) (value T) (@return *et:match-result<T>))
   (et:match-result-new :success t :value value))
 
-(defun et:match-result-and (&rest results)
-  (declare (et (@generics [T])
-               (results &List<EtMatchResult<List<T>>>)
-               (@return EtMatchResult<List<T>>)))
+(et-defun et:match-result-and ([T] &rest results: &List<EtMatchResult<List<T>>>)
+          EtMatchResult<List<T>>
   (cl-loop for result in results
            if (not (et:match-result->success result))
            return result
@@ -2409,19 +2402,13 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 ;;;; Expand matcher aliases
 
-(defun et:match--expand-aliases (matcher)
-  (declare (et (matcher *et:match-matcher) (@return *et:match-matcher)))
-
+(et-defun et:match--expand-aliases (matcher: *et:match-matcher) *et:match-matcher
   (et:match-matcher-new :repr (et:match--expand-repr-aliases (et:match-matcher->repr matcher)
                                                              (et:match-matcher->generics matcher))
                         :generics (et:match-matcher->generics matcher)
                         :constraints (et:match-matcher->constraints matcher)))
 
-(defun et:match--expand-repr-aliases (repr scope)
-  (declare (et (repr EtRepr)
-               (scope List<EtGeneric>)
-               (@return EtRepr)))
-
+(et-defun et:match--expand-repr-aliases (repr: EtRepr scope: List<EtGeneric>) EtRepr
   (cl-loop for case in (et:repr->dnf repr)
            append
            (cl-loop for factor in case
@@ -2511,10 +2498,10 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
 
 (defun et:match--sub-or-super-constraints-3 (match-factor case generics &optional is-super)
   "sub-3 and super-3 are similar enough that combining them is simpler."
-  (declare (et (match-factor EtReprFactor)
-               (case *et:type-case)
-               (generics List<EtGeneric>)
-               (@return EtConstrainResult)))
+  (et-declare (match-factor EtReprFactor)
+              (case *et:type-case)
+              (generics List<EtGeneric>)
+              (@return EtConstrainResult))
 
   (pcase match-factor
     (`(S:GENERIC ,var)
@@ -2544,10 +2531,10 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
     (_ (error "Invalid match factor"))))
 
 (defun et:match--sub-or-super-constraints-4 (m-name m-args t-name t-args generics &optional is-super)
-  (declare (et (m-name Var) (m-args List)
-               (t-name Var) (t-args List)
-               (generics List<EtGeneric>)
-               (@return EtConstrainResult)))
+  (et-declare (m-name Var) (m-args List)
+              (t-name Var) (t-args List)
+              (generics List<EtGeneric>)
+              (@return EtConstrainResult))
 
   (cl-flet ((make-matcher (mr) (et:match-matcher-new :repr mr :generics generics)))
     (if (not is-super)
@@ -3422,6 +3409,7 @@ This returns an `et-match-result' in case matching fails."
 
 (defvar et:algebra--rec-transform-datatypes-loops nil
   "Loop aliases created by `et:algebra--rec-transform-datatypes-inner'.
+
 A list of (TEMP-SYMBOL . DEFINITION), newest first. Each entry is a
 recursive (\"loop\") alias the inner pass generated, named with a
 deterministic but throwaway uninterned TEMP-SYMBOL. The wrapper
@@ -3558,6 +3546,7 @@ Return ARGS itself when nothing changed."
 
 (defvar et:algebra--rec-transform-active nil
   "Non-nil while inside the outermost `et:algebra--rec-transform-datatypes' call.
+
 Used to share a single loop scope across nested calls (see below).")
 
 (defun et:algebra--rec-canonical-collapses (loops canonical-loops)
@@ -3672,6 +3661,7 @@ structural key -- a stale result is never served, only a cache miss."
 
 (defvar et:algebra--unfreshen-canonical-loops nil
   "Cached canonical (MATCHER . REPR) collapses for `et:algebra-unfreshen-type'.
+
 Loops produced while unfreshening that match MATCHER are rewritten to
 REPR with the matched generics substituted in, so the loop generated for
 `ListFresh<Number>' collapses to the readable `List<Number>'.  Built
@@ -3754,15 +3744,16 @@ lazily because `List' is not yet defined when this file loads.")
 ;;; Define aliases
 ;;;; Emacs aliases
 
-(defvar et-aliased-emacs-types
-  '(buffer marker window frame window-configuration overlay
-           terminal process
-           thread mutex condition-variable
-           font-spec font-entity font-object
-           xwidget xwidget-view
-           char-table bool-vector obarray
-           finalizer
-           interpreted-function byte-code-function subr))
+(et-defvar et-aliased-emacs-types
+    List<Var>
+    '(buffer marker window frame window-configuration overlay
+             terminal process
+             thread mutex condition-variable
+             font-spec font-entity font-object
+             xwidget xwidget-view
+             char-table bool-vector obarray
+             finalizer
+             interpreted-function byte-code-function subr))
 
 (dolist (sym et-aliased-emacs-types)
   (let* ((alias (string-replace "-" "" (capitalize (format "%s" sym)))))

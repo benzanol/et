@@ -55,7 +55,10 @@
  (@check et! ($pcase `(,spec ,_expr)
                      ($temp-var type ($eval (et-parse-type spec))
                                 ($prog1 ($var type)
-                                        ($with-rec ($var type) ($at 2)))))))
+                                        ($with-rec ($var type) ($at 2))))))
+
+ (@expand et-defun)
+ (@expand et-defstruct))
 
 (et-set-checker #'et-defun #'et:checker--et-defun)
 (et-defun et:checker--et-defun () EtType

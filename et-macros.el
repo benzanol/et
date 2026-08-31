@@ -45,6 +45,7 @@
   (declare (indent 3) (doc-string 4))
   `(defvar ,symbol . ,rest))
 
+(et-declare (@expand et-defstruct))
 (defmacro et-defstruct (name &rest args)
   (declare (doc-string 2) (indent 1))
   `(cl-defstruct
@@ -55,6 +56,7 @@
         ,@(cdr-safe name))
      ,@args))
 
+(et-declare (@expand et-defun))
 (defmacro et-defun (name arglist return &rest body)
   "Define NAME as a function with type annotations.
 

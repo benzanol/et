@@ -19,8 +19,14 @@
  (@def buffer-local-boundp)
  (@check buffer-local-set-state)
  (@def buffer-local-restore-state)
- (@check push)
- (@check pop)
+ (@check push
+         ($arglist (newelt place)
+                   ($exp `(setf ,place (cons ,newelet ,place)))))
+ (@check pop
+         ($arglist (newelt place)
+                   ($bind [car ($exp `(car ,place))]
+                          ($exp `(setf ,place (cdr ,place)))
+                          ($var car))))
  (@check static-if)
  (@check when
          ($pcase
@@ -298,7 +304,7 @@
  (@def symbol-file)
  (@def locate-library
        (library: String &optional nosuffix: Bool path: &List<String>
-                interactive-call: Bool)
+                 interactive-call: Bool)
        String?))
 
 

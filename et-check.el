@@ -35,7 +35,8 @@
  (@alias EtNarrows Alist<EtVar~EtType>)
  ;; True = keep the current recommendation
  (@alias EtRec Nil|EtType)
- (@alias EtIdentifyPlist (PlistOf @:constrain|@:populate|@:declare Nil|fn))
+ (@alias EtProcessingPhase :constrain|:populate|:declare)
+ (@alias EtIdentifyPlist (PlistOf EtProcessingPhase fn))
  (@alias EtIdentifyFn (fn Nil EtIdentifyPlist))
 
  (@alias EtCheckFn (fn Nil EtType))
@@ -48,6 +49,7 @@
 
  (@symbol-property et-identify EtIdentifyFn)
  (@symbol-property et-checker EtCheckFn)
+ (@symbol-property et-chk EtChk)
  (@symbol-property et-check-macro fn<Any~EtType>))
 
 (et-declare
@@ -145,6 +147,13 @@
 
 (et-defun et-symbol-checker (sym: Var) Nil|EtCheckFn
   (get sym 'et-checker))
+
+(et-defun et-set-chk (sym: Var chk: EtChk) Nil
+  (et-set-checker sym (eval `(lambda () (et-chk ,chk))))
+  (put sym 'et-chk chk))
+
+(et-defun et-symbol-chk (sym: Var) EtChk?
+  (get sym 'et-chk))
 
 
 ;;; ============================================================
@@ -597,16 +606,37 @@ be used as the body of the checker function."
 
 (et-defvar et-identifying-expr Sexp|Nil nil)
 
-(et-defun et-identify-expr (expr: Sexp) Nil|EtIdentifyPlist
+(et-defun et-identify-expr (expr: Sexp) EtIdentifyPlist?
   (when-let* ((func (car-safe expr))
               (identify (when (symbolp func) (et-symbol-identifier func))))
     (let* ((et-identifying-expr expr))
       (apply identify (cdr expr)))))
 
-(et-defun et-identify-exprs (exprs: Sexps) List<Nil|EtIdentifyPlist>
+(et-defun et-identify-exprs (exprs: Sexps) List<EtIdentifyPlist?>
   (cl-loop for expr in exprs
            for idx upfrom 0
            collect (et-at idx (et-identify-expr expr))))
+
+
+;;;; Top-level et-declare
+
+(et-defun et:process--perform-declare-phase (plists: &List<EtIdentifyPlist> phase: EtProcessingPhase) Nil
+  (cl-loop for plist in plists
+           for pos upfrom 1
+           for func = (plist-get plist phase)
+           when func do (et-error-boundary pos (funcall func))))
+
+(et-defun et:process--identify-declare (forms: Sexps) EtIdentifyPlist
+  (let* ((plists (et-at-offset 1 (et-identify-exprs forms))))
+    (list
+     :constrain (lambda () (et:process--perform-declare-phase plists :constrain))
+     :populate (lambda () (et:process--perform-declare-phase plists :populate))
+     :declare (lambda () (et:process--perform-declare-phase plists :declare)))))
+
+(et-defun et:process--identify-declares (exprs: Sexps) List<Nil|EtIdentifyPlist>
+  (cl-loop for expr in exprs
+           collect (when (eq #'et-declare (car-safe expr))
+                     (et:process--identify-declare (cdr expr)))))
 
 
 ;;;; Process exprs
@@ -618,7 +648,12 @@ be used as the body of the checker function."
   ;; If checking is enabled for this file, that means we want diagnostics,
   ;; so disable deferred identification IFF checking is enabled
   (let* ((et-no-defer-declare check)
-         (identifications (et-identify-exprs exprs)))
+         ;; Identify declares first, so that they can set up other symbols as top-level identifiers
+         (declare-idents (et:process--identify-declares exprs))
+         (non-declare-idents (et-identify-exprs exprs))
+         (identifications (cl-loop for p1 in declare-idents
+                                   for p2 in non-declare-idents
+                                   collect (or p1 p2))))
 
     ;; Evaluate the buffer
     ;; This must occur first, in case the buffer defines custom type keywords, macros, etc
@@ -1036,7 +1071,7 @@ to that symbol."
 ;;;; Chk narrows
 
 (et-define-check-macro $when-is (type-chk is-chk &rest body-chks)
-  `(et-when-type (et-supersect ,type-chk (et-chk ,is-chk))
+  `(et-when-type (et-supersect (et-chk ,type-chk) (et-chk ,is-chk))
      (et-chk ,@body-chks)))
 
 (et-define-check-macro $must-be (type-chk is-chk)
@@ -1073,17 +1108,17 @@ to that symbol."
     `(let* ((,expsym (et-chk ,expected-chk))
             (,typesym (et-with-recommendation ,expsym (et-chk ,chk))))
        (unless (et-subtype? ,typesym ,expsym)
-         (et-fatal "Expected %s, found %s" ,expsym ,typesym))
+         (et-fatal nil "Expected %s, found %s" ,expsym ,typesym))
        ,typesym)))
 
-(et-define-check-macro $infer (genvec match out chk)
+(et-define-check-macro $infer (_genvec match _out chk)
   (let* ((typesym (gensym "type")))
     `(let* ((,typesym (et-chk ,chk)))
        (or (et:match-result->value
             (et:algebra-infer (et-parse-matcher match genvec)
                               typesym
                               (et-parse-repr out (et-genvec-generics genvec))))
-           (et-fatal "Expected %s, found %s" ',match ,typesym)))))
+           (et-fatal nil "Expected %s, found %s" ',match ,typesym)))))
 
 (et-define-check-macro $progn (first-chk &rest chks)
   (cl-loop with all = (cons first-chk chks)
@@ -1124,6 +1159,10 @@ will be the result."
      ,@(cl-loop for (pat chk) on repls by #'cddr
                 collect `(,pat (et-chk ,chk)))
      (_ (et-fatal nil "Invalid `%s' format" (car (et-cur-expr))))))
+
+(et-define-check-macro $arglist (arglist &rest chks)
+  `(cl-destructuring-bind ,arglist (cdr (et-cur-expr))
+     (et-chk ,@chks)))
 
 (et-define-check-macro $expand ()
   `(if (macrop (car (et-cur-expr)))
@@ -1519,24 +1558,6 @@ Returns the type of the last expression in the body."
 
 ;;; ============================================================
 ;;; Identifiers - `et:identify'
-;;;; et-declare
-
-(et-set-identifier #'et-declare #'et:identify-et-declare)
-
-(et-defun et:identify-et-declare (&rest forms: Sexps) EtIdentifyPlist
-  (let* ((plists (et-at-offset 1 (et-identify-exprs forms)))
-         (perform-phase
-          (lambda (phase)
-            (cl-loop for plist in plists
-                     for pos upfrom 1
-                     for func = (plist-get plist phase)
-                     when func do (et-error-boundary pos (funcall func))))))
-    (list
-     :constrain (lambda () (funcall perform-phase :constrain))
-     :populate (lambda () (funcall perform-phase :populate))
-     :declare (lambda () (funcall perform-phase :declare)))))
-
-
 ;;;; @alias
 
 (et-set-identifier '@alias #'et:identify-@alias)
@@ -1604,12 +1625,20 @@ Returns a plist with :constrain and :populate functions."
    (lambda ()
      (dolist (name (if (vectorp names) (append names nil) (list names)))
        (et-deferred-declare name
-         (et-set-checker name (eval `(lambda () (et-chk ,chk)))))))))
+         (et-set-chk name chk))))))
 
 
 ;;;; @expand
 
-(et-set-identifier #'et-defun #'et:identify-macroexpand)
+;; Make a symbol identify by identifying its macro expansion
+;; This is different from the $expand checker because it
+;; applies to identification, not just checking.
+
+(et-set-identifier '@expand #'et:identify-@expand)
+
+(defun et:identify-@expand (symbol)
+  (et-set-identifier symbol #'et:identify-macroexpand)
+  nil)
 
 (defun et:identify-macroexpand (&rest _body)
   "Identify an expression by identifying its macro expansion."
@@ -1619,7 +1648,7 @@ Returns a plist with :constrain and :populate functions."
 
 ;;;; defstruct
 
-(et-set-identifier #'defun #'et:identify-cl-defstruct)
+(et-set-identifier #'cl-defstruct #'et:identify-cl-defstruct)
 
 (et-defun et:identify-cl-defstruct (&rest body) EtIdentifyPlist
   "Identify a `cl-defstruct' expression, returning a processing plist."

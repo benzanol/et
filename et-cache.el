@@ -500,9 +500,9 @@ input (see the call cache)."
 ;;   TYPES     - alist of (SPEC . HASH) for every type spec the body
 ;;               parsed, so an alias changing under an unchanged body
 ;;               is caught by re-parsing
-;;   FUNCTIONS - alist of (NAME . HASH) for every typed function the
-;;               body called, hashed by that function's *signature*
-;;               (the body never depends on a callee's body)
+;;   FUNCTIONS - alist of (NAME . HASH) for every function the body
+;;               called, hashed by that function's signature and `et-chk'
+;;               property (the body never depends on a callee's body)
 ;; A nil HASH means "not defined when cached"; if it later resolves,
 ;; the recomputed hash differs and the entry is invalidated.
 ;;
@@ -524,7 +524,7 @@ input (see the call cache)."
 (defvar et--fp-specs nil
   "Type specs parsed while `et--fp-active', newest first.")
 (defvar et--fp-funcs nil
-  "Typed function names checked while `et--fp-active', newest first.")
+  "Called function names checked while `et--fp-active', newest first.")
 
 ;; These are `:before' advices: a signal here would abort the advised
 ;; call itself, so their bodies are fully guarded. Their results are
@@ -538,7 +538,7 @@ input (see the call cache)."
       (cl-pushnew spec et--fp-specs :test #'equal))))
 
 (defun et:cache--capture-function (expr &rest _)
-  "Advice on `et:check-check': record a called typed function as a dependency."
+  "Advice on `et:check-check': record a called function as a dependency."
   (et:cache--try
     (when (and et--fp-active (consp expr)
                (symbolp (car expr)) (car expr))
@@ -556,6 +556,20 @@ input (see the call cache)."
             (get name 'et-function-parameters)
             (get name 'et-function-props))))))
 
+(defun et:cache--hash-name-func-dependency (name)
+  "Hash the type data and declarative checker for called function NAME.
+Return nil when NAME has neither a function type nor an `et-chk' property.
+Custom `et-checker' functions without an `et-chk' property are not hashed."
+  (let ((ft (et-symbol-func-type name))
+        (chk (et-symbol-chk name)))
+    (when (or ft chk)
+      (et:cache--hash-result-value
+       (et:cache--hash
+        (list ft
+              (get name 'et-function-parameters)
+              (get name 'et-function-props)
+              chk))))))
+
 (defun et:cache--hash-type-spec (spec)
   "Hash the type SPEC parses to, or nil if it does not resolve."
   (ignore-errors (et:cache--hash-result-value (et:cache--hash (list (et-parse-type spec))))))
@@ -571,7 +585,7 @@ input (see the call cache)."
    :source (et:cache--hash-defun-source expr)
    :signature (et:cache--hash-name-func-signature name)
    :types (mapcar (lambda (s) (cons s (et:cache--hash-type-spec s))) specs)
-   :functions (mapcar (lambda (f) (cons f (et:cache--hash-name-func-signature f))) funcs)))
+   :functions (mapcar (lambda (f) (cons f (et:cache--hash-name-func-dependency f))) funcs)))
 
 (defun et:cache--defun-fingerprint-current-p (name expr fp)
   "Return non-nil if FP still matches the current state for NAME."
@@ -579,7 +593,7 @@ input (see the call cache)."
        (equal (et:cache--defun-fingerprint-signature fp) (et:cache--hash-name-func-signature name))
        (cl-every (lambda (c) (equal (cdr c) (et:cache--hash-type-spec (car c))))
                  (et:cache--defun-fingerprint-types fp))
-       (cl-every (lambda (c) (equal (cdr c) (et:cache--hash-name-func-signature (car c))))
+       (cl-every (lambda (c) (equal (cdr c) (et:cache--hash-name-func-dependency (car c))))
                  (et:cache--defun-fingerprint-functions fp))))
 
 
