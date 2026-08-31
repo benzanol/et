@@ -926,11 +926,12 @@ a valid `et:type-case->value'."
   (et-repr-to-type (et-parse-repr spec nil)))
 
 (et-defun et-pp-type (type: EtType) String
-  (or (ignore-errors (et-repr-to-string (et-type-to-repr type)))
-      (format "%s" type)))
+  (et-repr-to-string (et-type-to-repr type)))
 
 (cl-defmethod cl-print-object ((type et:type) stream)
-  (princ (et-pp-type type) stream))
+  (princ (or (ignore-errors (et-repr-to-string (et-type-to-repr type)))
+             (format "%s" type))
+         stream))
 
 (et-defun et-pp (arg: Any) String
   (if (stringp arg) arg (cl-prin1-to-string arg)))
@@ -1733,7 +1734,8 @@ in GEN-REPLS, if it exists."
   (declare (et (factor EtReprFactor)
                (gen-repls Alist<EtGeneric~EtRepr>)
                (generics List<EtGeneric>)
-               (@return EtReprDnf)))
+               (@return EtReprDnf)
+               (@skip)))
 
   (let* ((sub (lambda (r) (et:repr-substitute-generics r gen-repls generics))))
     (pcase factor
@@ -1787,6 +1789,9 @@ in GEN-REPLS, if it exists."
 
 ;;;; To string
 
+(et-declare
+ (@alias EtToString (or String Tuple<@B|@R|@W|@O~EtToString~EtToString>)))
+
 (cl-defmethod cl-print-object ((repr et:repr) stream)
   (princ (format "#R<%s>" (et-repr-to-string repr)) stream))
 
@@ -1796,7 +1801,31 @@ in GEN-REPLS, if it exists."
   (let* ((et:repr--tostring-loops nil))
     (et:repr--tostring-0 repr)))
 
+(et-defun et:repr--tostring-resolve (to: EtToString) String
+  (if (stringp to) to
+    (cl-loop with first-op = (car to)
+             with cur = to
+             while (and (consp cur) (eq first-op (car cur)))
+             collect (et:repr--tostring-resolve (cadr cur)) into elems
+             do (setq cur (caddr cur))
+             finally return
+             (format "%s(%s%s)"
+                     (pcase first-op ('B "") ('R "&") ('W "#w") ('O "#?"))
+                     (string-join elems " ")
+                     (let* ((final-cdr (et:repr--tostring-resolve cur)))
+                       (if (equal final-cdr "`nil'") ""
+                         (format " . %s" final-cdr)))))))
+
+
 (et-defun et:repr--tostring-0 (repr: EtRepr) String
+  (et:repr--tostring-resolve (et:repr--tostring-noresolve repr)))
+
+(et-defun et:repr--join-tostrings (def: String sep: String tos: &List<EtToString>) EtToString
+  (cond ((null tos) def)
+        ((null (cdr tos)) (car tos))
+        (t (mapconcat #'et:repr--tostring-resolve tos sep))))
+
+(et-defun et:repr--tostring-noresolve (repr: EtRepr) EtToString
   (cl-loop for factors in (et:repr->dnf repr)
            collect
            (cl-loop for (name . args) in factors
@@ -1807,16 +1836,20 @@ in GEN-REPLS, if it exists."
                                 (memq (car args) '(typeof bind)))
                     collect (apply print args) into and-strings
                     finally return
-                    (if-let* ((strs (delete-dups (remove "Any" and-strings))))
-                        (string-join strs " & ") "Any"))
+                    (et:repr--join-tostrings
+                     "And" " ^ " (delete-dups (remove "Any" and-strings))))
            into or-strings
            finally return
-           (let* ((str (if or-strings (string-join or-strings " | ") "Never")))
+           (let* ((str (et:repr--join-tostrings "Never" " | " or-strings)))
              (if (and et-print-labels (et:repr->label repr))
-                 (format "%s[%s]" (et:repr->label repr) str)
+                 (format "%s[%s]" (et:repr->label repr)
+                         (et:repr--tostring-resolve str))
                str))))
 
-(et-defun et:repr--tostring-named (name: Symbol args: List) String
+(et-defun et:repr--neverp (repr: EtRepr) Boolean
+  (null (et:repr->dnf repr)))
+
+(et-defun et:repr--tostring-named (name: Symbol args: &List<EtRepr>) EtToString
   (pcase (cons name args)
     (`(Literal ,val)
      (format "`%s'" (prin1-to-string val)))
@@ -1825,27 +1858,20 @@ in GEN-REPLS, if it exists."
      (if (null args) (format "*%s" name)
        (format "*%s<%s>" name (string-join (mapcar #'et:repr--tostring-0 args) " "))))
 
-    ((or `(ConsRW ,left-sub ,_1 ,right-sub ,_2)
-         `(,(or 'Cons '&Cons 'WriteCons '&WriteCons) ,left-sub ,right-sub))
-     (let ((elems (list (et:repr--tostring-0 left-sub))))
-       (while (pcase right-sub
-                ((and (pred listp) d)
-                 (when (and (length= d 1) (length= (car d) 1))
-                   (pcase (car (car d))
-                     ((or `(S:DT ConsRW ,car-sub ,_1 ,cdr-sub ,_2)
-                          `(S:ALIAS ,(or 'Cons '&Cons 'WriteCons '&WriteCons) ,car-sub ,cdr-sub))
-                      (nconc elems (list (et:repr--tostring-0 car-sub)))
-                      (setq right-sub cdr-sub)
-                      t))))))
-       (let ((tail-nil-p
-              (and (length= right-sub 1)
-                   (length= (car right-sub) 1)
-                   (equal (car (car right-sub)) '(S:DT Literal nil)))))
-         (if tail-nil-p
-             (format "(%s)" (mapconcat #'identity elems " "))
-           (format "(%s . %s)"
-                   (mapconcat #'identity elems " ")
-                   (et:repr--tostring-0 right-sub))))))
+    (`(ConsRW ,ar ,aw ,dr ,dw)
+     (let* ((op (cond ((and (equal ar aw) (equal dr dw)) 'B)
+                      ((and (et:repr--neverp aw) (et:repr--neverp dw)) 'R)
+                      ((and (et:repr--neverp ar) (et:repr--neverp dr)) 'W)
+                      (t 'O))))
+       `(,op ,(et:repr--tostring-noresolve (if (eq op 'W) aw ar))
+             ,(et:repr--tostring-noresolve (if (eq op 'W) dw dr)))))
+
+    (`(,(or (and 'Cons (let op 'B))
+            (and '&Cons (let op 'R))
+            (and 'WriteCons (let op 'W))
+            (and '&WriteCons (let op 'O)))
+       ,car ,cdr)
+     `(,op ,(et:repr--tostring-noresolve car) ,(et:repr--tostring-noresolve cdr)))
 
     (`(DynFunction ,matcher ,output-type)
      (format "(%s) -> %s" (et-pp-matcher matcher) (et:repr--tostring-0 output-type)))
