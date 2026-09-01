@@ -49,13 +49,13 @@
 
 (et-declare
  (@check et: ($pcase `(,spec ,_expr)
-                     ($temp-var type ($eval (et-parse-type spec))
-                                ($prog1 ($var type)
-                                        ($expect ($var type) ($at 2))))))
+                     ($bind [type ($eval (et-parse-type spec))]
+                            ($prog1 ($var type)
+                                    ($expect ($var type) ($at 2))))))
  (@check et! ($pcase `(,spec ,_expr)
-                     ($temp-var type ($eval (et-parse-type spec))
-                                ($prog1 ($var type)
-                                        ($with-rec ($var type) ($at 2))))))
+                     ($bind [type ($eval (et-parse-type spec))]
+                            ($prog1 ($var type)
+                                    ($with-rec ($var type) ($at 2))))))
 
  (@expand et-defun)
  (@expand et-defstruct))

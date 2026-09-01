@@ -7,6 +7,7 @@
 (et-declare
  (@def eq ([A B] obj1: A obj2: B) (or Nil (when (and A B) True)))
  (@def null ([T] object: T) (is? T Nil))
+ (@def not ([T] object: T) (is? T Nil))
  (@def type-of (object: Any) NonNilSymbol)
  (@def cl-type-of (object: Any) NonNilSymbol)
  (@def consp ([T] object: T) (is? T Cons))
@@ -50,9 +51,9 @@
 ;;; List components
 
 (et-declare
- (@def car ([T] list: (or (and Nil (set T Nil)) (&Cons T Any))) T)
+ (@def car ([T] list: (or Nil^{T:>:Nil} (&Cons T Any))) T)
  (@def car-safe ([O] object: O) (infer O [T] &Cons<T~Any> T Nil))
- (@def cdr ([T] list: (or (and Nil (set T Nil)) &Cons<Any~T>)) T)
+ (@def cdr ([T] list: (or Nil^{T:>:Nil} &Cons<Any~T>)) T)
  (@def cdr-safe ([O] object: O) (infer O [T] &Cons<Any~T> T Nil))
  (@def setcar ([A B] cell: Cons<A~B> newcar: A) A)
  (@def setcdr ([A B] cell: Cons<A~B> newcdr: B) B))
