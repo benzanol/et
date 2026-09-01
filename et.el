@@ -495,7 +495,7 @@ variable."
 
 ;;;; Traverse tree
 
-(et-defun et:util-traverse-tree ([T] tree: &Tree<T> path: &List<Integer>) T
+(et-defun et:util-traverse-tree ([T] tree: &Tree<T> path: &List<Integer>) &Tree<T>
   (if (null path) tree
     (when (>= (car path) (length tree))
       (error "Index out of bounds: %s %s" (car path) tree))
@@ -731,7 +731,7 @@ This is a common pattern for functions that have a `noerror' argument."
 ;;;; Alias internals
 
 (et-defun et:type--alias-props (name: EtAliasName &optional noerror: [N])
-          (or EtAliasProps (if-nil? N Never Nil))
+          (or EtAliasDefinitionPlist (if-nil? N Never Nil))
   (or (get name 'et-alias) (unless noerror (error "Alias `%s' not defined" name))))
 
 (et-defun et:type-alias-ro-name (name: EtAliasName) EtAliasName
@@ -834,10 +834,10 @@ This is a common pattern for functions that have a `noerror' argument."
   `(et:type-defalias ',name ,genvec ',spec (list ,@props)))
 
 (et-defun et:type-alias-call ([] name: EtAliasName
-                              args: (&List (is-non-nil? B EtType EtRepr))
+                              args: (&List (if-non-nil? B EtType EtRepr))
                               totype: [B]
                               &optional scope: &List<EtGeneric>)
-          (is-non-nil? B EtType EtRepr)
+          (if-non-nil? B EtType EtRepr)
   "Expand the alias with name NAME, passing arguments ARGS.
 
 SCOPE is the generic scope of the caller, which the expansion is
@@ -948,7 +948,7 @@ a valid `et:type-case->value'."
 
 (defun et-alias (name &rest args)
   (cl-assert (symbolp name))
-  (cl-assert (string-match-p "^[A-Z]" (symbol-name name)))
+  (cl-assert (string-match-p "^&?[A-Z]" (symbol-name name)))
   (et-type (et:type-alias-new :name name :args args)))
 
 (defun et-any () (et-dt 'Any))
@@ -1531,7 +1531,7 @@ never be read for any purpose other than assertions."
                  (cons '$b (et:type-var-new :name '$b :type (et-dt 'Any)))
                  (cons '$c (et:type-var-new :name '$c :type (et-dt 'Any)))))
 
-(et-defun et:repr--parse-string (s: String) EtRepr
+(et-defun et:repr--parse-string (s: Integer) EtRepr
   (when (string-empty-p s) (error "Empty type expression"))
 
   (cl-loop for or-seg in (et:repr--split-at-depth s ?|)
@@ -1763,6 +1763,8 @@ in GEN-REPLS, if it exists."
 (et-defun et:repr-substitute-generics
     (repr: EtRepr gen-repls: Alist<EtGeneric~EtRepr> generics: List<EtGeneric>)
     EtRepr
+  ;; Todo: For some reason, this function in particular takes forever to type check
+  (declare (et (@skip)))
 
   (when et-debug
     (unless (seq-set-equal-p (mapcar #'car gen-repls) (et:repr->generics repr) #'eq)
@@ -2039,7 +2041,10 @@ indeterminates slot."
 ;; fn0 (with no args) is equivalent to fn (with no args). Prefer the latter.
 (et-defspec fn0 (&optional ret) `(fn Nil ,ret))
 (et-defspec fn1 (arg &optional ret) `(fn (Args ,arg) ,ret))
-(et-defspec fn2 (arg1 arg2 &optional ret) `(fn (Args ,arg1 ,arg2) ,ret))
+(et-defspec fn2 (a1 a2 &optional ret) `(fn (Args ,a1 ,a2) ,ret))
+(et-defspec fn3 (a1 a2 a3 &optional ret) `(fn (Args ,a1 ,a2 ,a3) ,ret))
+(et-defspec fn4 (a1 a2 a3 a4 &optional ret) `(fn (Args ,a1 ,a2 ,a3 ,a4) ,ret))
+(et-defspec fn5 (a1 a2 a3 a4 a5 &optional ret) `(fn (Args ,a1 ,a2 ,a3 ,a4 ,a5) ,ret))
 
 
 ;;;; Op macros
@@ -2201,6 +2206,13 @@ indeterminates slot."
                      (et:repr--tostring-0 type) (et:repr--tostring-0 yes) (et:repr--tostring-0 no))
   ;; (TYPE is always nil) <=> (TYPE is a subtype of Nil)
   (et:repr--indeterminate-if (et:repr--op-subtype? type (et Nil))
+                             (et:repr--totype-0 yes) (et:repr--totype-0 no)))
+
+(et:repr--defop if-non-nil? (type [yes :repr] [no :repr])
+  :to-string (format "{if %s is non-nil then %s else %s}"
+                     (et:repr--tostring-0 type) (et:repr--tostring-0 yes) (et:repr--tostring-0 no))
+  ;; (TYPE is always non-nil) <=> (TYPE is a subtype of NonNil)
+  (et:repr--indeterminate-if (et:repr--op-subtype? type (et NonNil))
                              (et:repr--totype-0 yes) (et:repr--totype-0 no)))
 
 ;; Take THE FIRST matching case
@@ -2418,8 +2430,8 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
   (et-declare (@generics [T]) (value T) (@return *et:match-result<T>))
   (et:match-result-new :success t :value value))
 
-(et-defun et:match-result-and ([T] &rest results: &List<EtMatchResult<List<T>>>)
-          EtMatchResult<List<T>>
+(et-defun et:match-result-and ([T] &rest results: &List<*et:match-result<List<T>>>)
+          *et:match-result<List<T>>
   (cl-loop for result in results
            if (not (et:match-result->success result))
            return result
@@ -2659,7 +2671,7 @@ When LARGEST is non-nil, prefer the largest inferred generic types."
           (et:match-result-new :success t :value types))))))
 
 (et-defun et:match--sub-match-failed-result
-    (matcher: EtMatcher type: EtType qs: &List<EtTypeConstraint>) EtMatchResult
+    (matcher: *et:match-matcher type: EtType qs: &List<EtTypeConstraint>) EtMatchResult
   "Create a failed match result with the desired failure stack.
 
 This function exists purely to make the failed result stack contain the
@@ -3241,8 +3253,8 @@ returning A itself is a valid approximation."
 
 (defun et:algebra--transform-type (type type-fn case-fn)
   (et-declare (type EtType)
-              (type-fn (or Nil (fn (args EtType &List<*et:type-case>) EtType)))
-              (case-fn (or Nil (fn (args EtType *et:type-case *et:type-alias|*et:type-dt) *et:type-case)))
+              (type-fn (or Nil (fn2 EtType &List<*et:type-case> EtType)))
+              (case-fn (or Nil (fn3 EtType *et:type-case *et:type-alias|*et:type-dt *et:type-case)))
               (@return EtType))
 
   (let* ((sub-fn (lambda (sub) (et:algebra--transform-type sub type-fn case-fn)))

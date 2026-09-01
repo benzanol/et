@@ -607,7 +607,7 @@ the fingerprint still holds; otherwise run ORIG once, fingerprint the
 dependencies it touched, and store the result. All other expressions
 pass straight through to ORIG."
   (if (not (and et--current-cache et-cache-defuns
-                (memq (car-safe expr) '(defun cl-defun))
+                (memq (car-safe expr) '(defun cl-defun et-defun))
                 (symbolp (cadr expr))
                 (et-symbol-func-type (cadr expr))))
       (apply orig expr check-args)

@@ -596,8 +596,8 @@ be used as the body of the checker function."
 
 (et-define-check-macro $exps (exprs)
   `(cl-loop for (expr . rest) on ,exprs
-            do (et-check-expansion (unless rest (et-cur-recommendation))
-                                   expr)))
+            for last = (et-check-expansion (unless rest (et-cur-recommendation)) expr)
+            finally return last))
 
 
 ;;; ============================================================
@@ -615,7 +615,7 @@ be used as the body of the checker function."
 (et-defun et-identify-exprs (exprs: Sexps) List<EtIdentifyPlist?>
   (cl-loop for expr in exprs
            for idx upfrom 0
-           collect (et-at idx (et-identify-expr expr))))
+           collect (et-error-boundary idx (et-identify-expr expr))))
 
 
 ;;;; Top-level et-declare
@@ -1038,10 +1038,10 @@ to that symbol."
   (pcase (car forms)
     ((pred (not vectorp)) `(et-chk ,@forms))
     (`[,(and var (pred symbolp)) ,symbol ,chk]
-     `(let* ((,var (et:type-var-new :name ,symbol :type (et:algebra-unfreshen-type (et-chk ,chk)))))
+     `(let* ((,var (et:type-var-new :name ,symbol :type (et-reify-type (et-chk ,chk)))))
         (et-with-vars (list ,var) (et-chk ($bind ,@(cdr forms))))))
     (`[,(and var (pred symbolp)) ,chk]
-     `(let* ((,var (et:type-var-new :name ',var :type (et:algebra-unfreshen-type (et-chk ,chk)))))
+     `(let* ((,var (et:type-var-new :name ',var :type (et-reify-type (et-chk ,chk)))))
         (et-chk ($bind ,@(cdr forms)))))
     (_ (error "Invalid $bind format: %s" forms))))
 
@@ -1111,13 +1111,13 @@ to that symbol."
          (et-fatal nil "Expected %s, found %s" ,expsym ,typesym))
        ,typesym)))
 
-(et-define-check-macro $infer (_genvec match _out chk)
+(et-define-check-macro $infer (gv match out chk)
   (let* ((typesym (gensym "type")))
     `(let* ((,typesym (et-chk ,chk)))
        (or (et:match-result->value
-            (et:algebra-infer (et-parse-matcher match genvec)
-                              typesym
-                              (et-parse-repr out (et-genvec-generics genvec))))
+            (et:algebra-infer (et-parse-matcher ',match ,gv)
+                              ,typesym
+                              (et-parse-repr ',out (et-genvec-generics ,gv))))
            (et-fatal nil "Expected %s, found %s" ',match ,typesym)))))
 
 (et-define-check-macro $progn (first-chk &rest chks)
