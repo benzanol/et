@@ -1837,7 +1837,7 @@ in GEN-REPLS, if it exists."
                     collect (apply print args) into and-strings
                     finally return
                     (et:repr--join-tostrings
-                     "And" " ^ " (delete-dups (remove "Any" and-strings))))
+                     "Any" " ^ " (delete-dups (remove "Any" and-strings))))
            into or-strings
            finally return
            (let* ((str (et:repr--join-tostrings "Never" " | " or-strings)))
@@ -1845,9 +1845,6 @@ in GEN-REPLS, if it exists."
                  (format "%s[%s]" (et:repr->label repr)
                          (et:repr--tostring-resolve str))
                str))))
-
-(et-defun et:repr--neverp (repr: EtRepr) Boolean
-  (null (et:repr->dnf repr)))
 
 (et-defun et:repr--tostring-named (name: Symbol args: &List<EtRepr>) EtToString
   (pcase (cons name args)
@@ -1859,9 +1856,13 @@ in GEN-REPLS, if it exists."
        (format "*%s<%s>" name (string-join (mapcar #'et:repr--tostring-0 args) " "))))
 
     (`(ConsRW ,ar ,aw ,dr ,dw)
-     (let* ((op (cond ((and (equal ar aw) (equal dr dw)) 'B)
-                      ((and (et:repr--neverp aw) (et:repr--neverp dw)) 'R)
-                      ((and (et:repr--neverp ar) (et:repr--neverp dr)) 'W)
+     (let* ((ars (et:repr--tostring-noresolve ar))
+            (aws (et:repr--tostring-noresolve aw))
+            (drs (et:repr--tostring-noresolve dr))
+            (dws (et:repr--tostring-noresolve dw))
+            (op (cond ((and (equal ar aw) (equal dr dw)) 'B)
+                      ((and (equal "Never" aws) (equal "Never" dws)) 'R)
+                      ((and (equal "Any" ars) (equal "Any" drs)) 'W)
                       (t 'O))))
        `(,op ,(et:repr--tostring-noresolve (if (eq op 'W) aw ar))
              ,(et:repr--tostring-noresolve (if (eq op 'W) dw dr)))))
