@@ -612,6 +612,17 @@ VALUE is an instance of either `et-datatype' or `et-alias'."
            (error "Polymorphic type `%s' not defined" name))))
 
 
+;;;;; Printing
+
+(et-defun et:type--print-polys (polys: EtPolymorphicTypes) String
+  (cl-loop for (polyname . qs) in polys
+           nconc
+           (cl-loop for (op type) in qs
+                    for opname = (pcase op ('P:LEQ "<:") ('P:NLEQ "<!") ('P:GEQ ":>") ('P:NGEQ "!>"))
+                    collect (format "%s %s %s" polyname opname (et-pp type)))
+           into strs
+           finally return (string-join strs " ; ")))
+
 ;;;;; Expand overloads
 
 (defun et:type--indeterminates-to-overloads (base-polys indeterminates)
@@ -669,11 +680,14 @@ always have one element."
     for (polys input-type expected-ret) in overloads
     for overload-idx upfrom 1
     collect
-    (et-with-diagnostic-prefix (when (cdr overloads) (format "Overload %s" overload-idx))
+    (et-with-diagnostic-prefix
+        (when (cdr overloads)
+          (format "Overload %s {%s}" overload-idx (et:type--print-polys polys)))
       (et:type--with-polymorphs polys
         ,@body))))
 
-(defun et:type--destructure-function (func-type &optional overloads)
+(et-defun et:type--destructure-function (func-type: EtType &optional overloads: Bool)
+          (List (Tuple EtPolymorphicTypes EtType EtType))
   "Destructure FUNC-TYPE into its input and output types.
 
 Converting the input of a DynFunction to a type requires concrete types
@@ -697,10 +711,6 @@ and
 (((T (P:NLEQ Nil))) Args<T> String|Nil)
 
 This is a common pattern for functions that have a `noerror' argument."
-  (et-declare (func-type EtType)
-              (overloads Boolean)
-              (@return (List (Tuple EtPolymorphicTypes EtType EtType))))
-
   (pcase (et-type-single (et-expand-aliases func-type))
     ((cl-struct et:type-dt (name 'DynFunction) (args `(,i-matcher ,o-repr)))
      (let* ((make-gen-repls
@@ -947,7 +957,7 @@ a valid `et:type-case->value'."
 
 (defun et-alias (name &rest args)
   (cl-assert (symbolp name))
-  (cl-assert (string-match-p "^[A-Z]" (symbol-name name)))
+  (cl-assert (string-match-p "^&?[A-Z]" (symbol-name name)))
   (et-type (et:type-alias-new :name name :args args)))
 
 (defun et-any () (et-dt 'Any))
