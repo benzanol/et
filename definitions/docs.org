@@ -1,0 +1,73 @@
+* et.el
+Emacs Typesystem
+
+* Usage
+** Quickstart
+To enable =et.el= in a buffer, run ~M-x et-mode~. By default, nothing will be checked. =et= behaves similarly to typescript, only checking code that you opt into.
+
+There are several different ways to annotate a function so that =et= will typecheck it. The least intrusive is through the =et= declare form:
+#+begin_src emacs-lisp
+(defun add-numbers (n m)
+  (declare (et (n Number) (m Number) (@return Number)))
+  (+ n m))
+#+end_src
+A function will be type-checked /iff/ it has a return value specified. All arguments which do not have an argument listed will be auto-assigned the =Any= type.
+
+** Shorthand type annotations
+Most languages with type annotations allow placing parameter types alongside the parameter definitions. The =et-macros= package provides the macro =et-defun= which allows for exactly this syntax:
+#+begin_src emacs-lisp
+(et-defun add-numbers (n: Number m: Number) Number
+  (+ n m))
+#+end_src
+This expands to the exact =defun=-with-=declare= format shown in the previous example.
+
+** The typesystem
+*** Type syntax
+The syntax for defining types is constrained by the fact that any type expression must be a valid elisp sexp.
+The standard way to define types is using nested lists, where the car is a type-name, and the cdr contains arguments for that type-name. For example, an alist between integers and strings would be:
+#+begin_src emacs-lisp
+(List (Cons Integer String))
+#+end_src
+There is also a compact syntax, where a single symbol can express a type /and/ its arguments:
+#+begin_src emacs-lisp
+(List Cons<Integer_Symbol>)
+#+end_src
+As shown, the compact syntax can sit inside of an expression using the standard syntax. However, the standard syntax /cannot/ be nested inside of the compact syntax, as an expression using the compact syntax must parse to a single symbol.
+#+begin_src emacs-lisp
+List<(Cons Integer Symbol)> ; INVALID
+#+end_src
+
+The arguments to a type depend on the type-name.
+Most of the time, a type's arguments will be other types, and so its arguments will each be parsed as a type expression. For example, the =List= alias has one argument, which is another type. So in =(List ARG)=, =ARG= will be parsed as a type-expression.
+On the other hand, the =Literal= datatype has one argument, which is a literal value. So in =(Literal ARG)=, =ARG= will be treated as a literal value. For example, the type =(Literal 4)= will be the type that only accepts the value =4=.
+
+*** Atom datatypes
+/TODO: Describe all the datatypes EXCEPT Cons/Vector/Hashmap/
+
+*** Container datatypes + read-only types
+
+*** Type aliases
+
+*** Type operations
+
+*** Type macros
+
+* Implementation details (for readers/contributors)
+** Source files
+- =et.el= - Defines the core typesystem (the =et:type= struct, datatypes, aliases, type algebra, parsing types)
+- =et-check.el= - Defines a process for parsing type annotations in -- and subsequenty type-checking --  elisp code
+- =et-macros.el= - No-op macros for inserting type annotations alongside elisp code
+- =et-flycheck.el= - A flycheck checker which runs the type-checker in a batch emacs process
+- =et-cache.el= - Caches certain type-algebra and checking operations to avoid duplicating work
+- =definitions/*= - Definitions for many files in the emacs standard library
+
+** Namespaces
+Core files are split into different namespaces for the purpose decoupling.
+Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
+Definitions /with/ a namespace prefix (=et:ns-*=) are intended as internal functions only to be used within the core et files, and should not be relied upon. Of those, definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
+
+** AI Usage Disclosure
+=et.el=, =et-check.el=, =et-macros.el=, =et-flycheck.el= - AI was /NOT/ and should /NEVER/ be used to implement any of the core functionality.
+=et-cache.el= - Codex + =gpt-5.6 sol= was used (with careful guidance) to implement caching
+=definitions/*= - Certain definitions for much of the standard library was implemented with limited human oversight. Most complex and important bindings were implemented either entirely by me or checked carefully by me afterward.
+

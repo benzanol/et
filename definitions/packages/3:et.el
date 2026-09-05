@@ -56,6 +56,8 @@
                      ($bind [type ($eval (et-parse-type spec))]
                             ($prog1 ($var type)
                                     ($with-rec ($var type) ($at 2))))))
+ 
+ (@check et-declare ($type Nil))
 
  (@expand et-defun)
  (@expand et-defstruct))

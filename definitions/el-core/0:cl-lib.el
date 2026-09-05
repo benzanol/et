@@ -78,6 +78,8 @@
                   (setf (alist-get var et:def--clloop-vars) vartype)
                   (et-chk ($bind [_ var ($eval vartype)]
                                  ($clloop-1 rest)))))))
+      (`(collect ,expr)
+       ($infer [T] T List<T> ($exp expr)))
       ;; Final
       (`(finally return ,expr)
        ($exp expr))
