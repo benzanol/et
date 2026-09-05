@@ -4,6 +4,7 @@
  (@check or
          ($pcase
           `() ($type Nil)
+          `(,_one) ($at 1) ; prevents "unreachable" warning messages
           `(,_one . ,rest) ($or ($at 1) ($recurse rest))))
  (@check and
          ($pcase
@@ -22,9 +23,9 @@
  (@check prog1 ($prog1 ($at 1) ($tail 2)))
  (@check setq ($pcase
                `(,(and sym (pred symbolp)) ,val . ,rest)
-               ($bind [return ($symbol-set ($eval (et-literal sym)) ($at 2))]
-                      ($if-eval rest ($recurse rest)
-                                ($var return)))))
+               ($let [return ($symbol-set ($eval (et-literal sym)) ($at 2))]
+                     ($if-eval rest ($recurse rest)
+                               ($eval return)))))
  (@check quote ($pcase `(,obj) ($eval (et-literal obj))))
  (@alias LexicalEnvironment True?) ;todo
  (@def make-interpreted-closure

@@ -1084,6 +1084,12 @@ to that symbol."
 
 ;;;; Chk utils
 
+(et-define-check-macro $let (&rest args)
+  (cl-loop while (vectorp (car args))
+           collect `(,(aref (car args) 0) (et-chk ,(aref (pop args) 1))) into lets
+           finally return
+           `(let* ,lets (et-chk ,@args))))
+
 (et-define-check-macro $eval (expr &rest exprs)
   `(progn ,expr ,@exprs))
 
@@ -1135,14 +1141,13 @@ to that symbol."
 ;;;; Conditionals
 
 (et-define-check-shortcut $if (cond-chk then-chk else-chk)
-  `($bind [cond ,cond-chk]
-          ($branches
-           ($when-is ($var cond) ($type NonNil) ,then-chk)
-           ($when-is ($var cond) ($type Nil) ,else-chk))))
+  `($let [cond ,cond-chk]
+         ($branches
+          ($when-is ($eval cond) ($type NonNil) ,then-chk)
+          ($when-is ($eval cond) ($type Nil) ,else-chk))))
 
 (et-define-check-shortcut $or (cond-chk else-chk)
-  `($bind [cond ,cond-chk]
-          ($if ($var cond) ($var cond) ,else-chk)))
+  `($if ,cond-chk ,cond-chk ,else-chk))
 
 (et-define-check-shortcut $and (cond-chk then-chk)
   `($if ,cond-chk ,then-chk ($type Nil)))
