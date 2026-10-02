@@ -125,15 +125,20 @@
 (et-declare
  ;; nontrivial
  (@def plist-get
-       ([K V] plist: &PlistLike<K~V> prop: K
-        &optional predicate: (or Nil (fn (Args K K) Any)))
-       V)
- (@def get (symbol: Symbol propname: Any) Any) ;; todo
+       ([K A] plist: A prop: K
+        &optional predicate: fn2<K~K>?)
+       (expand-1 PlistGet<A~K>))
+ (@def get
+       ([(<= S Symbol)] symbol: Symbol propname: S)
+       (symbol-property S))
  (@def plist-put
-       ([K V] plist: [<= P PlistLike<K~V>] prop: K val: V
-        &optional predicate: (or Nil (fn (Args K P) Any)))
+       ([P K] plist: P prop: K val: PlistPut<P~K>
+        &optional predicate: fn2<K~K>?)
        P)
- (@def put ([V] symbol: Symbol propname: Any value: V) V) ;; todo
+ (@def put
+       ([S V] symbol: Symbol propname: S
+        value: (and V (symbol-property S)))
+       V)
  (@def plist-member
        ([K V] plist: &PlistOf<K~V> prop: K
         &optional predicate: (or Nil (fn (Args K K) Any)))
@@ -164,8 +169,8 @@
         sequence: &MapSeq<E>
         &optional separator: &OrdSeq<Integer>?)
        String)
- (@def mapcar ([E O] function: (fn (Args T) O) sequence: &MapSeq<E>) ListFresh<E>)
- (@def mapc ([E O] function: (fn (Args T) O) sequence: &MapSeq<E>) Nil)
+ (@def mapcar ([E O] function: (fn (Args E) O) sequence: &MapSeq<E>) ListFresh<E>)
+ (@def mapc ([E O] function: (fn (Args E) O) sequence: &MapSeq<E>) Nil)
  (@def mapcan ([E T (<= L List<T>)] function: (fn (Args E) L) sequence: &MapSeq<E>) L))
 
 

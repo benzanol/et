@@ -201,8 +201,11 @@
       (et-symbol-func-type name)))
 
 (et-defun et-checker-for (sym: Symbol) EtCheckFn|Nil
-  (if (et-get-fbind sym) #'et:check--function
-    (et-symbol-checker sym)))
+  ;; Lexical function bindings shadow global declarations.  For globals, an
+  ;; explicit checker is more specific than the ordinary function type.
+  (if (assq sym et:check--fbinds) #'et:check--function
+    (or (et-symbol-checker sym)
+        (when (et-symbol-func-type sym) #'et:check--function))))
 
 (defmacro et-with-fbinds (fbinds &rest body)
   (declare (indent 1) (et (@progn Alist<Symbol~EtType>)))
@@ -221,8 +224,9 @@
                                               ,(or (et-cur-recommendation) 'Any))
                                    arg-gens))
            (fn-matcher (et:match-matcher-new :generics arg-gens :repr fn-repr))
-           (m-res (et-sub-match fn-matcher func-type t))
-           (recs (when (et:match-result->success m-res) (et:match-result->value m-res)))
+           ;; Compute the recommendations
+           (m-res (ignore-errors (et-sub-match fn-matcher func-type t)))
+           (recs (and m-res (et:match-result->success m-res) (et:match-result->value m-res)))
            ;; (_ (debug))
            ;; Use those recommendations to check the actual arguments
            (arg-types (cl-loop for pos upfrom 1 below (length (et-cur-expr))
@@ -333,7 +337,8 @@ for untyped variables, and in loops to determine the final loop narrows.")
     nil))
 
 (et-defun et-apply-type-narrows (type: EtType) Nil
-  (cl-callf et:check--narrows-and et:check--context-narrows type)
+  (cl-callf et:check--narrows-and et:check--context-narrows
+    (et-type-binds type))
   nil)
 
 (defmacro et-with-narrows (narrows &rest body)
@@ -350,7 +355,9 @@ unreachable)."
     `(let* ((,typesym ,type)
             (et:check--unreachable (or et:check--unreachable (et-never-p ,typesym))))
        (et-with-narrows (et:check--narrows-and (et-cur-narrows) (et-type-binds ,typesym))
-         ,@body))))
+         (nth (if et:check--unreachable 0 1)
+              (list (et Never)
+                    (progn ,@body)))))))
 
 ;; Accessing narrows
 
@@ -434,7 +441,8 @@ determine the output type."
 
      ;; Call the checker
      (if-let* ((checker (et-checker-for func)))
-         (funcall checker)
+         (et-wrap-errors (format "Checker for `%s' errored: %%s" func)
+           (funcall checker))
        (et-fatal 0 "No checker for `%s'" func)))
 
     ;; Type check a variable (a symbol which is neither a keyword, nil, or t)
@@ -1147,7 +1155,15 @@ to that symbol."
           ($when-is ($eval cond) ($type Nil) ,else-chk))))
 
 (et-define-check-shortcut $or (cond-chk else-chk)
-  `($if ,cond-chk ,cond-chk ,else-chk))
+  `($let [cond ,cond-chk]
+         ($branches
+          ($let [success ($eval (et-supersect cond (et NonNil)))]
+                ($if-eval
+                 (et-never-p success) ($eval success)
+                 ($eval
+                  (et-apply-type-narrows success)
+                  success)))
+          ($when-is ($eval cond) ($type Nil) ,else-chk))))
 
 (et-define-check-shortcut $and (cond-chk then-chk)
   `($if ,cond-chk ,then-chk ($type Nil)))
@@ -1554,7 +1570,8 @@ Returns the type of the last expression in the body."
               (@return EtType))
   (let* ((returns
           (et-in-function-body func-type params
-            (let* ((actual-ret (et-chk ($deferred ($tail body-path)))))
+            (let* ((actual-ret (et:algebra-remove-binds
+                                (et-chk ($deferred ($tail body-path))))))
               (or (et-subtype? actual-ret expected-ret)
                   (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
               (et-remove-type-binds-and-polys actual-ret (mapcar #'car polys))))))
@@ -1763,9 +1780,9 @@ Returns a plist with :constrain and :populate functions."
                                          arglist-repr struct-repr))))))))
 
 
-;;;; @get
+;;;; @symbol-property
 
-(et-set-identifier '@get #'et:identify-@get)
+(et-set-identifier '@symbol-property #'et:identify-@get)
 
 (et-defun et:identify-@get (&rest body) EtIdentifyPlist
   "Identify a symbol property declaration, returning a processing plist.
