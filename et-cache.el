@@ -131,6 +131,20 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
   `(condition-case-unless-debug _ (progn ,@body) (error et--cache-bail)))
 
 
+;;;; Report progress
+
+(et-defvar et-report-progress-function fn1<String>?
+           #'et-report-progress-terminal)
+
+(et-defun et-report-progress (fmt: String &rest args) Nil
+  (when et-report-progress-function
+    (funcall et-report-progress-function (apply #'format fmt args)))
+  nil)
+
+(et-defun et-report-progress-terminal (arg: String) Nil
+  (send-string-to-terminal (format "ET-PROGRESS:%s\n" arg)))
+
+
 ;;; ============================================================
 ;;; Hashing
 ;;;; Documentation
@@ -152,10 +166,11 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 ;; returned alongside the hash, so the caller can restore the correct
 ;; ephemeral variables into a cached result.
 ;;
-;; Polymorphic types, by contrast, are keyed by a stable generic name
-;; (unique within a scope, and the same symbol across sessions), so they
-;; are hashed by that name directly -- `^T' and `^U' are nominally
-;; distinct types and must hash apart.
+;; Polymorphic types are keyed by their stable generic name and, while the
+;; name is in scope, its current constraints. Thus `^T' and `^U' remain
+;; nominally distinct, while two overloads that give `^T' different bounds
+;; also hash apart. Constraint cycles are represented by their recursion
+;; depth instead of being followed forever.
 ;;
 ;; The alias-definition stack is threaded as a plain parameter (newest
 ;; first, extended with `cons') rather than living on the state: a
@@ -167,6 +182,7 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
 (cl-defstruct (et:cache--hashing-state (:constructor et:cache--make-hashing-state))
   (acc nil)            ; Accumulated values, in reverse order
   (vars nil)           ; `et-var's encountered so far, in order (index = position)
+  (polymorphs nil)      ; Polymorph names whose constraints are currently being hashed
   (name-dependent nil)) ; Whether to fold alias names into the hash (see `et:cache--hash-alias-def')
 
 (defun et:cache--hash-push (state value)
@@ -179,6 +195,31 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
     (or (cl-position var vars :test #'eq)
         (prog1 (length vars)
           (setf (et:cache--hashing-state-vars state) (append vars (list var)))))))
+
+(defun et:cache--hash-polymorph (state name alias-stack)
+  "Hash polymorph NAME and its constraints in the current environment.
+If NAME is not present in `et:type--polymorphs', hash only its name.
+POLYMORPHS on STATE prevents constraint cycles from recursing forever."
+  (et:cache--hash-push state name)
+  (when-let* ((entry (assq name et:type--polymorphs)))
+    (let* ((stack (et:cache--hashing-state-polymorphs state))
+           (recursive-index (cl-position name stack :test #'eq)))
+      (if recursive-index
+          (progn
+            (et:cache--hash-push state 'polymorph-recursion)
+            (et:cache--hash-push state recursive-index))
+        (let ((constraints (cdr entry)))
+          (et:cache--hash-push state 'polymorph-constraints)
+          (et:cache--hash-push state (length constraints))
+          (setf (et:cache--hashing-state-polymorphs state) (cons name stack))
+          (unwind-protect
+              (dolist (constraint constraints)
+                (pcase constraint
+                  (`(,op ,type)
+                   (et:cache--hash-push state op)
+                   (et:cache--hash-type state type alias-stack))
+                  (_ (error "Invalid polymorph constraint: %s" constraint))))
+            (setf (et:cache--hashing-state-polymorphs state) stack)))))))
 
 
 ;;;; Types
@@ -204,11 +245,11 @@ Return BODY's value, or `et--cache-bail' if BODY signals."
     (et:cache--hash-push state (length typeofs))
     (dolist (var typeofs)
       (et:cache--hash-push state (et:cache--hash-var-index state var)))
-    ;; Polymorphs: stable generic-name symbols, hashed by name (not index),
-    ;; since `^T' and `^U' are nominally distinct and persist across sessions.
+    ;; Polymorphs: stable generic-name symbols plus their dynamically scoped
+    ;; constraints. `^T' can mean different things in different overloads.
     (et:cache--hash-push state (length polymorphs))
     (dolist (name polymorphs)
-      (et:cache--hash-push state name))
+      (et:cache--hash-polymorph state name alias-stack))
     ;; Value: datatype or alias
     (cond
      ((et:type-dt-p value)
@@ -327,11 +368,13 @@ When AS-REPR is non-nil ARGS are reprs; otherwise they are types."
     (`(S:DT ,name . ,args) (et:cache--hash-datatype state name args alias-stack t))
     (`(S:ALIAS ,name . ,args) (et:cache--hash-alias state name args alias-stack t))
     (`(S:GENERIC ,var) (et:cache--hash-push state var))
-    (`(S:POLY ,name) (et:cache--hash-push state name))
-    ;; The second element of S:SET is a fully parsed type, not a repr.
-    (`(S:SET ,matcher-repr ,type)
+    (`(S:POLY ,name) (et:cache--hash-polymorph state name alias-stack))
+    ;; TYPE is fully parsed rather than a repr.  DIRECTION affects the
+    ;; factor's meaning, so it must also be part of the hash.
+    (`(S:SET ,matcher-repr ,type ,direction)
      (et:cache--hash-repr state matcher-repr alias-stack)
-     (et:cache--hash-type state type alias-stack))
+     (et:cache--hash-type state type alias-stack)
+     (et:cache--hash-push state direction))
     ;; S:NOINFER wraps a repr along with its generic environment.
     (`(S:NOINFER ,tr ,env)
      (et:cache--hash-repr state tr alias-stack)
@@ -442,6 +485,29 @@ input (see the call cache)."
                        (et Tuple 1&{::$b} 2&{::$a} 3&{::$a}))
  (not (et:cache--same-hash? (et Tuple 1&{::$a} 2&{::$a} 3&{::$b})
                             (et Tuple 1&{::$b} 2&{::$a} 3&{::$a})))
+
+ ;; A polymorph's active constraints are part of its structural hash.
+ (let* ((case (car (et:type->cases (et Any))))
+        (poly-type (et:type-new
+                    :cases (list (et-copy-with case :polymorphs '(T)))))
+        unconstrained constrained)
+   (let ((et:type--polymorphs '((T))))
+     (setq unconstrained
+           (et:cache--hash-result-value (et:cache--hash (list poly-type)))))
+   (let ((et:type--polymorphs `((T (P:GEQ ,(et Nil))))))
+     (setq constrained
+           (et:cache--hash-result-value (et:cache--hash (list poly-type)))))
+   (not (equal unconstrained constrained)))
+
+ ;; S:SET includes its direction in the hash.
+ (let* ((sub-1 (et-parse-repr '(set Any Integer SUB) nil))
+        (sub-2 (et-parse-repr '(set Any Integer SUB) nil))
+        (super (et-parse-repr '(set Any Integer SUPER) nil))
+        (hash (lambda (repr)
+                (et:cache--hash-result-value
+                 (et:cache--hash (list repr))))))
+   (and (equal (funcall hash sub-1) (funcall hash sub-2))
+        (not (equal (funcall hash sub-1) (funcall hash super)))))
 
  ;; Structural alias equality and circular aliases
  (progn
@@ -635,6 +701,10 @@ pass straight through to ORIG."
         ;; captured relative to the defun, fingerprint what it touched,
         ;; store (guarded), then propagate as usual. ORIG runs exactly once.
         (_
+         (pcase expr
+           (`(,(or 'defun 'et-defun defmacro) ,fn . ,_) (et-report-progress "Checking `%s'" fn))
+           (`(,a ,b . ,_) (et-report-progress "Checking `(%s %s ...)'" a b))
+           (a (et-report-progress "Checking `%s'" a)))
          (let* ((et--fp-active t)
                 (et--fp-specs nil)
                 (et--fp-funcs nil)
@@ -672,8 +742,9 @@ pass straight through to ORIG."
 ;; encountered, in index order. On a store we swap each variable for a positional
 ;; placeholder; on a hit we swap the placeholders back for the *current*
 ;; call's variables, reconstituting an answer with the right fresh tokens.
-;; (Polymorphic types carry stable generic names, not ephemeral tokens,
-;; so they pass through the cache verbatim and need no such swap.)
+;; (Polymorphic types carry stable generic names, not ephemeral tokens, so
+;; they pass through cached values verbatim and need no such swap. Their
+;; current constraints are nevertheless folded into the cache key.)
 ;;
 ;; The recursion stack. Each function wraps its body in
 ;; `et-stop-recursion', which breaks cycles by optimistically assuming a
@@ -840,7 +911,7 @@ the uncached path otherwise; they never consult `et-cache-enabled'.")
 
 ;;;; Structs
 
-(defconst et-cache-format-version 1
+(defconst et-cache-format-version 2
   "Version of the serialized `et-cache' representation.")
 
 (cl-defstruct et-cache
@@ -1026,6 +1097,8 @@ interactively, clears every source's defun cache."
 
 (defun et-flycheck-check-file (true-file &optional content-file &rest args)
   "Entry point for batch-mode type checking."
+  (et-report-progress "Type-checking %s" (abbreviate-file-name true-file))
+
   (et-with-cache-source-if-enabled true-file
     (with-temp-buffer
       (insert-file-contents (or content-file true-file (error "No file provided")))

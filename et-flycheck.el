@@ -71,7 +71,8 @@
             "-l" "et-cache"
             "--eval" (eval (format "(et-process-directory %S :eval t)"
                                    (expand-file-name "definitions" et-source-directory)))
-            "--eval" (eval (format "(et-flycheck-check-file %S %S :eval t :check t :test %S)"
+            "--eval" "(setq max-lisp-eval-depth 2400)"
+            "--eval" (eval (format "(et-flycheck-check-file %S %S :eval nil :check t :test %S)"
                                    (buffer-file-name) (et--flycheck-temp-file)
                                    et-flycheck-do-test)))
   :error-patterns
@@ -87,6 +88,35 @@
   )
 
 (add-to-list 'flycheck-checkers 'et-flycheck-checker)
+
+
+;;; Show progress
+
+(defun et-flycheck--receive-progress (original process output)
+  (funcall original process output)
+
+  (when (eq (process-get process 'flycheck-checker)
+            'et-flycheck-checker)
+    (let* ((text
+            (concat
+             (or (process-get process 'et-progress-remainder) "")
+             output))
+           (lines (split-string text "\n"))
+           (complete (string-suffix-p "\n" text))
+           (remainder (unless complete (car (last lines)))))
+      (process-put process 'et-progress-remainder (or remainder ""))
+
+      (dolist (line (if complete lines (butlast lines)))
+        (when (string-match "\\`ET-PROGRESS:\\(.*\\)\\(?:\r\\)?\\'" line)
+          (let ((progress (match-string 1 line))
+                (buffer (process-get process 'flycheck-buffer)))
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (message "ET: %s" progress)
+                (redisplay t)))))))))
+
+(advice-add 'flycheck-receive-checker-output
+            :around #'et-flycheck--receive-progress)
 
 
 (provide 'et-flycheck)
