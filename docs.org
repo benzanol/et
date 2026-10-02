@@ -1,0 +1,247 @@
+* et.el
+Emacs Typesystem
+
+* Basic usage
+** Quickstart
+To enable =et.el= in a buffer, run ~M-x et-mode~. By default, nothing will be checked. =et= behaves similarly to typescript, only checking code that you opt into.
+
+There are several different ways to annotate a function so that =et= will typecheck it. The least intrusive is through the =et= declare form:
+#+begin_src emacs-lisp
+(defun add-numbers (n m)
+  (declare (et (n Number) (m Number) (@return Number)))
+  (+ n m))
+#+end_src
+A function will be type-checked /iff/ it has a return value specified. All arguments which do not have an argument listed will be auto-assigned the =Any= type.
+
+** Shorthand type annotations
+Most languages with type annotations allow placing parameter types alongside the parameter definitions. The =et-macros= package provides the macro =et-defun= which allows for exactly this syntax:
+#+begin_src emacs-lisp
+(et-defun add-numbers (n: Number m: Number) Number
+  (+ n m))
+#+end_src
+This expands to the exact =defun=-with-=declare= format shown in the previous example.
+
+** Additional type utilities
+*** Tuple (...args)
+#+begin_src emacs-lisp
+(et (Tuple 1 2 3)) ;; => (Cons 1 (Cons 2 (Cons 3 Nil)))
+(et (Args 1 2 3)) ;; => (&Cons 1 (&Cons 2 (&Cons 3 Nil)))
+#+end_src
+
+*** fnN (...args return?)
+The explicit =return= type can be omitted, in which case the return type will default to =Any=.
+#+begin_src emacs-lisp
+(et (fn0 Integer)) ;; => (fn Nil Integer)
+(et (fn1 1 Integer)) ;; => (fn (Cons 1 Nil) Integer)
+(et (fn2 1 2 Integer)) ;; => (fn (Cons 1 (Cons 2 Nil)) Integer)
+(et (fn1 1)) ;; => (fn (Cons 1 Nil) Any)
+#+end_src
+
+*** extends? (child parent if else)
+Check whether =child= is a subtype of =parent=.
+#+begin_src emacs-lisp
+  (et (extends? Integer Number True Nil)) ;; => True
+  (et (extends? String Number True Nil)) ;; => Nil
+  ;; The type variable COULD represent a subtype of Number, or it might not
+  (et-with-type-variables [T] (et (extends? T Number True Nil))) ;; => True | Nil
+#+end_src
+
+*** infer (type [generics] pattern if else)
+Match =type= against =pattern= and determine values for each of the =generics=. If it matches, then evaluate =if= with the inferred generics. Otherwise, return =else=.
+#+begin_src emacs-lisp
+(et (infer List<Integer> [T] List<T> T Never)) ;; => Integer
+(et (infer String [T] List<T> T Never)) ;; => Never
+#+end_src
+
+*** subtract (a b)
+#+begin_src emacs-lisp
+(et (subtract Number|String Number)) ;; => String
+(et (subtract List<Integer> Nil)) ;; => (Integer . List<Integer>)
+#+end_src
+There is not always a perfect answer for type-subtraction. In such cases, =subtract= will always err on the side of keeping the type /larger/ than it should be, and will never make the type /smaller/ than it should be.
+#+begin_src emacs-lisp
+(et (subtract Number Integer)) ;; => Number
+#+end_src
+
+*** eval (function types...)
+The =eval= op allows evaluating a custom funciton on the arguments. The arguments will be passed as EtTypes.
+#+begin_src emacs-lisp
+(et (eval #'et-leaves-of (Tuple Boolean List<String> Cons<1_2>))) ;; => Boolean | String | `1' | `2'
+#+end_src
+
+*** switch (type ...cases)
+#+begin_src emacs-lisp
+  (et-defalias SumOf [(<= Nums &List<Number>)]
+    (switch Nums
+            [Nil 0]
+            [[One] &Tuple<One> One]
+            [&List<Integer> Integer]
+            Number))
+(et-expand-aliases (et SumOf Nil)) ;; => 0
+(et-expand-aliases (et SumOf (Cons 123 Nil))) ;; => 123
+(et-expand-aliases (et SumOf (Tuple 2 3))) ;; => Integer
+(et-expand-aliases (et SumOf (Tuple 1.5 2))) ;; => Number
+#+end_src
+
+Each case is either
+- ~[type output]~ 
+- ~[[generics] pattern output]~
+If the pattern and output happen to be the same, then you can use the shortcut
+- ~[[generics] pattern-and-output]~
+
+The final case can be a single default type, which will be returned if no cases match. If a default type is not provided, =Never= will be used as the default.
+
+*** map-cases (type ...cases)
+One limitation of =switch= is that it is limited when the input is a union. =map-cases= is like =switch=, except cases can match /partially./ If a case matches only partially, the rest of the type will continue through the remaining cases, until the entire type has been matched.
+
+If the cases collectively match the entire type, then the result will be the union of the outputs of the matching cases. If part of the type is /not/ matched by any type, the result will be =Never=.
+
+#+begin_src emacs-lisp
+  (et-defalias ExampleElementOf [Seq]
+    (map-cases Seq
+               [[T] &List<T> T]
+               [[T] Vector<T> T]
+               [BoolVector Boolean]))
+
+  (et-expand-aliases (et ExampleElementOf List<Integer>|Vector<Integer>))
+#+end_src
+
+*** freshen-deep/freshen-shallow (type)
+Convert a type to its freshened version.
+=freshen= will recursively freshen every level of the type, like ~(copy-tree value)~.
+=freshen-shallow= will only freshen the top-level list, like ~(apply #'list value)~
+#+begin_src emacs-lisp
+  (freshen-deep List<List<Integer>>) ;; => ListFresh<ListFresh<Integer>>
+  (freshen-shallow List<List<Integer>>) ;; => ListFresh<List<Integer>>
+  (freshen-deep (Cons (Cons 1 2) (Cons 3 4))) ;; => (ConsFresh (ConsFresh 1 2) (ConsFresh 3 4))
+  (freshen-shallow (Cons (Cons 1 2) (Cons 3 4))) ;; => (ConsFresh (Cons 1 2) (ConsFresh 3 4))
+#+end_src
+
+*** overlapping (a b yes no?)
+If =a= and =b= are overlapping, return =yes=, otherwise return =no=.
+If =no= is omitted, it defaults to =Never=.
+#+begin_src emacs-lisp
+(overlapping? Integer|String Boolean|String True Nil) ;; => True
+(overlapping? Integer|String Boolean True Nil) ;; => Nil
+(overlapping? Integer|String Boolean True) ;; => Never
+#+end_src
+
+
+* Technical breakdown
+** Type parsing
+=et= introduces 3 different forms that a type can take.
+A =type-spec= is the human-write/readable format that you will actually use in code.
+An =et:repr= is a structural representation of a type-spec after being parsed.
+An =et:type= is a less-expressive, normalized representation of a type. Type-checking an expression evaluates to an =et:type=.
+
+|                           | spec | et:repr | et:type |
+|---------------------------+------+---------+---------|
+| Human readable            | [X]  | [ ]     | [ ]     |
+| Contains datatypes        | [X]  | [X]     | [X]     |
+| Contains aliases          | [X]  | [X]     | [X]     |
+| Contains unions           | [X]  | [X]     | [X]     |
+| Contains intersections    | [X]  | [X]     | [ ]     |
+| Contains type-ops         | [X]  | [X]     | [ ]     |
+| Contains spec-macro calls | [X]  | [ ]     | [ ]     |
+| Contains type-variables   | [X]  | [X]     | [ ]     |
+| Contains variable narrows | [ ]  | [ ]     | [X]     |
+
+#+begin_src mermaid :file images/parsing-flowchart.png
+flowchart LR
+  Spec[spec]
+  Repr[repr]
+  Type[type]
+
+  Spec -->|Expand spec macros| Repr
+  Repr -->|Evaluate type-ops<br/>Simplify type intersections| Type
+#+end_src
+
+#+RESULTS:
+[[file:images/parsing-flowchart.png]]
+
+
+** Type syntax
+The syntax for defining types is constrained by the fact that any type expression must be a valid elisp sexp.
+The standard way to define types is using nested lists, where the car is a type-name, and the cdr contains arguments for that type-name. For example, an alist between integers and strings would be:
+#+begin_src emacs-lisp
+(List (Cons Integer String))
+#+end_src
+There is also a compact syntax, where a single symbol can express a type /and/ its arguments:
+#+begin_src emacs-lisp
+(List Cons<Integer_Symbol>)
+#+end_src
+As shown, the compact syntax can sit inside of an expression using the standard syntax. However, the standard syntax /cannot/ be nested inside of the compact syntax, as an expression using the compact syntax must parse to a single symbol.
+#+begin_src emacs-lisp
+List<(Cons Integer Symbol)> ; INVALID
+#+end_src
+
+The arguments to a type depend on the type-name.
+Most of the time, a type's arguments will be other types, and so its arguments will each be parsed as a type expression. For example, the =List= alias has one argument, which is another type. So in =(List ARG)=, =ARG= will be parsed as a type-expression.
+On the other hand, the =Literal= datatype has one argument, which is a literal value. So in =(Literal ARG)=, =ARG= will be treated as a literal value. For example, the type =(Literal 4)= will be the type that only accepts the value =4=.
+
+** Atom datatypes
+/TODO: Describe all the datatypes EXCEPT Cons/Vector/Hashmap/
+
+** Container datatypes + read-only types
+
+** Type aliases
+A type-alias is a type function which takes a fixed number of arguments and returns a type expression.
+Aliases are left unexpanded until absolutely necessary, which allows for recursive types such as
+#+begin_src emacs-lisp
+  (et-defalias List [T]
+    (or Nil (Cons T (List T))))
+#+end_src
+
+** Type operations
+Type-operations are similar to aliases in that they take arguments and evaluate to a type, but are different in several key ways.
+Firstly, type-operations are evaluated immediately upon being parsed. For example, the type-operation expression
+#+begin_src emacs-lisp
+  (et (extends? Integer Number True Nil)) ;; => `t'
+#+end_src
+However, wrapping the operation in an alias would mean that it does /not/ get expanded
+#+begin_src emacs-lisp
+  (et-defalias ExtendsNumber [T]
+   (extends? T Number True Nil))
+  (et ExtendsNumber Integer) ;; => ExtendsNumber<Integer>
+#+end_src
+The alias will only get expanded when necessary, for example when comparing it to another type:
+#+begin_src emacs-lisp
+  (et-subtype? (et ExtendsNumber Integer) (et True)) ;; => t
+  (et-subtype? (et ExtendsNumber String) (et True)) ;; => nil
+#+end_src
+
+** Spec macros
+Spec macros can be used to define shorthands for common type expressions you find yourself writing frequently. A spec macro is simply a function which returns a type-spec.
+#+begin_src emacs-lisp
+(et-defspec Tuple (&rest args) (et:type-tuple-spec 'Cons args))
+#+end_src
+Then,
+#+begin_src emacs-lisp
+(et Tuple String Number Boolean) ;; => (Cons String (Cons Number (Cons Boolean Nil)))
+#+end_src
+
+You may be thinking, what is the difference between a type-operation and a spec-macro? The answer is the level at which they operate.
+The spec-macro operates at the level of the type-spec. It sees the symbols =String=, =Number=, =Boolean=, but has no idea what types these correspond to, or whether they are even valid types.
+The type-operation however operates once its arguments have already been parsed. An operation like =extends?= cannot operate simply on type-specs; its arguments need to be fully fleshed-out types.
+The tradeoff is that operations are much more difficult to implement, and thus it is almost always the correct option to define a spec-macro rather than an operation.
+
+
+* Implementation details (for readers/contributors)
+** Source files
+- =et.el= - Defines the core typesystem (the =et:type= struct, datatypes, aliases, type algebra, parsing types)
+- =et-check.el= - Defines a process for parsing type annotations in -- and subsequenty type-checking --  elisp code
+- =et-macros.el= - No-op macros for inserting type annotations alongside elisp code
+- =et-flycheck.el= - A flycheck checker which runs the type-checker in a batch emacs process
+- =et-cache.el= - Caches certain type-algebra and checking operations to avoid duplicating work
+- =definitions/*= - Definitions for many files in the emacs standard library
+
+** Namespaces
+Core files are split into different namespaces for the purpose decoupling.
+Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
+Definitions /with/ a namespace prefix (=et:ns-*=) are intended as internal functions only to be used within the core et files, and should not be relied upon. Of those, definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
+
+** AI Usage Disclosure
+=et.el=, =et-check.el=, =et-macros.el=, =et-flycheck.el= - AI was /NOT/ and should /NEVER/ be used to implement any of the core functionality.
+=et-cache.el= - Codex + =gpt-5.6 sol= was used (with careful guidance) to implement caching
+=definitions/*= - Certain definitions for much of the standard library was implemented with limited human oversight. Most complex and important bindings were implemented either entirely by me or checked carefully by me afterward.
+
