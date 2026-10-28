@@ -273,8 +273,8 @@ hashed."
   (or (et:dt-name? name) (error "Invalid datatype: %s" name))
   (et:cache--hash-push state name)
   (cond
-   ;; DynFunction: arg 0 is a matcher, arg 1 an output repr.
-   ((eq name 'DynFunction)
+   ;; PolyFunction: arg 0 is a matcher, arg 1 an output repr.
+   ((eq name 'PolyFunction)
     (et:cache--hash-matcher state (nth 0 args) alias-stack)
     (et:cache--hash-repr state (nth 1 args) alias-stack))
    ;; Otherwise: CONST args are literal values, variant args are types

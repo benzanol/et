@@ -56,14 +56,10 @@
         ,@(cdr-safe name))
      ,@args))
 
-(et-declare (@expand et-defun))
-(defmacro et-defun (name arglist return &rest body)
-  "Define NAME as a function with type annotations.
-
-\(fn NAME ARGLIST RETURN [DOCSTRING] [DECL] [INTERACTIVE] BODY...)"
-  (declare (indent 3) (doc-string 4))
-
-  (let* ((doc (when (stringp (car body)) (pop body)))
+(defun et:macros-parse-arglist (body)
+  (let* ((arglist (pop body))
+         (return (pop body))
+         (doc (when (stringp (car body)) (pop body)))
          args decls)
     (when (vectorp (car arglist)) (push (list '@generics (pop arglist)) decls))
     (while-let ((arg (pop arglist)) (arg-str (format "%s" arg)))
@@ -71,9 +67,25 @@
         (push (intern (match-string 1 arg-str)) args)
         (push (list (car args) (pop arglist)) decls)))
     (push (list '@return return) decls)
-    (if (assq 'et-declare body) (cl-callf2 nconc (nreverse decls) (alist-get 'et-declare body))
+    (if (assq 'et-declare body) (cl-callf2 append (nreverse decls) (alist-get 'et-declare body))
       (cl-callf2 nconc (nreverse decls) (alist-get 'et (alist-get 'declare body))))
-    `(cl-defun ,name ,(nreverse args) ,@(when doc (list doc)) ,@body)))
+    `(,(nreverse args) ,@(when doc (list doc)) ,@body)))
+
+(et-declare (@expand et-defun))
+(defmacro et-defun (name arglist return &rest body)
+  "Define NAME as a function with type annotations.
+
+\(fn NAME ARGLIST RETURN [DOCSTRING] [DECL] [INTERACTIVE] BODY...)"
+  (declare (indent 3) (doc-string 4))
+  `(cl-defun ,name ,@(et:macros-parse-arglist (cons arglist (cons return body)))))
+
+(et-declare (@expand et-lambda))
+(defmacro et-lambda (arglist return &rest body)
+  "Define NAME as a function with type annotations.
+
+\(fn NAME ARGLIST RETURN [DOCSTRING] [DECL] [INTERACTIVE] BODY...)"
+  (declare (indent 3) (doc-string 4))
+  `(lambda ,@(et:macros-parse-arglist (cons arglist (cons return body)))))
 
 (setf (alist-get 'et defun-declarations-alist) (list #'ignore)
       (alist-get 'et macro-declarations-alist) (list #'ignore))

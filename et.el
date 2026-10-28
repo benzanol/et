@@ -32,6 +32,7 @@
   "Perform extra debug checks.")
 
 (defmacro et (&rest args)
+  (et-declare ($type EtType))
   `(et-parse-type (et-q ,(if (length= args 1) (car args) args))))
 
 
@@ -59,7 +60,7 @@
  (@alias EtDatatypeName (or @Any @Literal @NonNil
                             @Symbol @NonNilSymbol @Var @Number @Integer @Positive @Negative @String
                             @ConsRW @ConsFresh @VectorRW @VectorFresh @HashTableRW @HashTableFresh @PlistRW
-                            @Function @DynFunction
+                            @Function @PolyFunction
                             @Struct))
  (@alias EtDatatypeArgs &List)
 
@@ -73,7 +74,7 @@
  ;; Alias GenVecs also have an (=) option (for default values)
  (@alias EtAliasGenVec (&Vector (or EtGeneric (&Tuple (or @= @<= @>=) EtGeneric Any))))
 
- (@alias EtAliasName Var)
+ (@alias EtAliasName NonNilSymbol)
  (@alias EtAliasDefinitionPlist
          (Plist :genvec EtAliasGenVec
                 :spec EtSpec
@@ -89,7 +90,8 @@
                 :ro-name Nil|EtAliasName
                 ;; t => this is a ro alias, but is no different from its non-ro equivalent
                 :ro-redundant Boolean))
- (@symbol-property et-alias EtAliasDefinitionPlist))
+ (@symbol-property et-alias EtAliasDefinitionPlist)
+ (@symbol-property et-spec-macro (Function Any EtSpec)))
 
 (et-declare
  (@alias EtConstrainResult *et:match-result<List<EtMatchConstraint>>)
@@ -102,7 +104,7 @@
          (Tuple (or @R:LEQ @R:GEQ) EtRepr EtType))
  (@alias EtMatchFunctionConstraint
          (Tuple @R:FN
-                ;; The DynFunction matcher and output (sub)
+                ;; The PolyFunction matcher and output (sub)
                 *et:match-matcher EtRepr
                 ;; The Function input and output (super)
                 EtRepr EtRepr))
@@ -144,7 +146,7 @@
   "Show type labels when printing types."
   :type 'boolean)
 
-(defcustom et-print-narrows nil
+(defcustom et-print-narrows t
   "Show implied narrows when printing types."
   :type 'boolean)
 
@@ -348,7 +350,7 @@ expression that is not actually in the buffer, ensure that
       :failed et:result--failed
       :diagnostics et:result--diagnostics)))
 
-(et-defun et-propagate-result ([T] result: *et:result<T> &optional map-path: Nil|fn<EtPath~EtPath>) T?
+(et-defun et-propagate-result ([T] result: *et:result<T> &optional map-path: Nil|fn1<EtPath~EtPath>) T?
   (cl-assert et:result--active?)
   (cl-loop for (path severity msg) in (et:result->diagnostics result)
            for new-path = (if map-path (funcall map-path path) path)
@@ -534,12 +536,12 @@ variable."
 
 (et-defstruct et:type-dt
   "A datatype factor of an `et-type'."
-  (name nil :et Var)
+  (name nil :et EtDatatypeName)
   (args nil :et List<EtType|Any>))
 
 (et-defstruct et:type-alias
   "A type alias factor of an `et-type'."
-  (name nil :et Var)
+  (name nil :et EtAliasName)
   (args nil :et List<EtType>))
 
 (et-defstruct et:type-case
@@ -705,11 +707,11 @@ always have one element."
           (List (Tuple EtPolymorphicTypes EtType EtType))
   "Destructure FUNC-TYPE into its input and output types.
 
-Converting the input of a DynFunction to a type requires concrete types
+Converting the input of a PolyFunction to a type requires concrete types
 for each generic. This requires creating a polymorphic type for each
 generic, which are returned along side the input and output types.
 
-If OVERLOADS is non-nil, and FUNC-TYPE is a DynFunction, then
+If OVERLOADS is non-nil, and FUNC-TYPE is a PolyFunction, then
 automatically detect different overload definitions, and return them
 each as a separate entry. The only thing that differs between overloads
 is the constraints on each polymorphic type, and whatever effect those
@@ -727,7 +729,7 @@ and
 
 This is a common pattern for functions that have a `noerror' argument."
   (pcase (et-type-single (et-expand-aliases func-type))
-    ((cl-struct et:type-dt (name 'DynFunction) (args `(,i-matcher ,o-repr)))
+    ((cl-struct et:type-dt (name 'PolyFunction) (args `(,i-matcher ,o-repr)))
      (let* ((make-gen-repls
              ;; Must be called within et:type--with-polymorphs
              (lambda ()
@@ -976,7 +978,7 @@ a valid `et:type-case->value'."
 (et-defun et-never-p (type: EtType) Boolean
   (null (et:type->cases type)))
 
-(et-defun et-dt (name: EtDatatypeName &rest args) EtType
+(et-defun et-dt (name: EtDatatypeName &rest args: List<Any>) EtType
   (cl-assert (et:dt-name? name))
   (et-type (et:type-dt-new :name name :args args)))
 
@@ -1016,9 +1018,9 @@ a valid `et:type-case->value'."
       ;; A literal CANNOT be ephemeral (like a buffer), it must be printable and readable
       (Literal :args (CONST) :overlap nil :predicate (lambda (v me) (equal v me)))
       (NonNil :args nil :overlap t :predicate (lambda (v) v))
-      (Symbol :args nil :overlap (Function DynFunction) :predicate symbolp)
-      (NonNilSymbol :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v))))
-      (Var :args nil :overlap (Function DynFunction) :predicate (lambda (v) (and v (symbolp v) (not (eq v t)))))
+      (Symbol :args nil :overlap (Function PolyFunction) :predicate symbolp)
+      (NonNilSymbol :args nil :overlap (Function PolyFunction) :predicate (lambda (v) (and v (symbolp v))))
+      (Var :args nil :overlap (Function PolyFunction) :predicate (lambda (v) (and v (symbolp v) (not (eq v t)))))
       (Number :args nil :overlap nil :predicate numberp)
       (Integer :args nil :overlap (Positive Negative) :predicate integerp)
       (Positive :args nil :overlap nil :predicate (lambda (v) (and (numberp v) (> v 0))))
@@ -1030,14 +1032,14 @@ a valid `et:type-case->value'."
       ;; the cons cell. CAR-WRITE/CDR-WRITE are the types that are valid
       ;; to write to the cons cell. The most general cons cell is thus
       ;; ConsRW<Any Never Any Never>.
-      (ConsRW :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function DynFunction PlistRW) :intersect t)
+      (ConsRW :args (CO CONTRA CO CONTRA) :overlap (ConsFresh Function PolyFunction PlistRW) :intersect t)
       ;; When you create a new cons cell with cons/list/etc, you
       ;; get a ConsFresh. This can be thought of as an "undetermined"
       ;; cons cell: in that it knows what it contains, but it has not
       ;; yet decided what can be written to it. A ConsFresh can be
       ;; converted to a ConsRW as long as the read types of the
       ;; ConsRW are supertypes of the arg types of the ConsFresh.
-      (ConsFresh :args (CO CO) :overlap (Function DynFunction PlistRW) :intersect t)
+      (ConsFresh :args (CO CO) :overlap (Function PolyFunction PlistRW) :intersect t)
 
       ;; VectorRW<ELEM-READ ELEM-WRITE>: same idea as ConsRW
       (VectorRW :args (CO CONTRA) :overlap (VectorFresh) :intersect t
@@ -1053,13 +1055,13 @@ a valid `et:type-case->value'."
 
       ;; Function<ARGLIST-TYPE OUTPUT-TYPE> is a function with a fixed
       ;; input and output type.
-      (Function :args (CONTRA CO) :overlap (DynFunction) :intersect t)
-      ;; DynFunction<ARGLIST-MATCHER OUTPUT-REPR> is a
+      (Function :args (CONTRA CO) :overlap (PolyFunction) :intersect t)
+      ;; PolyFunction<ARGLIST-MATCHER OUTPUT-REPR> is a
       ;; function whose output depends on the input. For a given
       ;; ARGLIST-TYPE, the output of the function is determined by
       ;; inferring ARGLIST-TYPE against ARGLIST-MATCHER, with
       ;; OUTPUT-REPR as the output.
-      (DynFunction :args (CONST CONST) :overlap nil)
+      (PolyFunction :args (CONST CONST) :overlap nil)
 
       ;; PlistRW<KEY1 VAL1-R VAL1-W KEY2 VAL2-R VAL2-W ...> is an unordered plist.
       (PlistRW
@@ -1276,7 +1278,7 @@ FUNC is called with one argument, the current argument"
                            (et:dt--plist-key-equivalent-p key (car entry)))
                          (et:dt--plist-entries args))))
        (cons (nth 1 entry) (nth 2 entry))))
-    (_ (error "Expected a single PlistRW type, found %s" (et-pp plist)))))
+    (_ nil)))
 
 
 ;;;; Overlapping
@@ -1297,11 +1299,11 @@ This is what is meant by \"nontrivial\"."
     (pcase (plist-get (alist-get a et:dt--datatypes) :overlap)
       ('t t)
       ;; A cons can only be a function if its car is `lambda'
-      ((guard (and (memq a '(ConsRW ConsFresh)) (memq b '(Function DynFunction))))
-       (et-subtype? (et @lambda) (car (et:type-dt->args a-dt))))
+      ((guard (and (memq a '(ConsRW ConsFresh)) (memq b '(Function PolyFunction))))
+       (et-subtype? (et @lambda) (et! EtType (car (et:type-dt->args a-dt)))))
       ;; Is an emacs internal datatype a function
-      ((guard (and (memq a '(Function DynFunction)) (eq b 'Emacs)))
-       (memq (car (et:type-dt->args b-dt)) '(interpreted-function byte-code-function subr)))
+      ((guard (and (memq a '(Function PolyFunction)) (eq b 'Emacs)))
+       (not (not (memq (car (et:type-dt->args b-dt)) '(interpreted-function byte-code-function subr)))))
 
       (overlap (not (not (memq b overlap)))))))
 
@@ -1371,7 +1373,7 @@ Since super-args may be either types or matcher reprs depending on the
 caller, MK-SUPER builds that synthesized super value in the caller's
 language. See `et:dt--cons-fresh-is-plist'.
 
-DYN-FN (a function or nil) handles a `DynFunction' sub against a
+DYN-FN (a function or nil) handles a `PolyFunction' sub against a
 `Function' super whose args are matcher reprs, which cannot be resolved
 until the matcher's generics are known. It is called with SUB-ARGS and
 SUPER-ARGS and should return an EtConstrainResult recording the deferred
@@ -1407,13 +1409,13 @@ check (see the `R:FN' constraint)."
        (et:match-result-and (funcall co (car sub-args) (car super-args))
                             (funcall co (cadr sub-args) (caddr super-args))))
 
-      (`(DynFunction Function)
+      (`(PolyFunction Function)
        (let* ((func-input (car super-args))
               (func-output (cadr super-args)))
          (cond
           ;; We can use a simple funcall + subtype approach
           ((and (et:type-p func-input) (et:type-p func-output))
-           (let* ((dyn-result (et:algebra-funcall (apply #'et-dt 'DynFunction sub-args) func-input)))
+           (let* ((dyn-result (et:algebra-funcall (apply #'et-dt 'PolyFunction sub-args) func-input)))
              (valid-if (and (et:match-result->success dyn-result)
                             (et-subtype? (et:match-result->value dyn-result) func-output)))))
           ;; The super args are matcher reprs; defer the check to
@@ -1673,7 +1675,7 @@ never be read for any purpose other than assertions."
    (t (error "Invalid parse syntax: %s" s))))
 
 
-(et-defun et:repr--split-at-depth (s: String delim: String) List<String>
+(et-defun et:repr--split-at-depth (s: String delim: Integer) List<String>
   "Split string S on character DELIM at depth 0 only.
 Depth tracks < > and { } nesting."
   (let ((depth 0) (start 0) (result '()) (prev nil))
@@ -1745,35 +1747,36 @@ in GEN-REPLS, if it exists."
      collect
      (cl-loop
       for factor in case
-      collect (pcase factor
-                (`(S:DT ConsRW ,lr ,_lw ,rr ,_rw)
-                 (let* ((never (et-parse-repr 'Never gens)))
-                   (et-ql S:DT ConsRW ,(funcall sub lr) ,never ,(funcall sub rr) ,never)))
+      collect
+      (pcase factor
+        (`(S:DT ConsRW ,lr ,_lw ,rr ,_rw)
+         (let* ((never (et-parse-repr 'Never gens)))
+           (et-ql S:DT ConsRW ,(funcall sub lr) ,never ,(funcall sub rr) ,never)))
 
-                (`(S:DT HashTableRW ,kr ,_kw ,vr ,_vw)
-                 (let* ((never (et-parse-repr 'Never gens)))
-                   (et-ql S:DT HashTableRW ,(funcall sub kr) ,never ,(funcall sub vr) ,never)))
+        (`(S:DT HashTableRW ,kr ,_kw ,vr ,_vw)
+         (let* ((never (et-parse-repr 'Never gens)))
+           (et-ql S:DT HashTableRW ,(funcall sub kr) ,never ,(funcall sub vr) ,never)))
 
-                (`(S:DT VectorRW ,r ,_w)
-                 (let* ((never (et-parse-repr 'Never gens)))
-                   (et-ql S:DT VectorRW ,(funcall sub r) ,never)))
+        (`(S:DT VectorRW ,r ,_w)
+         (let* ((never (et-parse-repr 'Never gens)))
+           (et-ql S:DT VectorRW ,(funcall sub r) ,never)))
 
-                (`(S:DT PlistRW . ,args)
-                 (let* ((never (et-parse-repr 'Never gens)))
-                   (cl-loop for (key r _w) on args by #'cdddr
-                            nconc (list key (funcall sub r) never) into new
-                            finally return (et-ql S:DT PlistRW ,@new))))
+        (`(S:DT PlistRW . ,args)
+         (let* ((never (et-parse-repr 'Never gens)))
+           (cl-loop for (key r _w) on args by #'cdddr
+                    nconc (list key (funcall sub r) never) into new
+                    finally return (et-ql S:DT PlistRW ,@new))))
 
-                (`(S:ALIAS ,name . ,args)
-                 (et-ql S:ALIAS ,(et:type-alias-ro-name name) . ,(mapcar sub args)))
+        (`(S:ALIAS ,name . ,args)
+         (et-ql S:ALIAS ,(et:type-alias-ro-name name) . ,(mapcar sub args)))
 
-                (`(S:SET ,dnf ,type EQ)
-                 (et-ql S:SET ,dnf ,type SUB))
+        (`(S:SET ,dnf ,type EQ)
+         (et-ql S:SET ,dnf ,type SUB))
 
-                (`(S:DT ,name . ,args)
-                 (et-ql S:DT ,name ,@(et:dt-map-type-args name args sub)))
+        (`(S:DT ,name . ,args)
+         (et-ql S:DT ,name ,@(et:dt-map-type-args name args sub)))
 
-                (_ factor)))
+        (_ factor)))
      into new-dnf
      finally return (et-copy-with repr :dnf new-dnf))))
 
@@ -1926,8 +1929,9 @@ in GEN-REPLS, if it exists."
        ,car ,cdr)
      `(,op ,(et:repr--tostring-noresolve car) ,(et:repr--tostring-noresolve cdr)))
 
-    (`(DynFunction ,matcher ,output-type)
-     (format "(%s) -> %s" (et-pp-matcher matcher) (et:repr--tostring-0 output-type)))
+    (`(PolyFunction ,matcher ,output-type)
+     (format "(%s) -> %s" (et-pp-matcher (et! *et:match-matcher matcher))
+             (et:repr--tostring-0 output-type)))
 
     ;; Display recursive loop aliases inline
     ((and (let loop-def (get name 'et-loop-alias)) (guard loop-def))
@@ -1935,7 +1939,7 @@ in GEN-REPLS, if it exists."
          (format "#%s#" (1+ idx))
        (push name et:repr--tostring-loops)
        (format "#%s={%s}" (length et:repr--tostring-loops)
-               (et:repr--tostring-0 (et-type-to-repr loop-def)))))
+               (et:repr--tostring-0 (et-type-to-repr (et! EtType loop-def))))))
 
     (_
      (let* ((name-str (symbol-name name))
@@ -1992,14 +1996,23 @@ indeterminates slot."
 
 ;;;; Repr factor definitions
 
+(et-declare
+ (@symbol-property et-spec-parse
+                   (Cons Symbol (fn &List<EtSpec> List)))
+ (@symbol-property et-repr-to-type
+                   (Function (Args* NonNilSymbol &List<EtRepr>)
+                             (or EtType *et:type-case List<*et:type-case>)))
+ (@symbol-property et-repr-print (Function &List<EtRepr> String)))
+
 (defmacro et:repr--deffactor (repr-sym spec-sym arglist &rest plist)
-  (declare (indent 3) (et ($expand)))
+  (declare (indent 3))
   (let* ((parse (or (plist-get plist :parse) (error "No :parse field provided")))
          (print (or (plist-get plist :print) (error "No :print field provided")))
          (totype (plist-get plist :to-type))
          (ignore (cons #'ignore (remq '&optional (remq '&rest arglist)))))
     `(progn
-       (put ',spec-sym 'et-spec-parse (cons ',repr-sym (lambda ,arglist ,ignore ,parse)))
+       (put ',spec-sym 'et-spec-parse
+            (cons ',repr-sym (lambda ,arglist ,ignore ,parse)))
        (put ',repr-sym 'et:repr-print (lambda ,arglist ,ignore ,print))
        ,@(when totype `((put ',repr-sym 'et-repr-to-type (lambda ,arglist ,ignore ,totype)))))))
 
@@ -2022,7 +2035,12 @@ indeterminates slot."
   :to-type
   (let* ((new-args (mapcar #'et:repr--totype-0 args)))
     (list (et:type-case-new :value (et:type-alias-new :name name :args new-args))))
-  :print (et:repr--tostring-named (et:type-alias-display-name name) args))
+  :print (et:repr--tostring-named (et:type-alias-display-name name) args)
+  (let* ((new-args (mapcar #'et:repr--totype-0 args)))
+    (list
+     (et:type-case-new :value
+                       (et:type-alias-new :name name :args
+                                          new-args)))))
 
 (et:repr--deffactor S:POLY poly (name)
   :parse (progn (et:type-polymorph-constraints name) (list name))
@@ -2084,17 +2102,17 @@ indeterminates slot."
          (out (or (pop args) 'Any)))
     (or (null args) (error "Too many arguments for `fn'"))
     (if genvec
-        (list 'DynFunction (et-parse-matcher in genvec et:repr--parsing-generics)
+        (list 'PolyFunction (et-parse-matcher in genvec et:repr--parsing-generics)
               (et-parse-repr out (append (et-genvec-generics genvec) et:repr--parsing-generics)))
       (list 'Function (et:repr--parse-0 in) (et:repr--parse-0 out)))))
 
 ;; fn0 (with no args) is equivalent to fn (with no args). Prefer the latter.
 (et-defspec fn0 (&optional ret) `(fn Nil ,ret))
-(et-defspec fn1 (arg &optional ret) `(fn (Args ,arg) ,ret))
-(et-defspec fn2 (a1 a2 &optional ret) `(fn (Args ,a1 ,a2) ,ret))
-(et-defspec fn3 (a1 a2 a3 &optional ret) `(fn (Args ,a1 ,a2 ,a3) ,ret))
-(et-defspec fn4 (a1 a2 a3 a4 &optional ret) `(fn (Args ,a1 ,a2 ,a3 ,a4) ,ret))
-(et-defspec fn5 (a1 a2 a3 a4 a5 &optional ret) `(fn (Args ,a1 ,a2 ,a3 ,a4 ,a5) ,ret))
+(et-defspec fn1 (arg &optional ret) `(fn (Args ,(or arg 'Any)) ,ret))
+(et-defspec fn2 (a1 a2 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any)) ,ret))
+(et-defspec fn3 (a1 a2 a3 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any)) ,ret))
+(et-defspec fn4 (a1 a2 a3 a4 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any)) ,ret))
+(et-defspec fn5 (a1 a2 a3 a4 a5 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any) ,(or a5 'Any)) ,ret))
 
 
 ;;;; Op macros
@@ -2587,9 +2605,11 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
            (if (or (not binds) (not (et:match-result->success result-no-binds))) result-no-binds
              (cl-loop for q in (et:match-result->value result-no-binds)
                       collect
-                      (if (not (eq 'Q:GEQ (car q))) q
-                        (let* ((type (et-supersect (caddr q) (et:algebra-replace-binds (et-any) binds))))
-                          (list 'Q:GEQ (cadr q) type)))
+                      (pcase q
+                        (`(Q:GEQ ,var ,typ)
+                         (let* ((type (et-supersect typ (et:algebra-replace-binds (et-any) binds))))
+                           (list 'Q:GEQ (cadr q) type)))
+                        (_ q))
                       into qs
                       finally return (et:match-succeeded qs)))
            collect result-with-binds into results
@@ -2671,7 +2691,7 @@ Thus, this variable stores a list of (ELEM . DEFAULT) pairs.")
          ;; The synthesized super (Plist side, m-args) is a matcher repr
          (lambda (read write rest-plist)
            (et:dt-cons-plist-super-matcher read write rest-plist generics))
-         ;; A DynFunction type against a Function matcher factor can only
+         ;; A PolyFunction type against a Function matcher factor can only
          ;; be resolved once the matcher's generics are known, so record
          ;; an R:FN constraint for constraint satisfaction.
          (lambda (dyn-args fn-args)
@@ -2833,14 +2853,14 @@ constraints when constructing each inferred type."
   "Process the `R:FN' constraints in CONSTRAINTS, with known generics.
 
 Each constraint is (R:FN DYN-MATCHER DYN-OUT-REPR FN-IN-MR FN-OUT-MR),
-recorded when a `DynFunction' type was matched against a `Function'
+recorded when a `PolyFunction' type was matched against a `Function'
 matcher factor. Each constraint first suggests more precise values for
-the generics in FN-IN-MR from the DynFunction's input matcher. A
+the generics in FN-IN-MR from the PolyFunction's input matcher. A
 suggestion is retained only when LARGEST is non-nil and all R:FN
 constraints remain valid.
 
 With the input generics determined, FN-IN-MR resolves to a concrete
-arglist type and the DynFunction infers its output. FN-OUT-MR must
+arglist type and the PolyFunction infers its output. FN-OUT-MR must
 accommodate that output: a bare generic is enlarged to include it
 \(rechecking that generic's upper bounds), while anything else must
 already be a supertype of it.
@@ -3286,6 +3306,10 @@ non-empty list => Might be subtype depending on the conditions."
         (if (eq arg-intersection 'INVALID) 'INVALID
           (et:type-dt-new :name a-name :args arg-intersection))))
 
+     ((or (and (eq a-name 'Symbol) (eq b-name 'NonNil))
+          (and (eq a-name 'NonNil) (eq b-name 'Symbol)))
+      (et:type-dt-new :name 'NonNilSymbol))
+
      (t 'INVALID))))
 
 
@@ -3336,7 +3360,7 @@ returning A itself is a valid approximation."
      ;; Symbol minus Nil
      ((and (equal a (et:type-dt-new :name 'Symbol))
            (equal b (et:type-dt-new :name 'Literal :args '(nil))))
-      (list (funcall make-case (et:type-dt-new :name 'NonNilSymbol :args '(nil)))))
+      (list (funcall make-case (et:type-dt-new :name 'NonNilSymbol))))
 
      ;; Todo: Handle more complex cases
      (t (list (funcall make-case a))))))
@@ -3512,7 +3536,7 @@ This returns an `et-match-result' in case matching fails."
                 (if (et:match-result->success result)
                     (et:match-succeeded return-type)
                   result)))
-             ((cl-struct et:type-dt (name 'DynFunction) (args `(,matcher ,output-repr)))
+             ((cl-struct et:type-dt (name 'PolyFunction) (args `(,matcher ,output-repr)))
               (et:algebra-infer matcher arglist-type output-repr))
              (_ (et:match-failed)))
            unless (et:match-result->success result) return result
@@ -3915,6 +3939,60 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
 (et-defspec Args* (&rest args) (et:type-tuple-star-spec '&Cons args))
 
+(et-defspec args (&rest specs)
+  (let ((required nil)
+        (optional nil)
+        (tail 'Nil)
+        (state 'required))
+    (while specs
+      (let ((spec (pop specs)))
+        (pcase spec
+          ('&optional
+           (unless (eq state 'required)
+             (error "Invalid `&optional' in `args'"))
+           (setq state 'optional))
+          ('&rest
+           (unless (memq state '(required optional))
+             (error "Invalid `&rest' in `args'"))
+           (unless (= (length specs) 1)
+             (error "`&rest' in `args' must be followed by exactly one tail type"))
+           (setq tail (pop specs)
+                 state 'done))
+          ('&key
+           (unless (memq state '(required optional))
+             (error "Invalid `&key' in `args'"))
+           (unless (cl-evenp (length specs))
+             (error "`&key' in `args' must be followed by keyword/type pairs"))
+           (cl-loop for (key _) on specs by #'cddr
+                    unless (keywordp key)
+                    do (error "Expected a keyword in `args', found %s" key))
+           (setq tail `(&Plist ,@specs)
+                 specs nil
+                 state 'done))
+          (_
+           (pcase state
+             ('required (push spec required))
+             ('optional (push spec optional))
+             (_ (error "Unexpected type after the tail of `args'")))))))
+
+    (setq required (nreverse required)
+          optional (nreverse optional))
+    (cl-labels
+        ((build (required optional)
+           (cond
+            (required `(&Cons ,(car required) ,(build (cdr required) optional)))
+            (optional
+             (let ((nil-generics
+                    (cl-remove-if-not
+                     (lambda (spec)
+                       (and (symbolp spec)
+                            (memq spec et:repr--parsing-generics)))
+                     (append optional (list tail)))))
+               `(or ,(if nil-generics `(and Nil ,@nil-generics) 'Nil)
+                    (&Cons ,(car optional) ,(build nil (cdr optional))))))
+            (t tail))))
+      (build required optional))))
+
 (et-defalias ListWithLast [E Last]
   (or (Cons Last Nil)
       (Cons E ListWithLast<E~Last>)))
@@ -4048,6 +4126,12 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias VariableEvent [] (or @set @let @unlet @makunbound @defvaralias))
 (et-defalias VariableWatcher [] (fn (Args Symbol Any VariableEvent Buffer?)))
+
+;; Use for `apply'
+(et-defalias AppendLast [T]
+  (map-cases T
+             [[X] &Cons<X~Nil> X]
+             [[A B] &Cons<A~B> &Cons<A~AppendLast<B>>]))
 
 
 ;;; ============================================================

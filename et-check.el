@@ -258,7 +258,7 @@
                        (et-repr-to-string param-repr) arg-type)
            (pcase (et-type-single func-type)
              ((or (cl-struct et:type-dt (name 'Function) (args `(,input ,_)))
-                  (and (cl-struct et:type-dt (name 'DynFunction) (args `(,matcher ,_)))
+                  (and (cl-struct et:type-dt (name 'PolyFunction) (args `(,matcher ,_)))
                        (let input (et-repr-to-string (et:match-matcher->repr matcher)))))
               (et-fatal (or arg-pos 0) "Expected %s, got %s" input args-type))
              (_ (et-fatal (or arg-pos 0) "`%s' has type %s\\nInvalid arguments: %s"
@@ -313,7 +313,11 @@ for untyped variables, and in loops to determine the final loop narrows.")
   (let* ((outsym (gensym "output")))
     `(let* ((et:check-preliminary-pass? t)
             (,outsym nil))
-       (ignore (et-result-boundary (setq ,outsym (progn ,@body))))
+       (ignore
+        (et-result-boundary
+         ;; Do not preserve narrows from this pass
+         (et-with-narrows (et-cur-narrows)
+           (setq ,outsym (progn ,@body)))))
        ,outsym)))
 
 
@@ -606,6 +610,20 @@ be used as the body of the checker function."
   `(cl-loop for (expr . rest) on ,exprs
             for last = (et-check-expansion (unless rest (et-cur-recommendation)) expr)
             finally return last))
+
+
+;;;; Helper macros
+
+(defmacro et-is? (expr type)
+  `(et-subtype? (et:result->value
+                 (et-result-boundary
+                  (et:check--result->type (et:check-check ',expr nil nil))))
+                (et ,type)))
+
+(defmacro et-typecheck (expr)
+  `(et:result->value
+    (et-result-boundary
+     (et:check--result->type (et:check-check ',expr nil nil)))))
 
 
 ;;; ============================================================
@@ -1085,7 +1103,7 @@ to that symbol."
 (et-define-check-macro $must-be (type-chk is-chk)
   (let* ((typesym (gensym "type")))
     `(let* ((,typesym (et-supersect (et-chk ,type-chk) (et-chk ,is-chk))))
-       (if (et-never-p type) (et-fatal nil "Unexitable") ;TODO
+       (if (et-never-p ,typesym) (et-fatal nil "Unexitable") ;TODO
          (et-apply-type-narrows ,typesym))
        (et Nil))))
 
@@ -1145,6 +1163,15 @@ to that symbol."
            collect `(et-chk ($ignore ,chk)) into exprs
            finally return `(prog1 (et-chk ,first-chk) ,@exprs)))
 
+(et-define-check-macro $tail-tuple (&rest first-path)
+  (let* ((path (flatten-list first-path))
+         (parent (et-cur-expr (butlast path)))
+         (start (or (car (last path)) 1)))
+    (et-tuple
+     '&Cons
+     (cl-loop for pos from start below (length (et-cur-expr))
+              collect (et-chk ($at pos))))))
+
 
 ;;;; Conditionals
 
@@ -1203,6 +1230,12 @@ will be the result."
                for pos upfrom 1
                collect `($expect ($type ,spec) ($at ,pos)))
     ($type ,(car (last specs)))))
+
+(et-define-check-shortcut $fn-type (args ret)
+  `($progn
+    ($expect ($type ,args)
+             ($tail-tuple 1))
+    ($type ,ret)))
 
 
 ;;;; Keyword checkers
@@ -1269,7 +1302,7 @@ will be the result."
 ;;;; Create function type
 
 (defun et-create-function-type (generics constraints input-repr output-repr)
-  "Build a Function or DynFunction type from reprs."
+  "Build a Function or PolyFunction type from reprs."
   (et-declare (generics &List<EtGeneric>)
               (constraints &List<EtTypeConstraint>)
               (input-repr EtRepr)
@@ -1277,7 +1310,7 @@ will be the result."
               (@return EtType))
 
   (if generics
-      (et-dt 'DynFunction
+      (et-dt 'PolyFunction
              (et:match-matcher-new :generics generics
                                    :constraints constraints
                                    :repr input-repr)
@@ -1742,7 +1775,7 @@ Returns a plist with :constrain and :populate functions."
                               (and Nil (bindsof (subtract T (Struct ,name ,@never-args))))))
                     '(T))))
              (put predicate 'et-symbol-func-type
-                  (et-dt 'DynFunction (et-parse-matcher '(Args T) [T]) output-repr))))
+                  (et-dt 'PolyFunction (et-parse-matcher '(Args T) [T]) output-repr))))
 
          ;; --- Accessors ---
          (dolist (slot slots)
@@ -1768,7 +1801,7 @@ Returns a plist with :constrain and :populate functions."
                                                     (et-parse-repr (cdr type-info) generics)))
                                               (et-parse-repr 'Any nil))
                             nconc (list (intern (format ":%s" slot-name)) slot-repr) into args
-                            finally return (et-parse-repr (if args `(Plist ,@args) 'Nil) nil))))
+                            finally return (et-parse-repr (if args `(&Plist ,@args) 'Nil) nil))))
              (put constructor 'et-symbol-func-type
                   (et-create-function-type generics constraints
                                            input-repr struct-repr))))
