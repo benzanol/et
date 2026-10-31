@@ -883,40 +883,409 @@ fresh types."
   `(et-with-binds (et:flow--guess-var-types ,inits (lambda () (et-chk ,body)))
      (et-chk ,body)))
 
-(et-defun et:flow--guess-var-types (inits: Alist<Var~EtCheckFn> body: EtCheckFn>) Alist<Var~EtType>
+(et-defun et:flow--guess-var-types (inits: Alist<Var~EtCheckFn> body: EtCheckFn) Alist<Var~EtType>
   (if et:check-preliminary-pass?
       ;; Prevent exponential blow-ups in time complexity due to nested bindings
       (cl-loop for (sym . fn) in inits
                collect (cons sym (et-reify-type (funcall fn))))
 
-    (let* ((var-recs
-            (et:check-preliminary-pass
-             (cl-loop for (sym . fn) in inits
-                      for var = (et:type-var-new :name sym :type (et-reify-type (funcall fn)))
-                      collect (cons var nil))))
+    (let* ((polys
+            (cl-loop for (sym . _) in inits
+                     collect (list (et:flow--new-poly-name
+                                    (format "%sType" sym)))))
+           (var-uses
+            (et:type--with-polymorphs polys
+              (et:check-preliminary-pass
+               (cl-loop for (sym . fn) in inits
+                        for (poly) in polys
+                        for init-type = (et-reify-type (funcall fn))
+                        for var =
+                        (et:type-var-new
+                         :name sym
+                         :type
+                         (et-supersect init-type
+                                       (et-parse-type poly)))
+                        collect (cons var (cons nil nil))))))
            (get-advice
-            #'ignore
-            ;; (lambda (var)
-            ;;   (when-let* ((entry (assq var var-recs))
-            ;;               (rec (et-cur-recommendation)))
-            ;;     (push rec (cdr entry))))
-            )
+            (lambda (var)
+              (when-let* ((entry (assq var var-uses))
+                          (rec (et-cur-recommendation)))
+                (push rec (cadr entry)))))
            (set-advice
             (lambda (var type)
-              (when-let* ((entry (assq var var-recs)))
-                (push type (cdr entry))))))
-      (et:check-preliminary-pass
-       (et-with-advice #'et:flow-check-var :before get-advice
-         (et-with-advice #'et:flow-check-set :before set-advice
-           (et-with-vars (mapcar #'car var-recs)
-             (funcall body)))))
+              (when-let* ((entry (assq var var-uses)))
+                (push type (cddr entry))))))
 
-      (cl-loop for (sym . fn) in inits
-               for (_ . recs) in var-recs
-               for union = (apply #'et-union recs)
-               for type = (et-with-recommendation union (funcall fn))
-               for final = (et:algebra-unfreshen-type (et-union type union))
-               collect (cons sym final)))))
+      (et:type--with-polymorphs polys
+        (et:check-preliminary-pass
+         (et-with-advice #'et:flow-check-var :before get-advice
+           (et-with-advice #'et:flow-check-set :before set-advice
+             (et-with-vars (mapcar #'car var-uses)
+               (funcall body))))))
+
+      (cl-loop
+       for (sym . fn) in inits
+       for (_ . union) in
+       (et:type--with-polymorphs polys
+         (et:flow--solve-var-types var-uses polys))
+       for type = (et-with-recommendation union (funcall fn))
+       for final = (et:algebra-unfreshen-type
+                    (et-union type union))
+       collect (cons sym final)))))
+
+(defun et:flow--new-poly-name (name)
+  "Return an interned polymorph name based on NAME that is not in use."
+  (let* ((base (format "%s" name))
+         (candidate (intern base))
+         (suffix 0))
+    (while (et:type-is-polymorph? candidate)
+      (setq suffix (1+ suffix)
+            candidate (intern (format "%s%d" base suffix))))
+    candidate))
+
+(defun et:flow--solve-var-types (var-recs polys)
+  "Solve the temporary polymorphs in VAR-RECS.
+
+POLYS contains one temporary polymorph for each entry in VAR-RECS, in
+the same order.  Each entry has the form (VAR GETS . SETS).  Prefer a
+type which is a subtype of every recommendation in GETS and a supertype
+of the initializer and every type in SETS.  If those bounds are
+incompatible, keep the lower bound: assignments are facts, whereas get
+recommendations are contextual hints.
+
+References to another entry's polymorph are enlarged with that entry's
+solution.  A nested reference to the entry currently being solved
+becomes a recursive alias."
+  (let* ((poly-names (mapcar #'car polys))
+         (count (length var-recs))
+         (states (make-vector count nil))
+         (solutions (make-vector count nil))
+         (recursive (make-vector count nil))
+         (loop-names
+          (cl-loop
+           for poly in poly-names
+           collect
+           (let* ((base (format "@FlowLoop-%s" poly))
+                  (candidate (intern base))
+                  (suffix 0))
+             (while (get candidate 'et-alias)
+               (setq suffix (1+ suffix)
+                     candidate (intern (format "%s-%d" base suffix))))
+             candidate)))
+         (loop-refs
+          (mapcar
+           (lambda (name)
+             (et:type-new
+              :cases
+              (list (et:type-case-new
+                     :value (et:type-alias-new :name name :args nil)))))
+           loop-names)))
+
+    (cl-labels
+        ((raw-union (types)
+           ;; Do not simplify a union containing a not-yet-defined loop
+           ;; alias.  It will be simplified after the alias is defined.
+           (setq types (delq nil types))
+           (cond
+            ((null types) (et-never))
+            ((null (cdr types)) (car types))
+            (t (et:type-new
+                :cases (apply #'append
+                              (mapcar (lambda (type)
+                                        (copy-sequence (et:type->cases type)))
+                                      types))))))
+
+         (rewrite-value (value owner depth)
+           (pcase value
+             ((cl-struct et:type-dt name args)
+              (et:type-dt-new
+               :name name
+               :args
+               (cl-loop for arg in args
+                        for role in (et:dt-arg-roles name args)
+                        collect (if (eq role 'CONST) arg
+                                  (rewrite-type arg owner (1+ depth))))))
+             ((cl-struct et:type-alias name args)
+              (et:type-alias-new
+               :name name
+               :args (mapcar (lambda (arg)
+                               (rewrite-type arg owner (1+ depth)))
+                             args)))
+             (_ (error "Invalid type value: %s" value))))
+
+         (rewrite-case (case owner depth)
+           (let* ((case-polys (et:type-case->polymorphs case))
+                  (owned-polys
+                   (cl-remove-if-not
+                    (lambda (poly) (memq poly poly-names))
+                    case-polys))
+                  (base
+                   (et:type-new
+                    :cases
+                    (list
+                     (et-copy-with
+                      case
+                      :value (rewrite-value (et:type-case->value case)
+                                            owner depth)
+                      :polymorphs
+                      (cl-set-difference case-polys owned-polys :test #'eq)))))
+                  additions
+                  has-self-reference)
+             (dolist (poly owned-polys)
+               (let ((idx (cl-position poly poly-names :test #'eq)))
+                 (cond
+                  ;; The top-level polymorph on a variable's initializer
+                  ;; marks that variable; it is not itself a recursive use.
+                  ((and (= idx owner) (= depth 0)))
+                  ((= idx owner)
+                   (aset recursive owner t)
+                   (setq has-self-reference t)
+                   (push (nth owner loop-refs) additions))
+                  (t
+                   (push (solve idx) additions)))))
+             (let ((types (cons base (nreverse additions))))
+               (if has-self-reference (raw-union types)
+                 (apply #'et-union types)))))
+
+         (rewrite-type (type owner depth)
+           (raw-union
+            (mapcar (lambda (case) (rewrite-case case owner depth))
+                    (et:type->cases type))))
+
+         (normalize-loop-reference (type name reference)
+           ;; Once NAME denotes the complete recursive solution, Nil | NAME
+           ;; is just NAME when Nil is already a root case of that solution.
+           ;; Removing that redundant nested Nil lets the ordinary canonical
+           ;; loop matcher recognize both List and &List.
+           (let* ((cases (et:type->cases type))
+                  (has-reference
+                   (cl-some
+                    (lambda (case)
+                      (pcase (et:type-case->value case)
+                        ((cl-struct et:type-alias (name n) (args (pred null)))
+                         (eq n name))))
+                    cases))
+                  (only-reference-or-nil
+                   (cl-every
+                    (lambda (case)
+                      (pcase (et:type-case->value case)
+                        ((cl-struct et:type-alias (name n) (args (pred null)))
+                         (eq n name))
+                        ((cl-struct et:type-dt
+                                    (name 'Literal)
+                                    (args (and args (guard (equal args '(nil))))))
+                         t)
+                        (_ nil)))
+                    cases)))
+             (if (and has-reference only-reference-or-nil)
+                 reference
+               (raw-union
+                (mapcar
+                 (lambda (case)
+                   (et:type-new
+                    :cases
+                    (list
+                     (et-copy-with
+                      case
+                      :value
+                      (pcase (et:type-case->value case)
+                        ((cl-struct et:type-dt (name dt-name) args)
+                         (et:type-dt-new
+                          :name dt-name
+                          :args
+                          (cl-loop for arg in args
+                                   for role in (et:dt-arg-roles dt-name args)
+                                   collect
+                                   (if (eq role 'CONST) arg
+                                     (normalize-loop-reference
+                                      arg name reference)))))
+                        ((cl-struct et:type-alias (name alias-name) args)
+                         (et:type-alias-new
+                          :name alias-name
+                          :args
+                          (mapcar (lambda (arg)
+                                    (normalize-loop-reference
+                                     arg name reference))
+                                  args))))))))
+                 cases)))))
+
+         (canonical-list-loop (definition reference)
+           (when (= (length (et:type->cases definition)) 2)
+             (let* ((nil-case
+                     (cl-find-if
+                      (lambda (case)
+                        (pcase (et:type-case->value case)
+                          ((cl-struct et:type-dt
+                                      (name 'Literal)
+                                      (args (and args
+                                                 (guard (equal args '(nil))))))
+                           t)))
+                      (et:type->cases definition)))
+                    (cons-case
+                     (cl-find-if (lambda (case) (not (eq case nil-case)))
+                                 (et:type->cases definition))))
+               (when (and nil-case cons-case)
+                 (pcase (et:type-case->value cons-case)
+                   ((cl-struct et:type-dt (name 'ConsFresh)
+                               (args `(,elem ,tail)))
+                    (when (equal tail reference)
+                      (et-alias 'List (et:algebra-simplify-type elem))))
+                   ((cl-struct et:type-alias
+                               (name (and name (or 'Cons '&Cons)))
+                               (args `(,elem ,tail)))
+                    (when (equal tail reference)
+                      (et-alias (if (eq name '&Cons) '&List 'List)
+                                (et:algebra-simplify-type elem))))
+                   ((cl-struct et:type-dt (name 'ConsRW)
+                               (args `(,read ,write ,tail-read ,tail-write)))
+                    (when (equal tail-read reference)
+                      (cond
+                       ((and (et-never-p write) (et-never-p tail-write))
+                        (et-alias '&List (et:algebra-simplify-type read)))
+                       ((and (equal read write)
+                             (equal tail-read tail-write))
+                        (et-alias 'List
+                                  (et:algebra-simplify-type read)))))))))))
+
+         (canonicalize-loop (idx definition)
+           (let* ((name (nth idx loop-names))
+                  (reference (nth idx loop-refs)))
+             (setq definition
+                   (normalize-loop-reference definition name reference))
+             (or
+              (canonical-list-loop definition reference)
+              (progn
+                (et:type-defalias name [] definition nil)
+                (put name 'et-loop-alias definition)
+                ;; This creates the same stable, digest-named aliases used
+                ;; for other non-list recursive types in et.el.
+                (et:algebra-unfreshen-type reference)))))
+
+         (contains-fresh-p (type)
+           ;; A Fresh datatype is an inferred shape whose write semantics
+           ;; may still be selected by a recommendation on the second pass.
+           (cl-some
+            (lambda (case)
+              (pcase (et:type-case->value case)
+                ((cl-struct et:type-dt name args)
+                 (or (memq name '(ConsFresh VectorFresh HashTableFresh))
+                     (cl-some (lambda (arg)
+                                (and (et:type-p arg)
+                                     (contains-fresh-p arg)))
+                              args)))
+                ((cl-struct et:type-alias name args)
+                 (ignore name)
+                 (cl-some (lambda (arg)
+                            (and (et:type-p arg)
+                                 (contains-fresh-p arg)))
+                          args))))
+            (et:type->cases type)))
+
+         (solve (idx)
+           (pcase (aref states idx)
+             ('done (aref solutions idx))
+             ('solving
+              ;; This case is only needed for a cycle through another
+              ;; variable.  Direct self references are handled above.
+              (aset recursive idx t)
+              (nth idx loop-refs))
+             (_
+              (aset states idx 'solving)
+              (let* ((entry (nth idx var-recs))
+                     (var (car entry))
+                     (gets (cadr entry))
+                     (sets (cddr entry))
+                     (initial (et:type-var->type var))
+                     ;; The initializer is an assignment too.  Rewrite
+                     ;; the lower and upper bounds separately: flattening
+                     ;; GETS and SETS together would lose their variance.
+                     (lower (rewrite-type
+                             (apply #'et-union initial sets) idx 0))
+                     (fresh-lower-p (contains-fresh-p lower))
+                     (uppers (mapcar (lambda (type)
+                                       (rewrite-type type idx 0))
+                                     gets))
+                     ;; Install a recursive lower bound before comparing it
+                     ;; with its upper bounds.  Besides making ordinary
+                     ;; subtype checks possible, this gives the structural
+                     ;; Fresh check below a closed type to operate on.
+                     (lower-check
+                      (if (aref recursive idx)
+                          (canonicalize-loop idx lower)
+                        (et:algebra-simplify-type lower)))
+                     (upper (and uppers
+                                 (condition-case nil
+                                     (apply #'et-supersect uppers)
+                                   (error nil))))
+                     (ideal-p
+                      (lambda (candidate)
+                        ;; A failed or unsupported subtype comparison only
+                        ;; makes this candidate unsuitable; inference-bound
+                        ;; solving itself must never fail.
+                        (condition-case nil
+                            (and (et-subtype? lower-check candidate)
+                                 (cl-every
+                                  (lambda (bound)
+                                    (et-subtype? candidate bound))
+                                  uppers))
+                          (error nil))))
+                     (fresh-ideal-p
+                      (lambda (candidate)
+                        ;; A preliminary Fresh type has fixed read shape but
+                        ;; deliberately undetermined write semantics.  If its
+                        ;; shape fits CANDIDATE after both sides are freshened,
+                        ;; the second checking pass may use CANDIDATE to choose
+                        ;; those writes.  Do not apply this relaxation to an
+                        ;; already-fixed RW lower bound.
+                        (and fresh-lower-p
+                             (condition-case nil
+                                 (and
+                                  (et-subtype?
+                                   (et:algebra-freshen-type lower-check)
+                                   (et:algebra-freshen-type candidate))
+                                  (cl-every
+                                   (lambda (bound)
+                                     (et-subtype? candidate bound))
+                                   uppers))
+                               (error nil)))))
+                     (acceptable-p
+                      (lambda (candidate)
+                        (or (funcall ideal-p candidate)
+                            (funcall fresh-ideal-p candidate))))
+                     (rewritten
+                      (cond
+                       ((null uppers) lower-check)
+                       ;; `et-supersect' is deliberately an approximate
+                       ;; intersection, so verify it against every actual
+                       ;; upper bound before accepting it.
+                       ((and upper (funcall acceptable-p upper)) upper)
+                       ;; One of the original recommendations is sometimes
+                       ;; a better representable intersection than
+                       ;; `et-supersect'.  Prefer the broadest one which
+                       ;; really satisfies all constraints.
+                       ((cl-find-if acceptable-p uppers))
+                       ((let ((intersection
+                               (condition-case nil
+                                   (apply #'et-subsect uppers)
+                                 (error nil))))
+                          (and (funcall acceptable-p intersection)
+                               intersection)))
+                       ((funcall ideal-p lower-check) lower-check)
+                       ;; No representable ideal solution was found.  Sets
+                       ;; (including the initializer) describe values which
+                       ;; really occur, so preserving their union is the
+                       ;; safest useful best effort.
+                       (t lower-check)))
+                     (solution
+                      (if (eq rewritten lower-check) lower-check
+                        (et:algebra-simplify-type rewritten))))
+                (aset solutions idx solution)
+                (aset states idx 'done)
+                solution)))))
+
+      (cl-loop for entry in var-recs
+               for idx upfrom 0
+               collect (cons (car entry) (solve idx))))))
 
 
 ;;;; Check branches
@@ -1605,10 +1974,13 @@ Returns the type of the last expression in the body."
               (@return EtType))
   (let* ((returns
           (et-in-function-body func-type params
-            (let* ((actual-ret (et:algebra-remove-binds
-                                (et-chk ($deferred ($tail body-path))))))
-              (or (et-subtype? actual-ret expected-ret)
-                  (et-err 0 "Expected %s, found %s" expected-ret actual-ret))
+            (let* ((exp-ret et:type-expected-return)
+                   (actual-ret (et:algebra-remove-binds
+                                (et-chk ($with-rec
+                                         ($eval exp-ret)
+                                         ($deferred ($tail body-path)))))))
+              (or (et-subtype? actual-ret exp-ret)
+                  (et-err 0 "Expected %s, found %s" exp-ret actual-ret))
               (et-remove-type-binds-and-polys actual-ret (mapcar #'car polys))))))
     (apply #'et-union returns)))
 

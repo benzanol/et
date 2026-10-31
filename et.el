@@ -680,6 +680,8 @@ Source: gpt-5.6.sol high."
 
 ;;;;; In function body
 
+(et-defvar et:type-expected-return EtType? nil)
+
 (defmacro et-with-function-polymorphs (func-type overload &rest body)
   "Evaluate BODY inside the typing context of FUNC-TYPE.
 
@@ -697,11 +699,12 @@ always have one element."
     for (polys input-type expected-ret) in overloads
     for overload-idx upfrom 1
     collect
-    (et-with-diagnostic-prefix
-        (when (cdr overloads)
-          (format "Overload %s {%s}" overload-idx (et:type--print-polys polys)))
-      (et:type--with-polymorphs polys
-        ,@body))))
+    (let* ((et:type-expected-return expected-ret))
+      (et-with-diagnostic-prefix
+          (when (cdr overloads)
+            (format "Overload %s {%s}" overload-idx (et:type--print-polys polys)))
+        (et:type--with-polymorphs polys
+          ,@body)))))
 
 (et-defun et:type--destructure-function (func-type: EtType &optional overloads: Bool)
           (List (Tuple EtPolymorphicTypes EtType EtType))
@@ -3830,9 +3833,10 @@ lazily because `List' is not yet defined when this file loads.")
             (list (cons (et-matcher [E] List<E>)
                         (et-parse-repr 'List<E> '(E)))))))
 
-(et-defun et:algebra-unfreshen-to-target (type: EtType target: EtType) EtType
+(et-defun et:algebra-unfreshen-to-target (type: EtType target: EtType?) EtType
   (let* ((unf (et:algebra-unfreshen-type type)))
-    (cond ((et-subtype? unf target) unf)
+    (cond ((null target) unf)
+          ((et-subtype? unf target) unf)
           ((et-subtype? type target) target)
           (t unf))))
 
