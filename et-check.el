@@ -230,9 +230,11 @@
            ;; (_ (debug))
            ;; Use those recommendations to check the actual arguments
            (arg-types (cl-loop for pos upfrom 1 below (length (et-cur-expr))
-                               for type = (et-check-at (nth (1- pos) recs) pos)
-                               collect (et-copy-with type :label (list :position pos))))
-           (args-type (et-tuple 'Cons arg-types))
+                               for rec = (nth (1- pos) recs)
+                               for type = (et-check-at rec pos)
+                               for unf = (et:algebra-unfreshen-to-target type rec)
+                               collect (et-copy-with unf :label (list :position pos))))
+           (args-type (et-tuple '&Cons arg-types))
            (output-result (et:algebra-funcall func-type args-type)))
       (cond
        ((et:match-result->success output-result) (et:match-result->value output-result))

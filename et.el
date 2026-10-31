@@ -3815,7 +3815,7 @@ structural key -- a stale result is never served, only a cache miss."
 
 ;;;;; Freshen/unfreshen
 
-(defvar et:algebra--unfreshen-canonical-loops nil
+(et-defvar et:algebra--unfreshen-canonical-loops &Alist<EtMatcher~EtRepr> nil
   "Cached canonical (MATCHER . REPR) collapses for `et:algebra-unfreshen-type'.
 
 Loops produced while unfreshening that match MATCHER are rewritten to
@@ -3823,12 +3823,18 @@ REPR with the matched generics substituted in, so the loop generated for
 `ListFresh<Number>' collapses to the readable `List<Number>'.  Built
 lazily because `List' is not yet defined when this file loads.")
 
-(defun et:algebra--unfreshen-canonical-loops ()
+(et-defun et:algebra--unfreshen-canonical-loops () &Alist<EtMatcher~EtRepr>
   "Return the canonical loop collapses used when unfreshening."
   (or et:algebra--unfreshen-canonical-loops
       (setq et:algebra--unfreshen-canonical-loops
             (list (cons (et-matcher [E] List<E>)
                         (et-parse-repr 'List<E> '(E)))))))
+
+(et-defun et:algebra-unfreshen-to-target (type: EtType target: EtType) EtType
+  (let* ((unf (et:algebra-unfreshen-type type)))
+    (cond ((et-subtype? unf target) unf)
+          ((et-subtype? type target) target)
+          (t unf))))
 
 (et-defun et:algebra-unfreshen-type (type: EtType) EtType
   (et:algebra-remove-binds
@@ -3836,9 +3842,9 @@ lazily because `List' is not yet defined when this file loads.")
     type
     (lambda (name args)
       (pcase name
-        ('ConsFresh (et:type-alias-new :name 'Cons :args (mapcar #'et:algebra-unfreshen-type args)))
-        ('VectorFresh (et:type-alias-new :name 'Vector :args (mapcar #'et:algebra-unfreshen-type args)))
-        ('HashTableFresh (et:type-alias-new :name 'HashTable :args (mapcar #'et:algebra-unfreshen-type args)))
+        ('ConsFresh (et:type-alias-new :name '&Cons :args (mapcar #'et:algebra-unfreshen-type args)))
+        ('VectorFresh (et:type-alias-new :name '&Vector :args (mapcar #'et:algebra-unfreshen-type args)))
+        ('HashTableFresh (et:type-alias-new :name '&HashTable :args (mapcar #'et:algebra-unfreshen-type args)))
         (_ (et:type-dt-new :name name :args args))))
     (et:algebra--unfreshen-canonical-loops))))
 
