@@ -86,7 +86,7 @@
        V)
  (@def autoload-do-load ([(<= V Var)] fundef: V &optional funname: Symbol macro-only: @macro?) V)
  (@def eval (form: Sexp &optional lexical: Bool) Any)
- (@def apply ([A R] function: (fn (eval et-tuple-to-tailed A) R) &rest arguments: A) R)
+ (@def apply ([A R] function: (fn AppendLast<A> R) &rest arguments: A) R)
  (@def run-hooks (&rest hooks: &List<fn>) Nil)
  (@def run-hook-with-args (hook: Var &rest args: &List) Any)
  (@def run-hook-with-args-until-success (hook: Var &rest args: &List) Any)
@@ -107,9 +107,4 @@
              for pos upfrom 0
              collect (cons sym `(lambda () (et-check-at t ,rel ,pos 1))))))
 
-(defvar et--tuple-to-tailed-stack nil)
-(et-defun et-tuple-to-tailed (tuple: EtType) EtType
-  (or (et-stop-recursion et--tuple-to-tailed-stack tuple nil
-        (or (et-infer tuple [T] (&Cons T Nil) T)
-            (et-infer tuple [E A B] (&Cons E (&Cons A B)) (&Cons E (eval et-tuple-to-tailed (&Cons A B))))))
-      (error "Not a tuple: %s" tuple)))
+

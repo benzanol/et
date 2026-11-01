@@ -3,6 +3,148 @@
 ;;; ============================================================
 ;;; The defcustom macro
 
+(defun et:custom--type-positional-args (args)
+  "Return the non-keyword arguments from Custom widget ARGS."
+  (cl-loop while args
+           if (keywordp (car args)) do (setq args (cddr args))
+           else collect (pop args)))
+
+(defun et:custom--type-keyword (args key)
+  "Return the Custom widget value for KEY in ARGS, defaulting to `sexp'."
+  (or (plist-get args key) 'sexp))
+
+(defun et:custom--eval-type (expr)
+  "Evaluate a `defcustom' :type expression EXPR."
+  (condition-case-unless-debug err
+      (eval expr t)
+    (error
+     (et-fatal nil "Error evaluating custom :type: %s"
+               (error-message-string err)))))
+
+(defun et:custom--type-to-et-type (custom-type)
+  "Convert common Custom widget type CUSTOM-TYPE to an `et:type'.
+
+Unknown and structurally complicated widget types deliberately fall back to
+`Any'."
+  (pcase custom-type
+    ((or 'sexp 'default 'other 'restricted-sexp 'lazy)
+     (et Any))
+    ('hook
+     (et List<AnyFn>))
+    ((or 'boolean 'toggle 'checkbox)
+     (et Boolean))
+    ((or 'integer 'natnum 'character)
+     (et Integer))
+    ((or 'number 'float)
+     (et Number))
+    ((or 'string 'regexp 'file 'directory 'color 'key 'key-sequence
+         'coding-system 'charset 'mule-input-method-string 'text)
+     (et String))
+    ((or 'symbol 'variable 'face 'group)
+     (et Symbol))
+    ('function
+     (et Symbol|AnyFn))
+
+    (`(,(or 'sexp 'default 'other 'restricted-sexp 'lazy) . ,_)
+     (et Any))
+    (`(,(or 'boolean 'toggle 'checkbox) . ,_)
+     (et Boolean))
+    (`(,(or 'integer 'natnum 'character) . ,_)
+     (et Integer))
+    (`(,(or 'number 'float) . ,_)
+     (et Number))
+    (`(,(or 'string 'regexp 'file 'directory 'color 'key 'key-sequence
+           'coding-system 'charset 'mule-input-method-string 'text)
+       . ,_)
+     (et String))
+    (`(,(or 'symbol 'variable 'face 'group) . ,_)
+     (et Symbol))
+    (`(function . ,_)
+     (et Symbol|AnyFn))
+    (`(hook . ,_)
+     (et List<AnyFn>))
+
+    (`(,(or 'choice 'radio 'menu-choice) . ,args)
+     (apply #'et-union
+            (mapcar #'et:custom--type-to-et-type
+                    (et:custom--type-positional-args args))))
+    (`(,(or 'const 'item 'function-item 'variable-item) . ,args)
+     (et-literal
+      (if (plist-member args :value)
+          (plist-get args :value)
+        (car (last (et:custom--type-positional-args args))))))
+    (`(list . ,args)
+     (et-tuple
+      'Cons
+      (mapcar #'et:custom--type-to-et-type
+              (et:custom--type-positional-args args))))
+    (`(vector . ,args)
+     (et-alias
+      'Vector
+      (apply #'et-union
+             (mapcar #'et:custom--type-to-et-type
+                     (et:custom--type-positional-args args)))))
+    (`(cons . ,args)
+     (let* ((positional (et:custom--type-positional-args args)))
+       (et-alias
+        'Cons
+        (if positional
+            (et:custom--type-to-et-type (car positional))
+          (et Any))
+        (if (cdr positional)
+            (et:custom--type-to-et-type (cadr positional))
+          (et Any)))))
+    (`(,(or 'repeat 'editable-list) . ,args)
+     (et-alias
+      'List
+      (et:custom--type-to-et-type
+       (or (car (et:custom--type-positional-args args)) 'sexp))))
+    (`(,(or 'set 'checklist) . ,args)
+     (et-alias
+      'List
+      (apply #'et-union
+             (mapcar #'et:custom--type-to-et-type
+                     (et:custom--type-positional-args args)))))
+    (`(alist . ,args)
+     (et-alias
+      'Alist
+      (et:custom--type-to-et-type
+       (et:custom--type-keyword args :key-type))
+      (et:custom--type-to-et-type
+       (et:custom--type-keyword args :value-type))))
+    (`(plist . ,args)
+     (et-alias
+      'PlistOf
+      (et:custom--type-to-et-type
+       (et:custom--type-keyword args :key-type))
+      (et:custom--type-to-et-type
+       (et:custom--type-keyword args :value-type))))
+
+    ;; TODO: Convert more specialized and user-defined widget types.
+    (_ (et Any))))
+
+(defun et:custom--identify-defcustom (name _standard _doc &rest args)
+  "Identify a `defcustom' form and declare its global variable type."
+  (unless (symbolp name)
+    (et-fatal 1 "Custom variable name must be a symbol"))
+  (let* ((type-pos
+          (cl-loop for (key _value) on args by #'cddr
+                   for pos from 0 by 2
+                   when (eq key :type) return pos))
+         (type-expr (and type-pos (nth (1+ type-pos) args))))
+    (list
+     :declare
+     (lambda ()
+       (et-set-global-var-type
+        name
+        (if type-pos
+            (et-at (+ 5 type-pos)
+              (et:custom--type-to-et-type
+               (et:custom--eval-type type-expr)))
+          (et Any)))))))
+
+(et-set-identifier #'defcustom #'et:custom--identify-defcustom)
+
 (et-declare
  (@def custom-initialize-default (symbol: Symbol exp: Sexp) Any)
  (@def custom-initialize-set (symbol: Symbol exp: Sexp) Any)
@@ -10,12 +152,39 @@
  (@def custom-initialize-changed (symbol: Symbol exp: Sexp) Any)
  (@def custom-initialize-delay (symbol: Symbol value: Sexp) Any)
  (@def custom-declare-variable (symbol: [T] default: Sexp doc: String? &rest args: &List) T)
- ;; defcustom is a declarative macro: SYMBOL is never evaluated, and
- ;; STANDARD is wrapped in a lambda so it is only evaluated later (under
- ;; lexical scoping) when the variable is first initialized. There is no
- ;; checker shortcut for a form that quotes one operand and defers
- ;; evaluation of another while also handling an open keyword-argument tail.
- (@check defcustom ($todo)))
+ ;; SYMBOL is syntax rather than an evaluated argument.  STANDARD is checked
+ ;; against the type installed by `et:custom--identify-defcustom'; DOC and the
+ ;; keyword values are ordinary evaluated expressions.
+ (@check defcustom
+         ($pcase
+          `(,(and name (pred symbolp)) ,_standard ,_doc . ,_args)
+          ($prog1
+           ($eval (et-literal name))
+           ($expect ($eval (or (et-global-var-type name) (et-any))) ($at 2))
+           ($expect
+            ($type
+             (Args*
+              String?
+              (or
+               Nil
+               (&Plist
+                :type Any
+                :options &List
+                :initialize Nil|Symbol|AnyFn
+                :set Nil|Symbol|AnyFn
+                :get Nil|Symbol|AnyFn
+                :require Symbol?
+                :set-after &List<Symbol>
+                :risky Any
+                :safe Any
+                :local Any
+                :group Symbol?
+                :link &List
+                :version String?
+                :package-version Nil|&Cons<Symbol~String>
+                :tag String?
+                :load Nil|String|Symbol))))
+            ($tail-tuple 3)))))))
 
 ;;; ============================================================
 ;;; The defface macro
@@ -33,11 +202,31 @@
 (et-declare
  (@def custom-current-group () Symbol)
  (@def custom-declare-group (symbol: [T] members: List<Cons<Symbol~Cons<Symbol~Nil>>> doc: String? &rest args: &List) T)
- ;; defgroup is a declarative macro: SYMBOL is never evaluated, and
- ;; MEMBERS/DOC/ARGS describe a group structure rather than code to run.
- ;; There is no checker shortcut for a form that quotes one operand while
- ;; handling an open keyword-argument tail.
- (@check defgroup ($todo))
+ ;; SYMBOL is the only operand which `defgroup' quotes.  MEMBERS, DOC, and
+ ;; keyword values are evaluated normally, while the keyword names themselves
+ ;; are part of the macro's syntax.
+ (@check defgroup
+         ($pcase
+          `(,(and symbol (pred symbolp)) ,_members ,_doc . ,_args)
+          ($prog1
+           ($eval (et-literal symbol))
+           ($expect
+            ($type
+             (Args*
+              &List<&Cons<Symbol~&Cons<Symbol~Nil>>>
+              String?
+              (or
+               Nil
+               (&Plist
+                :prefix String?
+                :group Symbol?
+                :version String?
+                :package-version Nil|&Cons<Symbol~String>
+                :link &List
+                :load Nil|String|Symbol
+                :tag String?
+                :set-after &List<Symbol>))))
+            ($tail-tuple 2))))))
  (@def custom-add-to-group (group: Symbol option: Symbol widget: Symbol) List<Any>)
  (@def custom-group-of-mode (mode: Symbol) Symbol))
 

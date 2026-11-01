@@ -304,7 +304,7 @@ Use the `HashTable` alias: `HashTable<K~V>` expands to `HashTableRW<K~K~V~V>`.
 | Datatype | Arguments (variance) | Description |
 |----------|---------------------|-------------|
 | `Function` | `INPUT(contra) OUTPUT(co)` | Fixed-signature function |
-| `DynFunction` | `MATCHER(const) OUTPUT-REPR(const)` | Generic/dynamic function |
+| `PolyFunction` | `MATCHER(const) OUTPUT-REPR(const)` | Generic/dynamic function |
 
 Use the `fn` spec macro (see below) rather than writing these directly.
 

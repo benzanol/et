@@ -135,10 +135,15 @@
        ([P K] plist: P prop: K val: PlistPut<P~K>
         &optional predicate: fn2<K~K>?)
        P)
- (@def put
-       ([S V] symbol: Symbol propname: S
-        value: (and V (symbol-property S)))
-       V)
+ (@check put
+         ($pcase
+          `(,_ ,_ ,_)
+          ($eval
+           (et-chk ($expect ($type Symbol) ($at 1)))
+           (let* ((prop-type (et-chk ($expect ($type Symbol) ($at 2))))
+                  (value-type
+                   (et-parse-type `(symbol-property (type ,prop-type)))))
+             (et-chk ($expect ($eval value-type) ($at 3)))))))
  (@def plist-member
        ([K V] plist: &PlistOf<K~V> prop: K
         &optional predicate: (or Nil (fn (Args K K) Any)))

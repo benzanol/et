@@ -1112,11 +1112,11 @@ interactively, clears every source's defun cache."
                     (let* ((start-line (line-number-at-pos))
                            (start-col (1+ (current-column))))
                       (ignore-errors (forward-sexp))
-                      (princ (format "%s:%d:%d:%s:%s: %s: %s path=%s\n"
+                      (princ (format "%s:%d:%d:%s:%s: %s: %s\n"
                                      true-file
                                      start-line start-col
                                      (line-number-at-pos) (1+ (current-column))
-                                     severity msg path))))))))
+                                     severity msg))))))))
 
 (defun et:cache--traverse-expr (path)
   (forward-comment (buffer-size))

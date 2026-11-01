@@ -166,7 +166,7 @@
 ;;; Arithmetic operations
 
 (et-declare
- (@def + (&rest numbers-or-markers: [(<= Nums &List<NumOrMarker>)])
+ (@def + (&rest numbers-or-markers: [<= Nums &List<NumOrMarker>])
        (switch Nums [Nil 0] [&List<IntOrMarker> Integer] Number))
  (@def - (&optional number-or-marker: [<= Num NumOrMarker]
                     &rest more-numbers-or-markers: [<= Nums &List<NumOrMarker>])
