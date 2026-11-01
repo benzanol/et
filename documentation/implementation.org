@@ -1,0 +1,33 @@
+* Implementation details (for contributors)                        :section:
+** Type parsing
+There are 3 different forms that a type can take.
+A =type-spec= is the human-write/readable format that you will actually use in code.
+An =et:repr= is a structural representation of a type-spec after being parsed.
+An =et:type= is a less-expressive, normalized representation of a type. Type-checking an expression evaluates to an =et:type=.
+
+|                           | spec | et:repr | et:type |
+|---------------------------+------+---------+---------|
+| Human readable            | [X]  | [ ]     | [ ]     |
+| Contains datatypes        | [X]  | [X]     | [X]     |
+| Contains aliases          | [X]  | [X]     | [X]     |
+| Contains unions           | [X]  | [X]     | [X]     |
+| Contains intersections    | [X]  | [X]     | [ ]     |
+| Contains type-ops         | [X]  | [X]     | [ ]     |
+| Contains spec-macro calls | [X]  | [ ]     | [ ]     |
+| Contains type-variables   | [X]  | [X]     | [ ]     |
+| Contains variable narrows | [ ]  | [ ]     | [X]     |
+
+** Caching
+** Source files
+- =et.el= - Defines the core typesystem (the =et:type= struct, datatypes, aliases, type algebra, parsing types)
+- =et-check.el= - Defines a process for parsing type annotations in -- and subsequenty type-checking --  elisp code
+- =et-macros.el= - No-op macros for inserting type annotations alongside elisp code
+- =et-flycheck.el= - A flycheck checker which runs the type-checker in a batch emacs process
+- =et-cache.el= - Caches certain type-algebra and checking operations to avoid duplicating work
+- =definitions/*= - Definitions for many files in the emacs standard library
+
+** Namespaces
+Core files are split into different namespaces for the purpose decoupling.
+Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
+Definitions /with/ a namespace prefix (=et:ns-*=) are intended as internal functions only to be used within the core et files, and should not be relied upon. Of those, definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
+
