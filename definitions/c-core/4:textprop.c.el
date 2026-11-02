@@ -4,12 +4,12 @@
 ;;; Text property access
 
 (et-declare
- (@def text-properties-at (position: IntOrMarker &optional object: String|Buffer?) &PlistOf<Symbol~Any>)
+ (@def text-properties-at (position: IntOrMarker &optional object: String|Buffer?) &PlistOf<Symbol_Any>)
  (@def get-text-property (position: IntOrMarker prop: Symbol &optional object: String|Buffer?) Any)
  (@def get-char-property (position: IntOrMarker prop: Symbol &optional object: String|Buffer|Window?) Any)
  (@def get-char-property-and-overlay
        (position: IntOrMarker prop: Symbol &optional object: String|Buffer|Window?)
-       ConsFresh<Any~Overlay?>))
+       ConsFresh<Any_Overlay?>))
 
 ;;; ============================================================
 ;;; Property changes
@@ -41,19 +41,19 @@
 
 (et-declare
  (@def add-text-properties
-       (start: IntOrMarker end: IntOrMarker properties: &PlistOf<Symbol~Any> &optional object: String|Buffer?)
+       (start: IntOrMarker end: IntOrMarker properties: &PlistOf<Symbol_Any> &optional object: String|Buffer?)
        Boolean)
  (@def put-text-property
        (start: IntOrMarker end: IntOrMarker property: Symbol value: Any &optional object: String|Buffer?)
        Nil)
  (@def set-text-properties
-       (start: IntOrMarker end: IntOrMarker properties: &PlistOf<Symbol~Any> &optional object: String|Buffer?)
+       (start: IntOrMarker end: IntOrMarker properties: &PlistOf<Symbol_Any> &optional object: String|Buffer?)
        Boolean)
  (@def add-face-text-property
        (start: IntOrMarker end: IntOrMarker face: Any &optional append: Bool object: String|Buffer?)
        Nil)
  (@def remove-text-properties
-       (start: IntOrMarker end: IntOrMarker properties: &PlistOf<Symbol~Any> &optional object: String|Buffer?)
+       (start: IntOrMarker end: IntOrMarker properties: &PlistOf<Symbol_Any> &optional object: String|Buffer?)
        Boolean)
  (@def remove-list-of-text-properties
        (start: IntOrMarker end: IntOrMarker list-of-properties: &List<Symbol> &optional object: String|Buffer?)

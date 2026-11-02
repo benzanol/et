@@ -6,8 +6,8 @@
 (et-declare
  (@def jit-lock-mode (arg: Bool) Any)
  (@def jit-lock-debug-mode (&optional arg: Integer|@toggle?) Boolean)
- (@def jit-lock-register (fun: fn2<Integer~Integer> &optional contextual: Bool) Any)
- (@def jit-lock-unregister (fun: fn2<Integer~Integer>) Any)
+ (@def jit-lock-register (fun: fn2<Integer_Integer> &optional contextual: Bool) Any)
+ (@def jit-lock-unregister (fun: fn2<Integer_Integer>) Any)
  (@def jit-lock-refontify (&optional beg: IntOrMarker? end: IntOrMarker?) Any))
 
 ;;; ============================================================

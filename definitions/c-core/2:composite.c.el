@@ -25,7 +25,7 @@
         modification-func: Nil|AnyFn|Symbol)
        Nil)
  (@def compose-string-internal
-       ([(<= S String)] string: S start: IntOrMarker end: IntOrMarker
+       ([(S <: String)] string: S start: IntOrMarker end: IntOrMarker
         &optional components: Nil|Integer|&Cons|String|&Vector
         modification-func: Nil|AnyFn|Symbol)
        S)

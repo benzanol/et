@@ -5,7 +5,7 @@
 
 (et-declare
  (@def recursive-edit () Nil)
- (@def command-error-default-function (data: &Cons<Symbol~List> context: String signal: Symbol?) Nil)
+ (@def command-error-default-function (data: &Cons<Symbol_List> context: String signal: Symbol?) Nil)
  (@def top-level () Never)
  (@def exit-recursive-edit () Never)
  (@def abort-recursive-edit () Never))
@@ -20,9 +20,9 @@
 ;;; Event processing
 
 (et-declare
- (@def internal-event-symbol-parse-modifiers (symbol: Symbol) Cons<Integer|Symbol~List<Symbol>>)
+ (@def internal-event-symbol-parse-modifiers (symbol: Symbol) Cons<Integer|Symbol_List<Symbol>>)
  (@def event-convert-list (event-desc: &List<Symbol|Integer>) Integer|Symbol)
- (@def internal-handle-focus-in (event: &Cons<@focus-in~&Cons<Frame~Any>>) Nil))
+ (@def internal-handle-focus-in (event: &Cons<@focus-in_&Cons<Frame_Any>>) Nil))
 
 ;;; ============================================================
 ;;; Keyboard input
@@ -40,7 +40,7 @@
                 can-return-switch-frame: Bool cmd-loop: Bool disable-text-conversion: Bool)
        Vector<Any>)
  (@def input-pending-p (&optional check-timers: Bool) Boolean)
- (@def insert-special-event (event: &Cons<Symbol~Any>) Nil)
+ (@def insert-special-event (event: &Cons<Symbol_Any>) Nil)
  (@def lossage-size (&optional arg: Integer?) Integer)
  (@def recent-keys (&optional include-cmds: Bool) Vector<Any>)
  (@def this-command-keys () String|Vector<Any>)

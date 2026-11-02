@@ -4,10 +4,10 @@
 ;;; Case conversion
 
 (et-declare
- (@def upcase ([(<= T Integer|String)] obj: T) T)
- (@def downcase ([(<= T Integer|String)] obj: T) T)
- (@def capitalize ([(<= T Integer|String)] obj: T) T)
- (@def upcase-initials ([(<= T Integer|String)] obj: T) T))
+ (@def upcase ([(T <: Integer|String)] obj: T) T)
+ (@def downcase ([(T <: Integer|String)] obj: T) T)
+ (@def capitalize ([(T <: Integer|String)] obj: T) T)
+ (@def upcase-initials ([(T <: Integer|String)] obj: T) T))
 
 ;;; ============================================================
 ;;; Region case conversion

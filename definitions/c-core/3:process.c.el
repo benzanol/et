@@ -17,13 +17,13 @@
  (@def set-process-buffer (process: Process buffer: Buffer?) Buffer?)
  (@def process-buffer (process: Process) Buffer?)
  (@def process-mark (process: Process) Marker)
- (@def set-process-filter (process: Process filter: (or Nil True fn2<Process~String>))
-       (or Nil True fn2<Process~String>))
- (@def process-filter (process: Process) (or Nil True fn2<Process~String>))
- (@def set-process-sentinel (process: Process sentinel: (or Nil True fn2<Process~String>))
-       (or Nil True fn2<Process~String>))
- (@def process-sentinel (process: Process) (or Nil True fn2<Process~String>))
- (@def set-process-thread ([(<= T Thread?)] process: Process thread: T) T)
+ (@def set-process-filter (process: Process filter: (or Nil True fn2<Process_String>))
+       (or Nil True fn2<Process_String>))
+ (@def process-filter (process: Process) (or Nil True fn2<Process_String>))
+ (@def set-process-sentinel (process: Process sentinel: (or Nil True fn2<Process_String>))
+       (or Nil True fn2<Process_String>))
+ (@def process-sentinel (process: Process) (or Nil True fn2<Process_String>))
+ (@def set-process-thread ([(T <: Thread?)] process: Process thread: T) T)
  (@def process-thread (process: Process) Thread?)
  (@def set-process-window-size (process: Process height: Integer width: Integer) Boolean)
  (@def set-process-inherit-coding-system-flag (process: Process flag: Bool) Bool)
@@ -34,10 +34,10 @@
  ;; validated to alternate keys and values, so a strict PlistOf would claim
  ;; unsupported precision.
  (@def process-plist (process: Process) List<Any>)
- (@def set-process-plist ([(<= L List<Any>)] process: Process plist: L) L)
+ (@def set-process-plist ([(L <: List<Any>)] process: Process plist: L) L)
  (@def process-type (process: Process|Buffer|String?) @real|@network|@serial|@pipe)
  (@def format-network-address
-       (address: String|Vector<Integer>|Cons<Integer~Vector<Integer>>?
+       (address: String|Vector<Integer>|Cons<Integer_Vector<Integer>>?
                  &optional omit_port: Bool)
        String?)
  (@def process-list () List<Process>))
@@ -56,9 +56,9 @@
  ;; unconstrained rest list, following the `make-hash-table' precedent.
  (@def make-pipe-process (&rest args: &List) Process?)
  (@def process-datagram-address (process: Process)
-       String|Vector<Integer>|Cons<Integer~Vector<Integer>>?)
+       String|Vector<Integer>|Cons<Integer_Vector<Integer>>?)
  (@def set-process-datagram-address
-       ([(<= A String|Vector<Integer>|Cons<Integer~Vector<Integer>>)]
+       ([(A <: String|Vector<Integer>|Cons<Integer_Vector<Integer>>)]
         process: Process address: A)
        A?)
  (@def set-network-process-option
@@ -101,20 +101,20 @@
 (et-declare
  (@def process-running-child-p (&optional process: Process|Buffer|String?) Integer|Boolean)
  (@def internal-default-interrupt-process
-       ([(<= P Process|Buffer|String?)] &optional process: P current_group: Bool)
+       ([(P <: Process|Buffer|String?)] &optional process: P current_group: Bool)
        P)
  (@def interrupt-process (&optional process: Process|Buffer|String? current_group: Bool) Any)
  (@def kill-process
-       ([(<= P Process|Buffer|String?)] &optional process: P current_group: Bool)
+       ([(P <: Process|Buffer|String?)] &optional process: P current_group: Bool)
        P)
  (@def quit-process
-       ([(<= P Process|Buffer|String?)] &optional process: P current_group: Bool)
+       ([(P <: Process|Buffer|String?)] &optional process: P current_group: Bool)
        P)
  (@def stop-process
-       ([(<= P Process|Buffer|String?)] &optional process: P current_group: Bool)
+       ([(P <: Process|Buffer|String?)] &optional process: P current_group: Bool)
        P)
  (@def continue-process
-       ([(<= P Process|Buffer|String?)] &optional process: P current_group: Bool)
+       ([(P <: Process|Buffer|String?)] &optional process: P current_group: Bool)
        P)
  (@def internal-default-signal-process
        (process: Process|Buffer|Number|String? sigcode: Integer|Symbol &optional remote: String?)
@@ -122,7 +122,7 @@
  (@def signal-process
        (process: Process|Buffer|Number|String? sigcode: Integer|Symbol &optional remote: String?)
        Any)
- (@def process-send-eof ([(<= P Process|Buffer|String?)] &optional process: P) P))
+ (@def process-send-eof ([(P <: Process|Buffer|String?)] &optional process: P) P))
 
 
 ;;; ============================================================
@@ -133,12 +133,12 @@
  (@def set-process-coding-system
        (process: Process &optional decoding: Symbol? encoding: Symbol?)
        Nil)
- (@def process-coding-system (process: Process) Cons<Symbol?~Symbol?>)
+ (@def process-coding-system (process: Process) Cons<Symbol?_Symbol?>)
  (@def get-buffer-process (buffer: Buffer|String?) Process?)
  (@def process-inherit-coding-system-flag (process: Process) Boolean)
  (@def waiting-for-user-input-p () Boolean)
  (@def list-system-processes () List<Integer>?)
- (@def process-attributes (pid: Number) Alist<Symbol~Any>?)
+ (@def process-attributes (pid: Number) Alist<Symbol_Any>?)
  (@def num-processors (&optional query: @current|@all?) Integer)
  (@def signal-names () List<String>?))
 

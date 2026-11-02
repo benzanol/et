@@ -5,25 +5,25 @@
 
 (et-declare
  (@variable byte-compile-form-stack List<Sexp>)
- (@variable macroexpand-all-environment Alist<Symbol~Any>)
+ (@variable macroexpand-all-environment Alist<Symbol_Any>)
  (@variable macroexp-inhibit-compiler-macros Boolean)
- (@def macroexp-compiling-p () &List<Cons<Symbol~Any>>)
+ (@def macroexp-compiling-p () &List<Cons<Symbol_Any>>)
  (@def macroexp-file-name () String?)
  (@def macroexp-warn-and-return
        (msg: String? form: Sexp
         &optional category: Symbol|List<Symbol>? compile-only: Bool arg: Sexp?)
        Sexp)
- (@def macroexpand-1 (form: Sexp &optional environment: Alist<Symbol~Any>) Sexp)
- (@def macroexp-macroexpand (form: Sexp env: Alist<Symbol~Any>) Sexp)
- (@def macroexpand-all (form: Sexp &optional environment: Alist<Symbol~Any>) Sexp))
+ (@def macroexpand-1 (form: Sexp &optional environment: Alist<Symbol_Any>) Sexp)
+ (@def macroexp-macroexpand (form: Sexp env: Alist<Symbol_Any>) Sexp)
+ (@def macroexpand-all (form: Sexp &optional environment: Alist<Symbol_Any>) Sexp))
 
 ;;; ============================================================
 ;;; Handy functions to use in macros
 
 (et-declare
- (@def macroexp-parse-body (body: &List<Sexp>) Cons<List<Sexp>~List<Sexp>>)
+ (@def macroexp-parse-body (body: &List<Sexp>) Cons<List<Sexp>_List<Sexp>>)
  (@def macroexp-progn (exps: &List<Sexp>) Sexp)
- (@def macroexp-unprogn (exp: Sexp) Cons<Sexp~List<Sexp>>)
+ (@def macroexp-unprogn (exp: Sexp) Cons<Sexp_List<Sexp>>)
  (@def macroexp-let* (bindings: &List<Sexp> exp: Sexp) Sexp)
  (@def macroexp-if (test: Sexp then: Sexp else: Sexp) Sexp)
  ;; This macro binds SYM as a fresh lexical variable while checking BODY,

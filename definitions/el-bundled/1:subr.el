@@ -12,7 +12,7 @@
  (@check 1value)
  (@check def-edebug-spec)
  (@def def-edebug-elem-spec
-       ([(<= S &List)] name: Symbol spec: S)
+       ([(S <: &List)] name: Symbol spec: S)
        S)
  (@check lambda)
  (@check prog2)
@@ -94,12 +94,12 @@
 ;;; List functions
 
 (et-declare
- (@def caar ([T] list: &List<&Cons<T~Any>>) T?)
+ (@def caar ([T] list: &List<&Cons<T_Any>>) T?)
  (@def cadr ([T] list: &List<T>) T?)
- (@def cdar ([T] list: &List<&Cons<Any~T>>) T?)
+ (@def cdar ([T] list: &List<&Cons<Any_T>>) T?)
  (@def cddr ([T] list: &List<T>) &List<T>)
  (@def caaar ([T] list: &List<&List<&List<T>>>) T?)
- (@def caadr ([T] list: &List<&Cons<T~Any>>) T?)
+ (@def caadr ([T] list: &List<&Cons<T_Any>>) T?)
  (@def cadar ([T] list: &List<&List<T>>) T?)
  (@def caddr ([T] list: &List<T>) T?)
  (@def cdaar ([T] list: &List<&List<&List<T>>>) &List<T>)
@@ -142,14 +142,14 @@
  (@def assoc-default)
  (@def member-ignore-case ([T] element: String list: &List<T>) &List<T>)
  (@def assoc-delete-all)
- (@def assq-delete-all ([K V] key: K alist: Alist<K~V>) Alist<K~V>)
- (@def rassq-delete-all ([K V] value: V alist: Alist<K~V>) Alist<K~V>)
+ (@def assq-delete-all ([K V] key: K alist: Alist<K_V>) Alist<K_V>)
+ (@def rassq-delete-all ([K V] value: V alist: Alist<K_V>) Alist<K_V>)
  (@def alist-get
-       ([K V] key: K alist: &Alist<K~V>
+       ([K V] key: K alist: &Alist<K_V>
         &optional default: V remove: Bool testfn: (or Nil (fn (Args K K) Any)))
        V?)
  (@def remove
-       ([E] element: Any sequence: [<= S &OrdSeq<E>])
+       ([E] element: Any sequence: [S <: &OrdSeq<E>])
        (freshen-shallow S))
  (@def remq ([T] element: Any list: &List<T>) &List<T>))
 
@@ -161,26 +161,26 @@
  (@def kbd (keys: String) String|Vector<Any>)
  (@def undefined () Any)
  (@def suppress-keymap
-       (map: Cons<@keymap~Any>|Symbol &optional nodigits: [N])
+       (map: Cons<@keymap_Any>|Symbol &optional nodigits: [N])
        N|Nil)
  (@def make-composed-keymap
-       (maps: &Cons<@keymap~Any>|Symbol|&List<&Cons<@keymap~Any>|Symbol>
-              &optional parent: &Cons<@keymap~Any>|Symbol?)
-       ConsFresh<@keymap~Any>)
+       (maps: &Cons<@keymap_Any>|Symbol|&List<&Cons<@keymap_Any>|Symbol>
+              &optional parent: &Cons<@keymap_Any>|Symbol?)
+       ConsFresh<@keymap_Any>)
  (@def define-key-after
-       (keymap: Cons<@keymap~Any>|Symbol key: String|Vector<Any>
+       (keymap: Cons<@keymap_Any>|Symbol key: String|Vector<Any>
                 definition: Any &optional after: Integer|Symbol)
        Nil)
  (@def define-prefix-command
-       ([(<= C Symbol)] command: C &optional mapvar: Symbol? name: String?)
+       ([(C <: Symbol)] command: C &optional mapvar: Symbol? name: String?)
        C)
  (@def map-keymap-sorted
        (function: (fn (Args Any Any) Any)
-                  keymap: &Cons<@keymap~Any>|Symbol)
+                  keymap: &Cons<@keymap_Any>|Symbol)
        Nil)
  (@def keymap-canonicalize
-       (map: &Cons<@keymap~Any>|Symbol)
-       ConsFresh<@keymap~Any>)
+       (map: &Cons<@keymap_Any>|Symbol)
+       ConsFresh<@keymap_Any>)
  (@def keyboard-translate (from: Integer to: Integer) Integer))
 
 
@@ -245,21 +245,21 @@
  (@def posn-area (position: &List) Symbol)
  (@def posn-point (position: &List) IntOrMarker?)
  (@def posn-set-point (position: &List) Integer?)
- (@def posn-x-y (position: &List) &Cons<Integer~Integer>)
+ (@def posn-x-y (position: &List) &Cons<Integer_Integer>)
  (@def posn-col-row
        (position: &List &optional use-window: Bool)
-       ConsFresh<Integer~Integer>)
+       ConsFresh<Integer_Integer>)
  (@def posn-actual-col-row
        (position: &List)
-       &Cons<Integer~Integer>?)
+       &Cons<Integer_Integer>?)
  (@def posn-timestamp (position: &List) Integer?)
- (@def posn-string (position: &List) &Cons<String~Integer>?)
+ (@def posn-string (position: &List) &Cons<String_Integer>?)
  (@def posn-image (position: &List) &List?)
- (@def posn-object (position: &List) &List|&Cons<String~Integer>?)
- (@def posn-object-x-y (position: &List) &Cons<Integer~Integer>?)
+ (@def posn-object (position: &List) &List|&Cons<String_Integer>?)
+ (@def posn-object-x-y (position: &List) &Cons<Integer_Integer>?)
  (@def posn-object-width-height
        (position: &List)
-       &Cons<Integer~Integer>?))
+       &Cons<Integer_Integer>?))
 
 
 ;;; ============================================================
@@ -293,11 +293,11 @@
  (@def string< (string-1: Symbol|String string-2: Symbol|String) Boolean)
  (@def string> (string-1: Symbol|String string-2: Symbol|String) Boolean)
  (@def move-marker
-       ([(<= M Marker)] marker: M position: IntOrMarker?
+       ([(M <: Marker)] marker: M position: IntOrMarker?
         &optional buffer: Buffer?)
        M)
- (@def rplaca ([A B] cell: Cons<A~B> newcar: A) A)
- (@def rplacd ([A B] cell: Cons<A~B> newcdr: B) B)
+ (@def rplaca ([A B] cell: Cons<A_B> newcar: A) A)
+ (@def rplacd ([A B] cell: Cons<A_B> newcdr: B) B)
  (@def beep (&optional arg: Bool) Nil)
  (@def indent-to-column (column: Integer &optional minimum: Integer?) Integer)
  (@def backward-delete-char (n: Integer &optional killflag: Bool) Nil)
@@ -361,7 +361,7 @@
  (@check while-let)
  (@def merge-ordered-lists
        ([T] lists: &List<&List<T>>
-        &optional error-function: fn1<&List<&List<T>>~T>?)
+        &optional error-function: fn1<&List<&List<T>>_T>?)
        &List<T>)
  (@def derived-mode-all-parents
        (mode: Symbol &optional known-children: &List<Symbol>?)
@@ -388,7 +388,7 @@
 (et-declare
  (@def add-minor-mode
        (toggle: Symbol name: String|Symbol?
-                &optional keymap: &Cons<@keymap~Any>|Symbol?
+                &optional keymap: &Cons<@keymap_Any>|Symbol?
                 after: Symbol? toggle-fun: AnyFn?)
        Nil))
 
@@ -399,7 +399,7 @@
 (et-declare
  (@def autoloadp
        ([T] object: T)
-       (is-a? T Cons<@autoload~Any>))
+       (is-a? T Cons<@autoload_Any>))
  (@def define-symbol-prop
        ([T] symbol: Symbol prop: Symbol val: T)
        T)
@@ -475,10 +475,10 @@
  (@check with-undo-amalgamate ($body))
  (@def prepare-change-group
        (&optional buffer: Buffer?)
-       ListFresh<ConsFresh<Buffer~Any>>)
- (@def activate-change-group (handle: &List<&Cons<Buffer~Any>>) Nil)
- (@def accept-change-group (handle: &List<&Cons<Buffer~Any>>) Nil)
- (@def cancel-change-group (handle: &List<Cons<Buffer~Any>>) Nil))
+       ListFresh<ConsFresh<Buffer_Any>>)
+ (@def activate-change-group (handle: &List<&Cons<Buffer_Any>>) Nil)
+ (@def accept-change-group (handle: &List<&Cons<Buffer_Any>>) Nil)
+ (@def cancel-change-group (handle: &List<Cons<Buffer_Any>>) Nil))
 
 
 ;;; ============================================================
@@ -509,7 +509,7 @@
  (@def buffer-narrowed-p () Boolean)
  (@check with-restriction)
  (@check without-restriction)
- (@def find-tag-default-bounds () ConsFresh<Integer~Integer>?)
+ (@def find-tag-default-bounds () ConsFresh<Integer_Integer>?)
  (@def find-tag-default () String?)
  (@def find-tag-default-as-regexp () String?)
  (@def find-tag-default-as-symbol-regexp () String?)
@@ -521,7 +521,7 @@
  (@def list-of-strings-p ([T] object: T) (is? T List<String>))
  (@def booleanp ([T] object: T) (is? T Boolean))
  (@def special-form-p (object: Any) Boolean)
- (@def plistp ([T] object: T) (is-a? T PlistOf<Any~Any>))
+ (@def plistp ([T] object: T) (is-a? T PlistOf<Any_Any>))
  (@def macrop (object: Any) Boolean)
  (@def compiled-function-p
        ([T] object: T)
@@ -692,7 +692,7 @@
        String)
  (@def string-replace (from-string: String to-string: String in-string: String) String)
  (@def replace-regexp-in-string
-       (regexp: String rep: String|fn1<String~String> string: String
+       (regexp: String rep: String|fn1<String_String> string: String
                 &optional fixedcase: Bool literal: Bool subexp: Integer?
                 start: Integer?)
        String)
@@ -742,8 +742,8 @@
 (et-declare
  (@check with-syntax-table ($body CharTable))
  (@def make-syntax-table (&optional oldtable: CharTable?) CharTable)
- (@def syntax-after (position: IntOrMarker) Integer|&Cons<Integer~Integer>?)
- (@def syntax-class (syntax: &Cons<Integer~Integer>?) Integer?)
+ (@def syntax-after (position: IntOrMarker) Integer|&Cons<Integer_Integer>?)
+ (@def syntax-class (syntax: &Cons<Integer_Integer>?) Integer?)
  (@def forward-word-strictly (&optional arg: Integer?) Boolean)
  (@def backward-word-strictly (&optional arg: Integer?) Boolean)
  (@def forward-whitespace (arg: Integer) Integer?)
@@ -782,12 +782,12 @@
  (@def internal-push-keymap)
  (@def internal-pop-keymap)
  (@def set-temporary-overlay-map
-       (map: &Cons<@keymap~Any>|Symbol
+       (map: &Cons<@keymap_Any>|Symbol
              &optional keep-pred: True|fn? on-exit: fn?
              message: String|Bool timeout: Number?)
        fn)
  (@def set-transient-map
-       (map: &Cons<@keymap~Any>|Symbol
+       (map: &Cons<@keymap_Any>|Symbol
              &optional keep-pred: True|fn? on-exit: fn?
              message: String|Bool timeout: Number?)
        fn))
@@ -798,24 +798,24 @@
 
 (et-declare
  (@def progress-reporter-update
-       (reporter: Cons<Number~Vector<Any>>
+       (reporter: Cons<Number_Vector<Any>>
                   &optional value: Number|String? suffix: String?)
        String?)
  (@def make-progress-reporter
        (message: String &optional min-value: Number? max-value: Number?
                  current-value: Number? min-change: Number? min-time: Number?)
-       ConsFresh<Number~VectorFresh<Any>>)
+       ConsFresh<Number_VectorFresh<Any>>)
  (@def progress-reporter-make
        (message: String &optional min-value: Number? max-value: Number?
                  current-value: Number? min-change: Number? min-time: Number?)
-       ConsFresh<Number~VectorFresh<Any>>)
+       ConsFresh<Number_VectorFresh<Any>>)
  (@def progress-reporter-force-update
-       (reporter: Cons<Number~Vector<Any>>
+       (reporter: Cons<Number_Vector<Any>>
                   &optional value: Number|String? new-message: String?
                   suffix: String?)
        String?)
  (@def progress-reporter-do-update
-       (reporter: Cons<Number~Vector<Any>> value: Number|String?
+       (reporter: Cons<Number_Vector<Any>> value: Number|String?
                   &optional suffix: String?)
        String?)
  (@def progress-reporter-done (reporter: Cons) String)

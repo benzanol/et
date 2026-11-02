@@ -7,7 +7,7 @@
  (@check save-selected-window ($body))
  (@def temp-buffer-window-setup (buffer-or-name: Buffer|String) Buffer)
  (@def temp-buffer-window-show
-       (buffer: Buffer &optional action: True|Cons<fn2<Buffer~Alist<Symbol~Any>~Window?>|List<fn2<Buffer~Alist<Symbol~Any>~Window?>>~Alist<Symbol~Any>>?)
+       (buffer: Buffer &optional action: True|Cons<fn2<Buffer_Alist<Symbol_Any>_Window?>|List<fn2<Buffer_Alist<Symbol_Any>_Window?>>_Alist<Symbol_Any>>?)
        Window?)
  ;; The macro's return value depends on whether QUIT-FUNCTION is a
  ;; function at run time: it is either the last body form's value or the
@@ -54,14 +54,14 @@
 (et-declare
  (@def window-atom-root (&optional window: Window?) Window?)
  (@def window-make-atom (window: Window) Window)
- (@def display-buffer-in-atom-window (buffer: Buffer alist: Alist<Symbol~Any>) Window?))
+ (@def display-buffer-in-atom-window (buffer: Buffer alist: Alist<Symbol_Any>) Window?))
 
 ;;; ============================================================
 ;;; Side windows
 
 (et-declare
  (@def window-main-window (&optional frame: Frame?) Window)
- (@def display-buffer-in-side-window (buffer: Buffer alist: Alist<Symbol~Any>) Window?)
+ (@def display-buffer-in-side-window (buffer: Buffer alist: Alist<Symbol_Any>) Window?)
  (@def window-toggle-side-windows (&optional frame: Frame?) Any))
 
 ;;; ============================================================
@@ -70,7 +70,7 @@
 (et-declare
  (@def window-total-size (&optional window: Window? horizontal: Bool round: Any) Integer)
  (@def window-size (&optional window: Window? horizontal: Bool pixelwise: Bool round: Any) Integer)
- (@def window-preserve-size (&optional window: Window? horizontal: Bool preserve: Bool) Tuple<Buffer~Integer?~Integer?>)
+ (@def window-preserve-size (&optional window: Window? horizontal: Bool preserve: Bool) Tuple<Buffer_Integer?_Integer?>)
  (@def window-preserved-size (&optional window: Window? horizontal: Bool) Integer?)
  (@def window-safe-min-size (&optional window: Window? horizontal: Bool pixelwise: Bool) Integer)
  (@def window-min-size (&optional window: Window? horizontal: Bool ignore: @safe|@preserved|Window|Boolean pixelwise: Bool) Integer)
@@ -102,7 +102,7 @@
  (@def window-font-width (&optional window: Window? face: Symbol?) Integer)
  (@def window-font-height (&optional window: Window? face: Symbol?) Integer)
  (@def window-max-chars-per-line (&optional window: Window? face: Symbol?) Integer)
- (@def window-current-scroll-bars (&optional window: Window?) Cons<@left|@right|Nil~@bottom|Nil>)
+ (@def window-current-scroll-bars (&optional window: Window?) Cons<@left|@right|Nil_@bottom|Nil>)
  (@def walk-windows (fun: fn1<Window> &optional minibuf: Bool all-frames: Boolean|@visible|0|Frame) Any)
  (@def window-at-side-p (&optional window: Window? side: @left|@top|@right|@bottom?) Boolean)
  (@def window-at-side-list (&optional frame: Frame? side: @left|@top|@right|@bottom?) List<Window>)
@@ -136,19 +136,19 @@
 ;;; Window edges
 
 (et-declare
- (@def window-edges (&optional window: Window? body: Bool absolute: Bool pixelwise: Bool) Tuple<Integer~Integer~Integer~Integer>)
- (@def window-body-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
+ (@def window-edges (&optional window: Window? body: Bool absolute: Bool pixelwise: Bool) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-body-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
  ;; Alias of `window-body-edges'.
- (@def window-inside-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
- (@def window-pixel-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
- (@def window-body-pixel-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
+ (@def window-inside-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-body-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
  ;; Alias of `window-body-pixel-edges'.
- (@def window-inside-pixel-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
- (@def window-absolute-pixel-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
- (@def window-absolute-body-pixel-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
+ (@def window-inside-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-absolute-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-absolute-body-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
  ;; Alias of `window-absolute-body-pixel-edges'.
- (@def window-inside-absolute-pixel-edges (&optional window: Window?) Tuple<Integer~Integer~Integer~Integer>)
- (@def window-absolute-pixel-position (&optional position: IntOrMarker? window: Window?) Cons<Integer~Integer>?)
+ (@def window-inside-absolute-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-absolute-pixel-position (&optional position: IntOrMarker? window: Window?) Cons<Integer_Integer>?)
  (@def frame-root-window-p (window: Window) Boolean)
  ;; Same recursive window-tree structure as the internal subtree
  ;; builder: a list whose elements are windows or nested cons trees of
@@ -182,7 +182,7 @@
        (window: Window? buffer: Buffer|String &optional start: IntOrMarker? point: IntOrMarker?)
        Any)
  (@def switch-to-prev-buffer-skip-p
-       (skip: fn3<Window~Buffer~Any>|True|@visible|0|Frame? window: Window buffer: Buffer &optional bury-or-kill: Bool|@append)
+       (skip: fn3<Window_Buffer_Any>|True|@visible|0|Frame? window: Window buffer: Buffer &optional bury-or-kill: Bool|@append)
        Any)
  (@def switch-to-prev-buffer (&optional window: Window? bury-or-kill: Bool|@append) Buffer?)
  (@def switch-to-next-buffer (&optional window: Window?) Buffer?)
@@ -259,10 +259,10 @@
  (@def window-splittable-p (window: Window &optional horizontal: Bool) Boolean)
  (@def split-window-sensibly (&optional window: Window?) Window?)
  (@def toggle-window-dedicated (&optional window: Window? flag: Any interactive: Bool) Any)
- (@def display-buffer-assq-regexp (buffer-name: String alist: Alist<Any~Any> action: Any) Any)
+ (@def display-buffer-assq-regexp (buffer-name: String alist: Alist<Any_Any> action: Any) Any)
  (@def display-buffer
        (buffer-or-name: Buffer|String
-        &optional action: True|Cons<fn2<Buffer~Alist<Symbol~Any>~Window?>|List<fn2<Buffer~Alist<Symbol~Any>~Window?>>~Alist<Symbol~Any>>?
+        &optional action: True|Cons<fn2<Buffer_Alist<Symbol_Any>_Window?>|List<fn2<Buffer_Alist<Symbol_Any>_Window?>>_Alist<Symbol_Any>>?
         frame: Frame?)
        Window?)
  (@def display-buffer-other-frame (buffer: Buffer|String) Window?))
@@ -285,10 +285,10 @@
         display-buffer-in-previous-window
         display-buffer-use-some-window
         display-buffer-use-least-recent-window]
-       (buffer: Buffer alist: Alist<Symbol~Any>)
+       (buffer: Buffer alist: Alist<Symbol_Any>)
        Window?)
  (@def windows-sharing-edge (&optional window: Window? edge: @left|@above|@right|@below? within: Bool) List<Window>)
- (@def display-buffer-no-window (_buffer: Buffer alist: Alist<Symbol~Any>) @fail?))
+ (@def display-buffer-no-window (_buffer: Buffer alist: Alist<Symbol_Any>) @fail?))
 
 ;;; ============================================================
 ;;; Display and selection commands
@@ -296,7 +296,7 @@
 (et-declare
  (@def pop-to-buffer
        (buffer-or-name: Buffer|String?
-        &optional action: True|Cons<fn2<Buffer~Alist<Symbol~Any>~Window?>|List<fn2<Buffer~Alist<Symbol~Any>~Window?>>~Alist<Symbol~Any>>?
+        &optional action: True|Cons<fn2<Buffer_Alist<Symbol_Any>_Window?>|List<fn2<Buffer_Alist<Symbol_Any>_Window?>>_Alist<Symbol_Any>>?
         norecord: Bool)
        Buffer)
  (@def pop-to-buffer-same-window (buffer: Buffer|String? &optional norecord: Bool) Buffer)
@@ -306,8 +306,8 @@
  (@def switch-to-buffer-other-window (buffer-or-name: Buffer|String? &optional norecord: Bool) Buffer)
  (@def switch-to-buffer-other-frame (buffer-or-name: Buffer|String? &optional norecord: Bool) Buffer)
  (@def display-buffer-override-next-command
-       (pre-function: fn2<Buffer~Alist<Symbol~Any>~Cons<Window~@reuse|@window|@frame|@tab>>
-        &optional post-function: fn2<Window~Window>? echo: String?)
+       (pre-function: fn2<Buffer_Alist<Symbol_Any>_Cons<Window_@reuse|@window|@frame|@tab>>
+        &optional post-function: fn2<Window_Window>? echo: String?)
        fn)
  (@def set-window-text-height (window: Window? height: Integer) Any)
  (@def enlarge-window-horizontally (delta: Integer) Any)
@@ -337,9 +337,9 @@
  (@def window-safely-shrinkable-p (&optional window: Window?) Boolean)
  (@def shrink-window-if-larger-than-buffer (&optional window: Window?) Any)
  (@def window-largest-empty-rectangle
-       (&optional window: Window? count: Integer|Cons<Integer~Bool>? min-width: Integer? min-height: Integer?
-        positions: Cons<Integer~Integer>? left: Bool)
-       (is-non-nil? count List<Tuple<Integer~Integer~Integer~Integer>>? Tuple<Integer~Integer~Integer>?))
+       (&optional window: Window? count: Integer|Cons<Integer_Bool>? min-width: Integer? min-height: Integer?
+        positions: Cons<Integer_Integer>? left: Bool)
+       (is-non-nil? count List<Tuple<Integer_Integer_Integer_Integer>>? Tuple<Integer_Integer_Integer>?))
  (@def kill-buffer-and-window () Any))
 
 ;;; ============================================================
@@ -383,9 +383,9 @@
  (@def mouse-autoselect-window-select () Any)
  (@def handle-select-window (event: Any) Any)
  (@def truncated-partial-width-window-p (&optional window: Window?) Bool)
- (@def window-adjust-process-window-size (reducer: fn2<Integer~Integer~Integer> windows: &List<Window>) Cons<Integer~Integer>?)
- (@def window-adjust-process-window-size-smallest (_process: Process windows: &List<Window>) Cons<Integer~Integer>?)
- (@def window-adjust-process-window-size-largest (_process: Process windows: &List<Window>) Cons<Integer~Integer>?))
+ (@def window-adjust-process-window-size (reducer: fn2<Integer_Integer_Integer> windows: &List<Window>) Cons<Integer_Integer>?)
+ (@def window-adjust-process-window-size-smallest (_process: Process windows: &List<Window>) Cons<Integer_Integer>?)
+ (@def window-adjust-process-window-size-largest (_process: Process windows: &List<Window>) Cons<Integer_Integer>?))
 
 ;;; ============================================================
 ;;; Window point context
@@ -393,7 +393,7 @@
 (et-declare
  (@def window-point-context-set () Any)
  (@def window-point-context-use () Any)
- (@def window-point-context-set-default-function (w: Window) Alist<@front-context-string|@rear-context-string~String>?)
- (@def window-point-context-use-default-function (w: Window context: Alist<Any~Any>) Any))
+ (@def window-point-context-set-default-function (w: Window) Alist<@front-context-string|@rear-context-string_String>?)
+ (@def window-point-context-use-default-function (w: Window context: Alist<Any_Any>) Any))
 
 ;;; ============================================================

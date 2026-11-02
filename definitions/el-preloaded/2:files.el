@@ -112,7 +112,7 @@
 (et-declare
  (@def create-file-buffer (filename: String) Buffer)
  (@def abbreviate-file-name (filename: String) String)
- (@def find-buffer-visiting (filename: String &optional predicate: fn1<Buffer~Bool>?) Buffer?)
+ (@def find-buffer-visiting (filename: String &optional predicate: fn1<Buffer_Bool>?) Buffer?)
  (@def abort-if-file-too-large
        (size: Number? op-type: String filename: String &optional offer-raw: Bool)
        Nil|@raw)
@@ -126,7 +126,7 @@
  (@def insert-file-contents-literally
        (filename: String &optional visit: Bool beg: IntOrMarker? end: IntOrMarker? replace: Bool)
        (Tuple String Integer))
- (@def insert-file-1 (filename: String insert-func: fn1<String~Cons<String~Cons<Integer~Nil>>>) String?)
+ (@def insert-file-1 (filename: String insert-func: fn1<String_Cons<String_Cons<Integer_Nil>>>) String?)
  (@def insert-file-literally (filename: String) String?)
  (@def find-file-literally (filename: String) Buffer)
  (@def after-find-file
@@ -158,14 +158,14 @@
 
 (et-declare
  (@def hack-local-variables-confirm
-       (all-vars: &List<&Cons<NonNilSymbol~Any>> unsafe-vars: &List<&Cons<NonNilSymbol~Any>>
-        risky-vars: &List<&Cons<NonNilSymbol~Any>> dir-name: String?)
+       (all-vars: &List<&Cons<NonNilSymbol_Any>> unsafe-vars: &List<&Cons<NonNilSymbol_Any>>
+        risky-vars: &List<&Cons<NonNilSymbol_Any>> dir-name: String?)
        List<Integer>?)
  (@def hack-local-variables-prop-line
        (&optional handle-mode: Any)
-       Nil|NonNilSymbol|List<Cons<NonNilSymbol~Any>>)
+       Nil|NonNilSymbol|List<Cons<NonNilSymbol_Any>>)
  (@def hack-local-variables-filter
-       (variables: &List<&Cons<NonNilSymbol~Any>> dir-name: String?)
+       (variables: &List<&Cons<NonNilSymbol_Any>> dir-name: String?)
        Nil)
  (@def hack-local-variables (&optional handle-mode: Any inhibit-locals: Bool) Any)
  (@def hack-local-variables-apply () Nil)
@@ -180,14 +180,14 @@
 ;;; Directory-local variables
 
 (et-declare
- (@def dir-locals-get-class-variables (class: NonNilSymbol) &List<Cons<NonNilSymbol|String~Any>>)
+ (@def dir-locals-get-class-variables (class: NonNilSymbol) &List<Cons<NonNilSymbol|String_Any>>)
  (@def dir-locals-collect-mode-variables
-       (mode-variables: &List<Cons<NonNilSymbol~Any>> variables: &List<&Cons<NonNilSymbol~Any>>)
-       List<Cons<NonNilSymbol~Any>>)
+       (mode-variables: &List<Cons<NonNilSymbol_Any>> variables: &List<&Cons<NonNilSymbol_Any>>)
+       List<Cons<NonNilSymbol_Any>>)
  (@def dir-locals-collect-variables
-       (class-variables: &List<Cons<NonNilSymbol|String~Any>> root: String
-        variables: &List<&Cons<NonNilSymbol~Any>> &optional predicate: fn1<Symbol~Bool>?)
-       List<Cons<NonNilSymbol~Any>>?)
+       (class-variables: &List<Cons<NonNilSymbol|String_Any>> root: String
+        variables: &List<&Cons<NonNilSymbol_Any>> &optional predicate: fn1<Symbol_Bool>?)
+       List<Cons<NonNilSymbol_Any>>?)
  (@def dir-locals-set-directory-class (directory: String class: NonNilSymbol &optional mtime: Any) Any)
  (@def dir-locals-set-class-variables (class: NonNilSymbol variables: [T]) T)
  (@def dir-locals-find-file (file: String) Nil|&List|String)
@@ -208,13 +208,13 @@
 ;;; Backup files
 
 (et-declare
- (@def file-extended-attributes (filename: String) List<Cons<@acl|@selinux-context~Any>>)
+ (@def file-extended-attributes (filename: String) List<Cons<@acl|@selinux-context_Any>>)
  (@def set-file-extended-attributes
-       (filename: String attributes: &List<Cons<@acl|@selinux-context~Any>>)
+       (filename: String attributes: &List<Cons<@acl|@selinux-context_Any>>)
        Boolean)
  (@def backup-buffer () Nil|List<Any>)
  (@def backup-buffer-copy
-       (from-name: String to-name: String modes: Integer? extended-attributes: &List<Cons<Any~Any>>)
+       (from-name: String to-name: String modes: Integer? extended-attributes: &List<Cons<Any_Any>>)
        Any)
  (@def file-name-sans-versions (name: String &optional keep-backup-version: Bool) String)
  (@def file-ownership-preserved-p (file: String &optional group: Bool) Any))
@@ -248,7 +248,7 @@
  (@def basic-save-buffer-1 () Any)
  (@def basic-save-buffer-2 () Any)
  (@def save-some-buffers-root () fn)
- (@def save-some-buffers (&optional arg: Bool pred: Nil|True|fn<Nil~Bool>?) Any)
+ (@def save-some-buffers (&optional arg: Bool pred: Nil|True|fn<Nil_Bool>?) Any)
  (@def clear-visited-file-modtime () Any)
  (@def not-modified (&optional arg: Bool) Any)
  (@def insert-file (filename: String) String?)
@@ -272,7 +272,7 @@
 (et-declare
  (@def file-equal-p (file1: String file2: String) Boolean)
  (@def file-in-directory-p (file: String dir: String) Boolean)
- (@def file-has-changed-p (file: String &optional tag: NonNilSymbol?) Nil|Cons<Integer~TimeOutput>))
+ (@def file-has-changed-p (file: String &optional tag: NonNilSymbol?) Nil|Cons<Integer_TimeOutput>))
 
 ;;; ============================================================
 ;;; Copying and pruning directories
@@ -327,7 +327,7 @@
  (@def wildcard-to-regexp (wildcard: String) String)
  (@def file-expand-wildcards (pattern: String &optional full: Bool regexp: Bool) List<String>)
  (@def find-sibling-file (file: String) Any)
- (@def find-sibling-file-search (file: String &optional rules: &List<Cons<String~List<String>>>?) List<String>))
+ (@def find-sibling-file-search (file: String &optional rules: &List<Cons<String_List<String>>>?) List<String>))
 
 ;;; ============================================================
 ;;; Directory listings
@@ -336,7 +336,7 @@
  (@def list-directory (dirname: String &optional verbose: Bool) Any)
  (@def shell-quote-wildcard-pattern (pattern: String) String)
  (@def get-free-disk-space (dir: String) String?)
- (@def insert-directory-wildcard-in-dir-p (dir: String) Cons<String~String>?)
+ (@def insert-directory-wildcard-in-dir-p (dir: String) Cons<String_String>?)
  (@def insert-directory-clean (beg: Integer switches: String|&List<String>) Any)
  (@def insert-directory
        (file: String switches: String|&List<String> &optional wildcard: Bool full-directory-p: Bool)
@@ -357,7 +357,7 @@
 ;;; Quoted file names
 
 (et-declare
- ;; OPERATION selects the dispatch branch via a static table of ~30 cases,
+ ;; OPERATION selects the dispatch branch via a static table of _30 cases,
  ;; each of which strips or re-adds "/:" quoting differently and returns a
  ;; different shape (a filename, a boolean, an arbitrary funcall result,
  ;; etc). The type language cannot express a return type that depends on
@@ -398,7 +398,7 @@
  (@def file-attribute-size (attributes: &List) Integer)
  (@def file-attribute-modes (attributes: &List) String)
  (@def file-attribute-inode-number (attributes: &List) Integer)
- (@def file-attribute-device-number (attributes: &List) Integer|Cons<Integer~Integer>)
+ (@def file-attribute-device-number (attributes: &List) Integer|Cons<Integer_Integer>)
  (@def file-attribute-file-identifier (attributes: &List) &List)
  ;; ATTR-NAMES are symbols used to build function names via `intern' and
  ;; `format', then funcall the corresponding accessor. The result list's

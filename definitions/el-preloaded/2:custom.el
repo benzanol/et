@@ -181,7 +181,7 @@ Unknown and structurally complicated widget types deliberately fall back to
                 :group Symbol?
                 :link &List
                 :version String?
-                :package-version Nil|&Cons<Symbol~String>
+                :package-version Nil|&Cons<Symbol_String>
                 :tag String?
                 :load Nil|String|Symbol))))
             ($tail-tuple 3)))))))
@@ -201,7 +201,7 @@ Unknown and structurally complicated widget types deliberately fall back to
 
 (et-declare
  (@def custom-current-group () Symbol)
- (@def custom-declare-group (symbol: [T] members: List<Cons<Symbol~Cons<Symbol~Nil>>> doc: String? &rest args: &List) T)
+ (@def custom-declare-group (symbol: [T] members: List<Cons<Symbol_Cons<Symbol_Nil>>> doc: String? &rest args: &List) T)
  ;; SYMBOL is the only operand which `defgroup' quotes.  MEMBERS, DOC, and
  ;; keyword values are evaluated normally, while the keyword names themselves
  ;; are part of the macro's syntax.
@@ -213,7 +213,7 @@ Unknown and structurally complicated widget types deliberately fall back to
            ($expect
             ($type
              (Args*
-              &List<&Cons<Symbol~&Cons<Symbol~Nil>>>
+              &List<&Cons<Symbol_&Cons<Symbol_Nil>>>
               String?
               (or
                Nil
@@ -221,7 +221,7 @@ Unknown and structurally complicated widget types deliberately fall back to
                 :prefix String?
                 :group Symbol?
                 :version String?
-                :package-version Nil|&Cons<Symbol~String>
+                :package-version Nil|&Cons<Symbol_String>
                 :link &List
                 :load Nil|String|Symbol
                 :tag String?
@@ -240,7 +240,7 @@ Unknown and structurally complicated widget types deliberately fall back to
  (@def [custom-add-option custom-add-frequent-value] (symbol: Symbol option: Any) List<Any>)
  (@def custom-add-link (symbol: Symbol widget: &List) List<Any>)
  (@def custom-add-version (symbol: Symbol version: String) String)
- (@def custom-add-package-version (symbol: Symbol version: &Cons<Symbol~String>) &Cons<Symbol~String>)
+ (@def custom-add-package-version (symbol: Symbol version: &Cons<Symbol_String>) &Cons<Symbol_String>)
  (@def custom-add-load (symbol: Symbol load: String|Symbol) List<String|Symbol>)
  (@def custom-autoload (symbol: Symbol load: String|Symbol &optional noset: Bool) List<String|Symbol>)
  (@def custom-variable-p (variable: Any) Bool)
@@ -304,8 +304,8 @@ Unknown and structurally complicated widget types deliberately fall back to
 ;;; XEmacs compatibility functions
 
 (et-declare
- (@def custom-theme-reset-variables (theme: Symbol &rest args: &List<Cons<Symbol~Cons<Any~Nil>>>) Nil)
- (@def custom-reset-variables (&rest args: &List<Cons<Symbol~Cons<Any~Nil>>>) Nil)
+ (@def custom-theme-reset-variables (theme: Symbol &rest args: &List<Cons<Symbol_Cons<Any_Nil>>>) Nil)
+ (@def custom-reset-variables (&rest args: &List<Cons<Symbol_Cons<Any_Nil>>>) Nil)
  (@def custom-add-choice (variable: Symbol choice: Any) List<Any>))
 
 ;;; ============================================================

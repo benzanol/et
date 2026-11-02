@@ -7,7 +7,7 @@
 (et-define-check-macro $clloop-1 (body)
   `(et:def--clloop-parse-1 ,body))
 
-(et-defun et:def--clloop-parse-clauses (exprs: Sexps) Cons<Sexps~Sexps>|Nil
+(et-defun et:def--clloop-parse-clauses (exprs: Sexps) Cons<Sexps_Sexps>|Nil
   (when-let* ((result (et:def--clloop-parse-2 exprs)))
     (let* ((rest (car result))
            (clause (take (- (length exprs) (length rest)) exprs)))
@@ -27,9 +27,9 @@
            collect `(,pat (cons rest (lambda () ,expanded))) into exprs
            finally return `(pcase ,body ,@exprs)))
 
-(et-defvar et:def--clloop-vars Alist<Var~EtType> nil)
+(et-defvar et:def--clloop-vars Alist<Var_EtType> nil)
 
-(et-defun et:def--clloop-parse-2 (body: Sexps) Cons<Sexps~EtCheckFn>|Nil
+(et-defun et:def--clloop-parse-2 (body: Sexps) Cons<Sexps_EtCheckFn>|Nil
   (let* ((rest nil))
     (et:def--clloop-pcase body
       ;; Empty
@@ -157,7 +157,7 @@
   (et-symbol-set-func-decls name decls))
 
 (et-defun et:def--cl-flet-inferred-decls
-    (params: EtFuncParameters<Var> props: PlistOf<Var~Any> body-path: EtPath)
+    (params: EtFuncParameters<Var> props: PlistOf<Var_Any> body-path: EtPath)
     EtFuncDeclarations
   "Infer an unannotated local function at BODY-PATH."
   (let* ((input (et-untyped-func-input params))
@@ -167,7 +167,7 @@
           :definition (et-dt 'Function input ret))))
 
 (et-defun et:def--cl-flet-binding-decls (binding: Sexp rel: EtPath)
-          Cons<Symbol~EtFuncDeclarations>
+          Cons<Symbol_EtFuncDeclarations>
   "Parse and check one `cl-flet' BINDING located at REL."
   (pcase binding
     (`(,(and name (pred symbolp)) ,_function)
@@ -359,7 +359,7 @@
 
 (et-declare
  (@def cl-values (&rest values: [T]) (freshen-shallow T))
- (@def cl-values-list ([(<= L &List)] list: L) L)
+ (@def cl-values-list ([(L <: &List)] list: L) L)
  (@def cl-multiple-value-list (expression: [T]) T)
  (@def cl-multiple-value-apply ([A R] function: (fn A R) expression: A) R)
  (@def cl-multiple-value-call
@@ -421,7 +421,7 @@
 ;;; Sequence functions
 
 (et-declare
- (@def cl-copy-seq (arg: [<= S &LenSeq]) (freshen-shallow S))
+ (@def cl-copy-seq (arg: [S <: &LenSeq]) (freshen-shallow S))
  (@def cl-mapcar)
  (@def cl-svref ([T] array: ArefSeq<T> idx: Integer) T))
 
@@ -432,7 +432,7 @@
 (et-declare
  (@def cl-first ([T] list: (or Nil^{T:>:Nil} (&Cons T Any))) T)
  (@def cl-second ([T] list: &List<T>) T?)
- (@def cl-rest ([T] list: (or Nil^{T:>:Nil} &Cons<Any~T>)) T)
+ (@def cl-rest ([T] list: (or Nil^{T:>:Nil} &Cons<Any_T>)) T)
  (@def cl-third ([T] list: &List<T>) T?)
  (@def cl-fourth ([T] list: &List<T>) T?)
  (@def cl-fifth ([T] x: &List<T>) T?)
@@ -442,7 +442,7 @@
  (@def cl-ninth ([T] x: &List<T>) T?)
  (@def cl-tenth ([T] x: &List<T>) T?)
  (@def cl-caaar)
- (@def cl-caadr ([T] list: &List<&Cons<T~Any>>) T?)
+ (@def cl-caadr ([T] list: &List<&Cons<T_Any>>) T?)
  (@def cl-cadar)
  (@def cl-caddr ([T] list: &List<T>) T?)
  (@def cl-cdaar)
@@ -475,7 +475,7 @@
  (@def cl-adjoin)
  (@def cl-subst)
  (@def cl-acons ([K V A] key: K value: V alist: A)
-       ConsFresh<ConsFresh<K~V>~A>)
+       ConsFresh<ConsFresh<K_V>_A>)
  (@def cl-pairlis))
 
 

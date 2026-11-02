@@ -110,14 +110,14 @@
        (filename: String &optional visit: Any beg: Integer? end: Integer? replace: Any)
        (Tuple String Integer))
  (@def write-region
-       ([] start: [<= S String|IntOrMarker?]
+       ([] start: [S <: String|IntOrMarker?]
         end: (switch S [IntOrMarker] [String? Nil])
         filename: String
         &optional append: Any visit: Any lockname: String?
         mustbenew: Any)
        Nil)
  (@def car-less-than-car
-       (a: &Cons<NumOrMarker~Any> b: &Cons<NumOrMarker~Any>)
+       (a: &Cons<NumOrMarker_Any> b: &Cons<NumOrMarker_Any>)
        Boolean))
 
 

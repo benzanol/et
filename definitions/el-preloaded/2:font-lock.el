@@ -34,7 +34,7 @@
  (@def font-lock-default-unfontify-buffer () Nil)
  (@def font-lock-extend-region-multiline () Boolean)
  (@def font-lock-extend-region-wholelines () Boolean)
- (@def font-lock-default-fontify-region (beg: IntOrMarker end: IntOrMarker loudly: Bool) Cons<@jit-lock-bounds~Cons<IntOrMarker~IntOrMarker>>)
+ (@def font-lock-default-fontify-region (beg: IntOrMarker end: IntOrMarker loudly: Bool) Cons<@jit-lock-bounds_Cons<IntOrMarker_IntOrMarker>>)
  (@def font-lock-default-unfontify-region (beg: IntOrMarker end: IntOrMarker) Any)
  (@def font-lock-after-change-function (beg: IntOrMarker end: IntOrMarker &optional old-len: Integer?) Any)
  (@def font-lock-extend-jit-lock-region-after-change (beg: IntOrMarker end: IntOrMarker old-len: Integer) Integer)
@@ -44,9 +44,9 @@
 ;;; Additional text property functions
 
 (et-declare
- (@def font-lock-prepend-text-property ([(<= Idx IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any &optional object: StringOrBuffer<Idx>?) Nil)
- (@def font-lock-append-text-property ([(<= Idx IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any &optional object: StringOrBuffer<Idx>?) Nil)
- (@def font-lock-fillin-text-property ([(<= Idx IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any &optional object: StringOrBuffer<Idx>?) Nil))
+ (@def font-lock-prepend-text-property ([(Idx <: IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any &optional object: StringOrBuffer<Idx>?) Nil)
+ (@def font-lock-append-text-property ([(Idx <: IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any &optional object: StringOrBuffer<Idx>?) Nil)
+ (@def font-lock-fillin-text-property ([(Idx <: IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any &optional object: StringOrBuffer<Idx>?) Nil))
 
 ;;; ============================================================
 ;;; Syntactic regexp fontification functions

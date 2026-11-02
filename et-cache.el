@@ -38,7 +38,7 @@ result is an atom (not a cons cell,) it is returned. Otherwise,
 what will be returned is the result of repeating this process for
 both sides of the cons cell."
   (declare (et (object Any)
-               (func Function<Any~Any>)
+               (func Function<Any_Any>)
                (@return Any)
                (@skip)))
 

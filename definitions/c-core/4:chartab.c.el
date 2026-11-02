@@ -15,13 +15,13 @@
  (@def set-char-table-parent (char-table: CharTable parent: CharTable?) CharTable?)
  (@def char-table-extra-slot (char-table: CharTable n: Integer) Any)
  (@def set-char-table-extra-slot ([T] char-table: CharTable n: Integer value: T) T)
- (@def char-table-range (char-table: CharTable range: Integer|Cons<Integer~Integer>?) Any)
+ (@def char-table-range (char-table: CharTable range: Integer|Cons<Integer_Integer>?) Any)
  (@def set-char-table-range
-       ([T] char-table: CharTable range: True|Integer|Cons<Integer~Integer>? value: T)
+       ([T] char-table: CharTable range: True|Integer|Cons<Integer_Integer>? value: T)
        T)
  (@def optimize-char-table (char-table: CharTable &optional test: (or Nil (fn (Args Any Any) Any))) Nil)
  (@def map-char-table
-       (function: (fn (Args (or Integer Cons<Integer~Integer>) Any) Any) char-table: CharTable)
+       (function: (fn (Args (or Integer Cons<Integer_Integer>) Any) Any) char-table: CharTable)
        Nil))
 
 ;;; ============================================================

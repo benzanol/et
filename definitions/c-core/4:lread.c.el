@@ -24,7 +24,7 @@
        Nil)
  (@def read (&optional stream: Buffer|Marker|String|AnyFn|True?) Sexp)
  (@def read-positioning-symbols (&optional stream: Buffer|Marker|String|AnyFn|True?) Sexp)
- (@def read-from-string (string: String &optional start: Integer? end: Integer?) ConsFresh<Sexp~Integer>))
+ (@def read-from-string (string: String &optional start: Integer? end: Integer?) ConsFresh<Sexp_Integer>))
 
 ;;; ============================================================
 ;;; Symbols and obarrays

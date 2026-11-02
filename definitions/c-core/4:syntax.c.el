@@ -13,9 +13,9 @@
  (@def char-syntax (character: Integer) Integer)
  (@def syntax-class-to-char (syntax: Integer) Integer)
  (@def matching-paren (character: Integer) Integer?)
- (@def string-to-syntax (string: String) Cons<Integer~Integer?>?)
+ (@def string-to-syntax (string: String) Cons<Integer_Integer?>?)
  (@def modify-syntax-entry
-       (char: Integer|Cons<Integer~Integer> newentry: String
+       (char: Integer|Cons<Integer_Integer> newentry: String
               &optional syntax-table: CharTable?)
        Nil)
  ;; This function always returns SYNTAX unchanged, regardless of its shape.

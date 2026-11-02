@@ -55,7 +55,7 @@
  (@def unexpand-abbrev () Nil)
  (@def insert-abbrev-table-description (name: Symbol &optional readable: Bool) Nil)
  (@def define-abbrev-table (tablename: Symbol definitions: List<List<Any>> &optional docstring: String? &rest props: &List) Nil)
- (@def abbrev-table-menu (table: Obarray &optional prompt: String? sortfun: fn2<Any~Any>?) List<Any>)
+ (@def abbrev-table-menu (table: Obarray &optional prompt: String? sortfun: fn2<Any_Any>?) List<Any>)
  ;; This function is created by `define-derived-mode', which is not
  ;; itself part of this file's authored inventory.
  (@def edit-abbrevs-mode () Nil))

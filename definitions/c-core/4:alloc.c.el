@@ -14,7 +14,7 @@
 ;;; Conses and lists
 
 (et-declare
- (@def cons ([L R] car: L cdr: R) ConsFresh<L~R>)
+ (@def cons ([L R] car: L cdr: R) ConsFresh<L_R>)
  (@def list (&rest objects: [T]) (freshen-shallow T))
  (@def make-list ([T] length: Integer init: T) ListFresh<T>))
 
@@ -43,7 +43,7 @@
 (et-declare
  (@def make-symbol (name: String) Var)
  (@def make-marker () Marker)
- (@def make-finalizer (function: fn<Nil~Any>) Finalizer))
+ (@def make-finalizer (function: fn<Nil_Any>) Finalizer))
 
 
 ;;; ============================================================

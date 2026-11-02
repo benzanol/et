@@ -278,8 +278,8 @@ These are the built-in datatypes. Each has fixed variance for its arguments.
 
 In practice, use the `Cons` alias instead of `ConsRW` directly:
 
-- `Cons<L~R>` — a cons cell readable and writable as `L` and `R`
-  (expands to `ConsRW<L~L~R~R>`)
+- `Cons<L_R>` — a cons cell readable and writable as `L` and `R`
+  (expands to `ConsRW<L_L_R_R>`)
 
 ### Vectors
 
@@ -288,7 +288,7 @@ In practice, use the `Cons` alias instead of `ConsRW` directly:
 | `VectorRW` | `ELEM-R(co) ELEM-W(contra)` | Mutable vector |
 | `VectorFresh` | `ELEM(co)` | Freshly created vector |
 
-Use the `Vector` alias: `Vector<E>` expands to `VectorRW<E~E>`.
+Use the `Vector` alias: `Vector<E>` expands to `VectorRW<E_E>`.
 
 ### Hash tables
 
@@ -297,7 +297,7 @@ Use the `Vector` alias: `Vector<E>` expands to `VectorRW<E~E>`.
 | `HashTableRW` | `KEY-R(co) KEY-W(contra) VAL-R(co) VAL-W(contra)` | Mutable hash table |
 | `HashTableFresh` | `KEY(co) VAL(co)` | Freshly created hash table |
 
-Use the `HashTable` alias: `HashTable<K~V>` expands to `HashTableRW<K~K~V~V>`.
+Use the `HashTable` alias: `HashTable<K_V>` expands to `HashTableRW<K_K_V_V>`.
 
 ### Functions
 
@@ -360,28 +360,28 @@ without expanding them further.
 
 | Alias | Description |
 |-------|-------------|
-| `Cons<L~R>` | Mutable cons cell with car type `L` and cdr type `R`. Defaults: `L=Any`, `R=Any` |
+| `Cons<L_R>` | Mutable cons cell with car type `L` and cdr type `R`. Defaults: `L=Any`, `R=Any` |
 | `ListFresh<E>` | Freshly allocated list of `E` (can widen to `List<E>`). Default: `E=Any` |
 | `Vector<E>` | Mutable vector with element type `E`. Default: `E=Any` |
 | `VectorW<E>` | Write-constraining vector: reads as `Any`, writes require `E` |
-| `HashTable<K~V>` | Mutable hash table. Defaults: `K=Any`, `V=Any` |
-| `HashTableW<K~V>` | Write-constraining hash table: reads as `Any`, writes require `K`/`V` |
+| `HashTable<K_V>` | Mutable hash table. Defaults: `K=Any`, `V=Any` |
+| `HashTableW<K_V>` | Write-constraining hash table: reads as `Any`, writes require `K`/`V` |
 
 ### Compound alias definitions
 
-In the definitions below, `[(= E Any)]` in a generic vector means the
+In the definitions below, `[(E = Any)]` in a generic vector means the
 generic `E` has a default value of `Any`. So `List` with no arguments is
 `List<Any>`.
 
 #### List types
 
 ```elisp
-(et-defalias List [(= E Any)] (or Nil (Cons E (List E))))
+(et-defalias List [(E = Any)] (or Nil (Cons E (List E))))
 (et-defalias Alist [K V] (List (Cons K V)))
-(et-defalias Tree [(= E Any)] (or (List (Tree E)) E))
-(et-defalias ConsTree [(= E Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
+(et-defalias Tree [(E = Any)] (or (List (Tree E)) E))
+(et-defalias ConsTree [(E = Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
 (et-defalias ListWithLast [E Last]
-  (or (Cons Last Nil) (Cons E ListWithLast<E~Last>)))
+  (or (Cons Last Nil) (Cons E ListWithLast<E_Last>)))
 (et-defalias PlistOf [K V] (or Nil (Cons K (Cons V (PlistOf K V)))))
 ```
 
@@ -392,8 +392,8 @@ with known fixed keys.
 
 | Macro | Meaning |
 |-------|---------|
-| `(Tuple A B C)` | `Cons<A~Cons<B~Cons<C~Nil>>>` — fixed-length list |
-| `(Tuple* A B C)` | `Cons<A~Cons<B~C>>` — dotted-pair chain |
+| `(Tuple A B C)` | `Cons<A_Cons<B_Cons<C_Nil>>>` — fixed-length list |
+| `(Tuple* A B C)` | `Cons<A_Cons<B_C>>` — dotted-pair chain |
 | `(Args A B C)` | Same as Tuple but uses read-only cons (`&Cons`) — for function arglists |
 | `(Args* A B C)` | Same as Tuple* but with `&Cons` |
 
@@ -412,11 +412,11 @@ Additional function syntax:
 | `(fn ARGLIST RET)` | A function with a specific arglist and return type |
 | `(fn [GENVEC] ARGLIST RET)` | A generic (dynamic) function |
 | `fn` | `(fn Nil Any)` — no args, returns anything |
-| `fn<ARGLIST~RET>` | Inline syntax for `(fn ARGLIST RET)` |
+| `fn<ARGLIST_RET>` | Inline syntax for `(fn ARGLIST RET)` |
 | `fn1<ARG>` | One-arg function returning Any |
-| `fn1<ARG~RET>` | One-arg function with return type |
-| `fn2<ARG1~ARG2>` | Two-arg function returning Any |
-| `fn2<ARG1~ARG2~RET>` | Two-arg function with return type |
+| `fn1<ARG_RET>` | One-arg function with return type |
+| `fn2<ARG1_ARG2>` | Two-arg function returning Any |
+| `fn2<ARG1_ARG2_RET>` | Two-arg function with return type |
 
 Arglist types use `(Args ...)` for positional parameters. A `&rest` parameter
 is encoded by ending the arglist with `&List<T>` (for a rest of type T) or
@@ -509,18 +509,18 @@ functions that operate on either a string or buffer with a position argument.
 (et-defalias CompletionPredicate [] fn1<String|Symbol>)
 
 (et-defalias CompletionFunction []
-  (fn [<= A Boolean|@lambda|@metadata|Cons<@boundaries~String>]
+  (fn [A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>]
       (Args String CompletionPredicate? A)
       (switch A
               [Nil Boolean|String]
               [True &List<String>]
               [@lambda Bool]
-              [@metadata Cons<@metadata~Alist<Symbol~Any>>]
-              [Cons<@boundaries~String> Cons<@boundaries~Cons<Integer~Integer>>]
+              [@metadata Cons<@metadata_Alist<Symbol_Any>>]
+              [Cons<@boundaries_String> Cons<@boundaries_Cons<Integer_Integer>>]
               Any)))
 
 (et-defalias CompletionTable []
-  (or List<String> Obarray HashTable<String|Symbol~Any> CompletionFunction))
+  (or List<String> Obarray HashTable<String|Symbol_Any> CompletionFunction))
 ```
 
 #### Other aliases
@@ -546,7 +546,7 @@ supports:
 
 ### Parameterized types
 
-- `Name<Arg1~Arg2>` — type with arguments, separated by `~`
+- `Name<Arg1_Arg2>` — type with arguments, separated by `_`
 - `*struct-name` — struct type (e.g., `*et:result`)
 - `*struct-name<Arg>` — generic struct
 
@@ -564,7 +564,7 @@ supports:
 ### Read-only prefix
 
 - `&Type` — read-only version of Type
-- `&Cons<A~B>` — read-only cons (cannot be written to)
+- `&Cons<A_B>` — read-only cons (cannot be written to)
 - `&List<E>` — read-only list
 - `&Vector<E>` — read-only vector
 
@@ -575,7 +575,7 @@ brackets, stay with angle brackets:
 
 ```elisp
 ;; CORRECT:
-List<Cons<Integer~Integer>>
+List<Cons<Integer_Integer>>
 
 ;; WRONG:
 List<(Cons Integer Integer)>
@@ -584,7 +584,7 @@ List<(Cons Integer Integer)>
 ### Generics in inline syntax
 
 Generic type variables appear as uppercase identifiers. They are declared
-in the generic vector `[T]` or with constraints `[(<= T SomeType)]`.
+in the generic vector `[T]` or with constraints `[(T <: SomeType)]`.
 
 
 ## List-based type syntax
@@ -638,7 +638,7 @@ Parameters use colon syntax: `name: Type`. Special parameter markers:
 | `&optional` | Following parameters are optional |
 | `&rest name: Type` | Rest parameter |
 | `&key` | Following parameters are keyword arguments (converted to plist) |
-| `[T]` or `[(<= T Bound)]` | Generic vector (before params) |
+| `[T]` or `[(T <: Bound)]` | Generic vector (before params) |
 
 When a parameter IS the generic itself, use the shorthand:
 
@@ -661,9 +661,9 @@ The generic vector declares type variables and optional constraints:
 |------|---------|
 | `[T]` | Unconstrained generic T |
 | `[T R]` | Two unconstrained generics |
-| `[(<= T Number)]` | T is a subtype of Number |
-| `[(>= T Integer)]` | T is a supertype of Integer |
-| `[(= T Any)]` | T with default value Any (alias definitions only, never in `@def`) |
+| `[(T <: Number)]` | T is a subtype of Number |
+| `[(T :> Integer)]` | T is a supertype of Integer |
+| `[(T = Any)]` | T with default value Any (alias definitions only, never in `@def`) |
 | `[A R]` | Multiple generics |
 
 ### `@check` — Checker declaration
@@ -731,7 +731,7 @@ signature for multiple functions:
 (@def prin1
       ([T] object: T
        &optional printcharfun: True|Buffer|Marker|fn1<Integer>?
-       overrides: True|List<Cons<Symbol~Any>>?)
+       overrides: True|List<Cons<Symbol_Any>>?)
       T)
 ```
 
@@ -739,14 +739,14 @@ signature for multiple functions:
 
 ```elisp
 (@def set-marker
-      ([(<= M Marker)] marker: M position: IntOrMarker? &optional buffer: Buffer?)
+      ([(M <: Marker)] marker: M position: IntOrMarker? &optional buffer: Buffer?)
       M)
 ```
 
 ### Conditional return type
 
 ```elisp
-(@def abs (arg: [<= N Number]) (extends? N Integer Integer Number))
+(@def abs (arg: [N <: Number]) (extends? N Integer Integer Number))
 ```
 
 ### Complex union parameters
@@ -815,17 +815,17 @@ those have no write interface, so `&Integer` is meaningless.
 
 **Parameters:**
 
-- Use `&List<E>`, `&Cons<A~B>`, `&Vector<E>` when the function only reads
+- Use `&List<E>`, `&Cons<A_B>`, `&Vector<E>` when the function only reads
   the container (traverses, searches, copies elements out).
-- Use `List<E>`, `Cons<A~B>`, `Vector<E>` when the function may mutate the
+- Use `List<E>`, `Cons<A_B>`, `Vector<E>` when the function may mutate the
   container (e.g. `setcar`, `nconc`, `sort`, `aset`, `nreverse`).
 - Rest parameters always use `&List<T>`.
 
 **Return types:**
 
-- Use `List<E>`, `Cons<A~B>` when the function returns a freshly allocated
+- Use `List<E>`, `Cons<A_B>` when the function returns a freshly allocated
   container the caller is free to mutate.
-- Use `&List<E>`, `&Cons<A~B>` when the function returns internal structure
+- Use `&List<E>`, `&Cons<A_B>` when the function returns internal structure
   the caller should not mutate (e.g. returning a stored list without copying).
 
 **Default:** most Emacs functions read containers without mutating them.

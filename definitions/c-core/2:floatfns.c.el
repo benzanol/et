@@ -17,7 +17,7 @@
 (et-declare
  (@def isnan (x: Number) Boolean)
  (@def copysign (x1: Number x2: Number) Number)
- (@def frexp (x: Number) ConsFresh<Number~Integer>)
+ (@def frexp (x: Number) ConsFresh<Number_Integer>)
  (@def ldexp (sgnfcand: Number exponent: Integer) Number)
  (@def exp (arg: Number) Number)
  (@def expt (arg1: Number arg2: Number) Number)
@@ -28,7 +28,7 @@
 ;;; Number conversion and magnitude
 
 (et-declare
- (@def abs (arg: [<= N Number]) (extends? N Integer Integer Number))
+ (@def abs (arg: [N <: Number]) (extends? N Integer Integer Number))
  (@def float (arg: Number) Number)
  (@def logb (arg: Number) Number))
 

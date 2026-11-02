@@ -5,16 +5,16 @@
  (@check thread-last)
  (@def hash-table-empty-p (hash-table: &HashTable) Boolean)
  (@def hash-table-keys
-       ([K V] hash-table: &HashTable<K~V>)
+       ([K V] hash-table: &HashTable<K_V>)
        ListFresh<K>)
  (@def hash-table-values
-       ([K V] hash-table: &HashTable<K~V>)
+       ([K V] hash-table: &HashTable<K_V>)
        ListFresh<V>)
  (@def string-join
        (strings: &MapSeq<String> &optional separator: &OrdSeq<Integer>?)
        String)
  (@def string-reverse
-       (seq: [<= S &OrdSeq])
+       (seq: [S <: &OrdSeq])
        (freshen-shallow S))
  (@def string-truncate-left (string: String length: Integer) String)
  (@def string-blank-p (string: String) Integer?)
@@ -40,7 +40,7 @@
  (@def string-pixel-width (string: String) Integer)
  (@def string-glyph-split (string: String) ListFresh<String>)
  (@def add-display-text-property
-       ([(<= Idx IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any
+       ([(Idx <: IntOrMarker)] start: Idx end: Idx prop: Symbol value: Any
         &optional object: StringOrBuffer<Idx>?)
        Nil)
  (@def read-process-name (prompt: String) Process)

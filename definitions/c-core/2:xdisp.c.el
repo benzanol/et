@@ -7,7 +7,7 @@
  (@def set-buffer-redisplay (symbol: Symbol newval: Any op: VariableEvent where: Buffer?) Nil)
  (@def line-pixel-height () Integer)
  (@def remember-mouse-glyph (frame: Frame? x: Integer y: Integer)
-       Tuple<Integer~Integer~Integer~Integer>))
+       Tuple<Integer_Integer_Integer_Integer>))
 
 ;;; ============================================================
 ;;; Display properties and measurements
@@ -17,13 +17,13 @@
        ([] position: IntOrMarker prop: Symbol &optional object: String|Buffer? properties: List?)
        Any)
  (@def window-text-pixel-size
-       (&optional window: Window? from: IntOrMarker|True|Cons<IntOrMarker~Integer>? to: IntOrMarker|True?
+       (&optional window: Window? from: IntOrMarker|True|Cons<IntOrMarker_Integer>? to: IntOrMarker|True?
         x-limit: Integer|True? y-limit: Integer?
         mode-lines: @mode-line|@tab-line|@header-line|True? ignore-line-at-end: Bool)
-       Cons<Integer~Integer>|Tuple<Integer~Integer~Integer>)
+       Cons<Integer_Integer>|Tuple<Integer_Integer_Integer>)
  (@def buffer-text-pixel-size
        (&optional buffer-or-name: Buffer|String? window: Window? x-limit: Integer|True? y-limit: Integer?)
-       Cons<Integer~Integer>))
+       Cons<Integer_Integer>))
 
 ;;; ============================================================
 ;;; Tab and tool bars

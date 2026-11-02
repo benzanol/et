@@ -15,7 +15,7 @@
 ;;; Terminal parameters
 
 (et-declare
- (@def terminal-parameters (&optional terminal: Terminal|Frame?) Alist<Symbol~Any>)
+ (@def terminal-parameters (&optional terminal: Terminal|Frame?) Alist<Symbol_Any>)
  (@def terminal-parameter (terminal: Terminal|Frame? parameter: Symbol) Any)
  (@def set-terminal-parameter (terminal: Terminal|Frame? parameter: Symbol value: Any) Any))
 

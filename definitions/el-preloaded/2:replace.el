@@ -9,7 +9,7 @@
  (@variable replace-lax-whitespace Boolean)
  (@variable replace-regexp-lax-whitespace Boolean)
  (@variable query-replace-history List<String>)
- (@variable query-replace-defaults List<Cons<String~String>>)
+ (@variable query-replace-defaults List<Cons<String_String>>)
  (@variable query-replace-from-to-separator String?)
  (@variable query-replace-from-history-variable Symbol)
  (@variable query-replace-to-history-variable Symbol)
@@ -28,20 +28,20 @@
  (@variable query-replace-read-from-default (or Nil (fn Nil String)))
  (@variable query-replace-read-from-regexp-default (or Nil (fn Nil String)))
  (@def query-replace-read-from-suggestions () List<String>)
- (@def query-replace-read-from (prompt: String regexp-flag: Bool) String|Cons<String~String|Cons<AnyFn~Any>>)
- (@def query-replace-compile-replacement (to: String regexp-flag: Bool) String|Cons<AnyFn~Any>)
- (@def query-replace-read-to (from: String prompt: String regexp-flag: Bool) String|Cons<AnyFn~Any>)
- (@def query-replace-read-args (prompt: String regexp-flag: Bool &optional noerror: Bool) Tuple<String~String|Cons<AnyFn~Any>~Any~Boolean>))
+ (@def query-replace-read-from (prompt: String regexp-flag: Bool) String|Cons<String_String|Cons<AnyFn_Any>>)
+ (@def query-replace-compile-replacement (to: String regexp-flag: Bool) String|Cons<AnyFn_Any>)
+ (@def query-replace-read-to (from: String prompt: String regexp-flag: Bool) String|Cons<AnyFn_Any>)
+ (@def query-replace-read-args (prompt: String regexp-flag: Bool &optional noerror: Bool) Tuple<String_String|Cons<AnyFn_Any>_Any_Boolean>))
 
 ;;; ============================================================
 ;;; Query-replace commands
 
 (et-declare
- (@def query-replace (from-string: String to-string: String|Cons<AnyFn~Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any)
- (@def query-replace-regexp (regexp: String to-string: String|Cons<AnyFn~Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any)
+ (@def query-replace (from-string: String to-string: String|Cons<AnyFn_Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any)
+ (@def query-replace-regexp (regexp: String to-string: String|Cons<AnyFn_Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any)
  (@def map-query-replace-regexp (regexp: String to-strings: String|List<String> &optional n: Integer? start: IntOrMarker? end: IntOrMarker? region-noncontiguous-p: Any) Any)
- (@def replace-string (from-string: String to-string: String|Cons<AnyFn~Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any)
- (@def replace-regexp (regexp: String to-string: String|Cons<AnyFn~Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any))
+ (@def replace-string (from-string: String to-string: String|Cons<AnyFn_Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any)
+ (@def replace-regexp (regexp: String to-string: String|Cons<AnyFn_Any> &optional delimited: Any start: IntOrMarker? end: IntOrMarker? backward: Boolean region-noncontiguous-p: Any) Any))
 
 ;;; ============================================================
 ;;; Reading regexps
@@ -52,7 +52,7 @@
  (@variable occur-collect-regexp-history List<String>)
  (@variable read-regexp-defaults-function Nil|@regexp-history-last|(fn Nil String|List<String>?))
  (@def read-regexp-suggestions () List<String?>)
- (@variable read-regexp-map Cons<@keymap~Any>)
+ (@variable read-regexp-map Cons<@keymap_Any>)
  (@def read-regexp-toggle-case-fold () Any)
  (@def read-regexp (prompt: String &optional defaults: Nil|String|List<String>|Symbol history: Symbol?) String)
  (@def read-regexp-case-fold-search (regexp: String) Boolean))
@@ -64,7 +64,7 @@
  (@def delete-non-matching-lines (regexp: String &optional rstart: IntOrMarker? rend: IntOrMarker? interactive: Bool) Nil)
  (@def delete-matching-lines (regexp: String &optional rstart: IntOrMarker? rend: IntOrMarker? interactive: Bool) Integer)
  (@def count-matches (regexp: String &optional rstart: IntOrMarker? rend: IntOrMarker? interactive: Bool) Integer)
- (@def keep-lines-read-args (prompt: String) Tuple<String~Nil~Nil~True>)
+ (@def keep-lines-read-args (prompt: String) Tuple<String_Nil_Nil_True>)
  (@def keep-lines (regexp: String &optional rstart: IntOrMarker? rend: IntOrMarker? interactive: Bool) Nil)
  (@def flush-lines (regexp: String &optional rstart: IntOrMarker? rend: IntOrMarker? interactive: Bool) Integer)
  (@def kill-matching-lines (regexp: String &optional rstart: IntOrMarker? rend: IntOrMarker? interactive: Bool) Integer)
@@ -75,14 +75,14 @@
 ;;; Occur mode
 
 (et-declare
- (@variable occur-menu-map Cons<@keymap~Any>)
- (@variable occur-mode-map Cons<@keymap~Any>)
- (@variable occur-revert-arguments Tuple<String~Integer?~List<Buffer>>)
+ (@variable occur-menu-map Cons<@keymap_Any>)
+ (@variable occur-mode-map Cons<@keymap_Any>)
+ (@variable occur-revert-arguments Tuple<String_Integer?_List<Buffer>>)
  (@variable occur-mode-hook List<AnyFn>)
  (@variable occur-hook List<AnyFn>)
  (@variable occur-mode-find-occurrence-hook List<AnyFn>)
  (@def occur-mode () Any)
- (@variable occur-edit-mode-map Cons<@keymap~Any>)
+ (@variable occur-edit-mode-map Cons<@keymap_Any>)
  (@def occur-edit-mode () Any)
  (@variable occur-edit-mode-hook List<AnyFn>)
  (@def occur-cease-edit () Any)
@@ -104,16 +104,16 @@
 
 (et-declare
  (@variable list-matching-lines-default-context-lines Integer)
- (@def list-matching-lines (regexp: String &optional nlines: Integer|String? region: &List<&Cons<Integer~Integer>>?) Any)
+ (@def list-matching-lines (regexp: String &optional nlines: Integer|String? region: &List<&Cons<Integer_Integer>>?) Any)
  (@variable list-matching-lines-face Symbol?)
  (@variable list-matching-lines-buffer-name-face Symbol?)
  (@variable list-matching-lines-current-line-face Symbol)
  (@variable list-matching-lines-jump-to-current-line Boolean)
  (@variable list-matching-lines-prefix-face Symbol)
  (@variable occur-excluded-properties True|List<Symbol>)
- (@def occur-read-primary-args () Tuple<String~String|Integer?>)
+ (@def occur-read-primary-args () Tuple<String_String|Integer?>)
  (@def occur-rename-buffer (&optional unique-p: Bool interactive-p: Bool) String)
- (@def occur (regexp: String &optional nlines: Integer|String? region: &List<&Cons<Integer~Integer>>?) Any)
+ (@def occur (regexp: String &optional nlines: Integer|String? region: &List<&Cons<Integer_Integer>>?) Any)
  (@def multi-occur (bufs: &List<Buffer> regexp: String &optional nlines: Integer?) Any)
  (@def multi-occur-in-matching-buffers (bufregexp: String regexp: String &optional allbufs: Bool) Any)
  (@def occur-regexp-descr (regexp: String) String)
@@ -127,18 +127,18 @@
  (@def occur-engine-line (beg: IntOrMarker end: IntOrMarker &optional keep-props: Bool) String)
  (@def occur-engine-add-prefix (lines: &List<String> &optional prefix-face: Symbol?) List<String>)
  (@def occur-accumulate-lines (count: Integer &optional keep-props: Bool pt: IntOrMarker?) List<String>)
- (@def occur-context-lines (out-line: String nlines: Integer keep-props: Bool begpt: IntOrMarker endpt: IntOrMarker curr-line: Integer prev-line: Integer? prev-after-lines: List<String>? &optional prefix-face: Symbol? orig-line: Integer? multi-occur-p: Bool) Tuple<String~List<String>?>)
+ (@def occur-context-lines (out-line: String nlines: Integer keep-props: Bool begpt: IntOrMarker endpt: IntOrMarker curr-line: Integer prev-line: Integer? prev-after-lines: List<String>? &optional prefix-face: Symbol? orig-line: Integer? multi-occur-p: Bool) Tuple<String_List<String>?>)
  (@def occur-word-at-mouse (event: Any) Any)
  (@def occur-symbol-at-mouse (event: Any) Any)
- (@def occur-context-menu (menu: Cons<@keymap~Any> click: Any) Cons<@keymap~Any>))
+ (@def occur-context-menu (menu: Cons<@keymap_Any> click: Any) Cons<@keymap_Any>))
 
 ;;; ============================================================
 ;;; Replace internals
 
 (et-declare
  (@variable query-replace-help String)
- (@variable query-replace-map Cons<@keymap~Any>)
- (@variable multi-query-replace-map Cons<@keymap~Any>)
+ (@variable query-replace-map Cons<@keymap_Any>)
+ (@variable multi-query-replace-map Cons<@keymap_Any>)
  (@def replace-match-string-symbols (n: List<Any>) Nil)
  (@def replace-eval-replacement (expression: Any count: Integer) String)
  (@def replace-quote (replacement: Any) String)
@@ -160,9 +160,9 @@
 
 (et-declare
  (@def perform-replace
-       (from-string: String replacements: String|List<String>|Cons<AnyFn~Any>
+       (from-string: String replacements: String|List<String>|Cons<AnyFn_Any>
         query-flag: Bool regexp-flag: Bool delimited-flag: Any
-        &optional repeat-count: Integer? map: Cons<@keymap~Any>? start: IntOrMarker?
+        &optional repeat-count: Integer? map: Cons<@keymap_Any>? start: IntOrMarker?
         end: IntOrMarker? backward: Bool region-noncontiguous-p: Any)
        List<Any>|Boolean))
 

@@ -98,7 +98,7 @@
 ;;; Face cache
 
 (et-declare
- (@def face-attributes-as-vector (plist: PlistOf<Symbol~Any>) Vector))
+ (@def face-attributes-as-vector (plist: PlistOf<Symbol_Any>) Vector))
 
 
 ;;; ============================================================
@@ -106,7 +106,7 @@
 
 (et-declare
  (@def display-supports-face-attributes-p
-       (attributes: PlistOf<Symbol~Any> &optional display: Any)
+       (attributes: PlistOf<Symbol_Any> &optional display: Any)
        Boolean))
 
 
@@ -130,7 +130,7 @@
 ;;; Computing faces
 
 (et-declare
- (@def x-load-color-file (filename: String) List<Cons<String~Integer>>))
+ (@def x-load-color-file (filename: String) List<Cons<String_Integer>>))
 
 
 ;;; ============================================================

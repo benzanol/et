@@ -34,7 +34,7 @@
 ;;; Frame geometry
 
 (et-declare
- (@def tty-frame-geometry (&optional frame: Frame?) Alist<Symbol~Any>?)
+ (@def tty-frame-geometry (&optional frame: Frame?) Alist<Symbol_Any>?)
  (@def tty-frame-edges (&optional frame: Frame? type: Any) (or Nil (Tuple Integer Integer Integer Integer)))
  (@def tty-frame-list-z-order (&optional frame: Frame?) List<Frame>)
  (@def tty-frame-restack (frame1: Frame frame2: Frame &optional above: Bool) Never)

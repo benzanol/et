@@ -32,7 +32,7 @@
  (@def char-category-set (ch: Integer) BoolVector)
  (@def category-set-mnemonics (category-set: BoolVector) String)
  (@def modify-category-entry
-       (character: Integer|Cons<Integer~Integer> category: Integer
+       (character: Integer|Cons<Integer_Integer> category: Integer
         &optional table: CharTable? reset: Bool)
        Nil))
 

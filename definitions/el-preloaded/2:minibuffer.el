@@ -6,27 +6,27 @@
 (et-declare
  (@def completion-boundaries
        (string: String collection: CompletionTable pred: CompletionPredicate? suffix: String)
-       Cons<Integer~Integer>)
+       Cons<Integer_Integer>)
  (@def completion-metadata (string: String table: CompletionTable pred: CompletionPredicate?)
-       Cons<@metadata~Alist<Symbol~Any>>)
- (@def completion-metadata-get (metadata: &Cons<@metadata~Alist<Symbol~Any>> prop: NonNilSymbol) Any)
- (@def completion-category-get (cat: Symbol prop: Symbol) &Cons<Symbol~Any>|Nil)
+       Cons<@metadata_Alist<Symbol_Any>>)
+ (@def completion-metadata-get (metadata: &Cons<@metadata_Alist<Symbol_Any>> prop: NonNilSymbol) Any)
+ (@def completion-category-get (cat: Symbol prop: Symbol) &Cons<Symbol_Any>|Nil)
  (@def define-completion-category
-       ([(<= T Symbol)] name: T &optional parents: Symbol|List<Symbol>? doc: String? &rest defaults: &List)
+       ([(T <: Symbol)] name: T &optional parents: Symbol|List<Symbol>? doc: String? &rest defaults: &List)
        T)
  (@def complete-with-action
-       ([(<= A Boolean|@lambda|@metadata|Cons<@boundaries~String>)]
+       ([(A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>)]
         action: A collection: CompletionTable string: String predicate: CompletionPredicate?)
        (switch A
                [Nil Boolean|String]
                [True &List<String>]
                [@lambda Bool]
-               [@metadata Cons<@metadata~Alist<Symbol~Any>>|Nil]
-               [Cons<@boundaries~String> Cons<@boundaries~Cons<Integer~Integer>>|Nil]
+               [@metadata Cons<@metadata_Alist<Symbol_Any>>|Nil]
+               [Cons<@boundaries_String> Cons<@boundaries_Cons<Integer_Integer>>|Nil]
                Bool))
- (@def completion-table-dynamic (fun: fn1<String~CompletionTable> &optional switch-buffer: Bool)
+ (@def completion-table-dynamic (fun: fn1<String_CompletionTable> &optional switch-buffer: Bool)
        CompletionFunction)
- (@def completion-table-with-cache (fun: fn1<String~CompletionTable> &optional ignore-case: Bool)
+ (@def completion-table-with-cache (fun: fn1<String_CompletionTable> &optional ignore-case: Bool)
        CompletionFunction)
  ;; The macro initializes VAR lazily by mutating it in place when first used
  ;; as a completion table. There is no checker shortcut for a macro that
@@ -34,46 +34,46 @@
  ;; the caller's own variable.
  (@check lazy-completion-table ($todo))
  (@def completion-table-case-fold (table: CompletionTable &optional dont-fold: Bool) CompletionFunction)
- (@def completion-table-with-metadata (table: CompletionTable metadata: &Alist<Symbol~Any>)
+ (@def completion-table-with-metadata (table: CompletionTable metadata: &Alist<Symbol_Any>)
        CompletionFunction)
  (@def completion-table-subvert (table: CompletionTable s1: String s2: String) CompletionFunction)
  (@def completion-table-with-context
-       ([(<= A Boolean|@lambda|@metadata|Cons<@boundaries~String>)]
+       ([(A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>)]
         prefix: String table: CompletionTable string: String pred: CompletionPredicate? action: A)
        (switch A
                [Nil Boolean|String]
                [True &List<String>]
                [@lambda Bool]
-               [@metadata Cons<@metadata~Alist<Symbol~Any>>|Nil]
-               [Cons<@boundaries~String> Cons<@boundaries~Cons<Integer~Integer>>|Nil]
+               [@metadata Cons<@metadata_Alist<Symbol_Any>>|Nil]
+               [Cons<@boundaries_String> Cons<@boundaries_Cons<Integer_Integer>>|Nil]
                Any))
  (@def completion-table-with-terminator
-       ([(<= A Boolean|@lambda|@metadata|Cons<@boundaries~String>)]
-        terminator: String|Cons<String|fn1<String~String>~String>
+       ([(A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>)]
+        terminator: String|Cons<String|fn1<String_String>_String>
         table: CompletionTable string: String pred: CompletionPredicate? action: A)
        (switch A
                [Nil Boolean|String]
                [True &List<String>]
                [@lambda Nil]
-               [@metadata Cons<@metadata~Alist<Symbol~Any>>|Nil]
-               [Cons<@boundaries~String> Cons<@boundaries~Cons<Integer~Integer>>|Nil]
+               [@metadata Cons<@metadata_Alist<Symbol_Any>>|Nil]
+               [Cons<@boundaries_String> Cons<@boundaries_Cons<Integer_Integer>>|Nil]
                Any))
  (@def completion-table-with-predicate
-       ([(<= A Boolean|@lambda|@metadata|Cons<@boundaries~String>)]
+       ([(A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>)]
         table: CompletionTable pred1: CompletionPredicate? strict: Bool
         string: String pred2: CompletionPredicate? action: A)
        (switch A
                [Nil Boolean|String]
                [True &List<String>]
                [@lambda Bool]
-               [@metadata Cons<@metadata~Alist<Symbol~Any>>|Nil]
-               [Cons<@boundaries~String> Cons<@boundaries~Cons<Integer~Integer>>|Nil]
+               [@metadata Cons<@metadata_Alist<Symbol_Any>>|Nil]
+               [Cons<@boundaries_String> Cons<@boundaries_Cons<Integer_Integer>>|Nil]
                Any))
  (@def completion-table-in-turn (&rest tables: &List<CompletionTable>) CompletionFunction)
  (@def completion-table-merge (&rest tables: &List<CompletionTable>) CompletionFunction)
  (@def completion-table-with-quoting
-       (table: CompletionTable unquote: fn1<String~String>
-        requote: fn2<Integer~String~Cons<Integer~fn1<String~String>>>)
+       (table: CompletionTable unquote: fn1<String_String>
+        requote: fn2<Integer_String_Cons<Integer_fn1<String_String>>>)
        CompletionFunction)
 )
 
@@ -91,15 +91,15 @@
  (@def delete-minibuffer-contents () Nil)
  (@def completion-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer
-        &optional metadata: &Alist<Symbol~Any>?)
-       Nil|True|Cons<String~Integer>)
+        &optional metadata: &Alist<Symbol_Any>?)
+       Nil|True|Cons<String_Integer>)
  ;; The result is a list of completion candidates whose final cdr may be an
  ;; integer base-size instead of nil, i.e. an improper list. The type
  ;; language has no alias for a list-with-non-nil-tail shape, and authoring
  ;; may not define new aliases to express it.
  (@def completion-all-completions
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer
-        &optional metadata: &Alist<Symbol~Any>?)
+        &optional metadata: &Alist<Symbol_Any>?)
        Todo)
  (@def minibuffer-complete () Boolean)
  (@def minibuffer-sort-alphabetically (completions: List<String>) List<String>)
@@ -122,8 +122,8 @@
        (completions: List<String> prefix-len: Integer &optional base-size: Integer?)
        Todo)
  (@def display-completion-list
-       (completions: &List<String|Symbol|Tuple<String~String>|Tuple<String~String~String>>
-        &optional common-substring: String? group-fun: fn2<String~Boolean~String?>)
+       (completions: &List<String|Symbol|Tuple<String_String>|Tuple<String_String_String>>
+        &optional common-substring: String? group-fun: fn2<String_Boolean_String?>)
        Nil)
  (@def minibuffer-completion-help (&optional start: IntOrMarker? end: IntOrMarker?) Nil)
  (@def minibuffer-hide-completions () Any)
@@ -147,7 +147,7 @@
 
 (et-declare
  (@def minibuffer-completion-exit (&optional no-exit: Bool) Nil)
- (@def read-no-blanks-input (prompt: String &optional initial: String|Cons<String~Integer>? inherit-input-method: Bool)
+ (@def read-no-blanks-input (prompt: String &optional initial: String|Cons<String_Integer>? inherit-input-method: Bool)
        String)
 )
 
@@ -165,14 +165,14 @@
 (et-declare
  (@def minibuffer-maybe-quote-filename (filename: String) String)
  (@def completion-file-name-table
-       ([(<= A Boolean|@lambda|@metadata|Cons<@boundaries~String>)]
+       ([(A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>)]
         string: String pred: CompletionPredicate? action: A)
        (switch A
                [Nil Boolean|String]
                [True &List<String>]
                [@lambda Bool]
-               [@metadata Cons<@metadata~Alist<Symbol~Any>>]
-               [Cons<@boundaries~String> Cons<@boundaries~Cons<Integer~Integer>>]
+               [@metadata Cons<@metadata_Alist<Symbol_Any>>]
+               [Cons<@boundaries_String> Cons<@boundaries_Cons<Integer_Integer>>]
                Any))
  (@def read-file-name
        (prompt: String &optional dir: String? default-filename: String|List<String>?
@@ -191,7 +191,7 @@
 (et-declare
  (@def completion-emacs21-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? _point: Integer)
-       Nil|True|Cons<String~Integer>)
+       Nil|True|Cons<String_Integer>)
  ;; The result is a list of completion candidates whose final cdr may be an
  ;; integer base-size instead of nil, i.e. an improper list. The type
  ;; language has no alias for a list-with-non-nil-tail shape, and authoring
@@ -201,7 +201,7 @@
        Todo)
  (@def completion-emacs22-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer)
-       Nil|True|Cons<String~Integer>)
+       Nil|True|Cons<String_Integer>)
  ;; The result is a list of completion candidates whose final cdr may be an
  ;; integer base-size instead of nil, i.e. an improper list. The type
  ;; language has no alias for a list-with-non-nil-tail shape, and authoring
@@ -217,7 +217,7 @@
 (et-declare
  (@def completion-basic-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer)
-       Nil|True|Cons<String~Integer>)
+       Nil|True|Cons<String_Integer>)
  ;; The result is a list of completion candidates whose final cdr may be an
  ;; integer base-size instead of nil, i.e. an improper list. The type
  ;; language has no alias for a list-with-non-nil-tail shape, and authoring
@@ -241,7 +241,7 @@
        Todo)
  (@def completion-pcm-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer)
-       Nil|True|Cons<String~Integer>)
+       Nil|True|Cons<String_Integer>)
 )
 
 ;;; ============================================================
@@ -250,7 +250,7 @@
 (et-declare
  (@def completion-substring-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer)
-       Nil|True|Cons<String~Integer>)
+       Nil|True|Cons<String_Integer>)
  ;; The result is a list of completion candidates whose final cdr may be an
  ;; integer base-size instead of nil, i.e. an improper list. The type
  ;; language has no alias for a list-with-non-nil-tail shape, and authoring
@@ -266,7 +266,7 @@
 (et-declare
  (@def completion-flex-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer)
-       Nil|True|Cons<String~Integer>)
+       Nil|True|Cons<String_Integer>)
  ;; The result is a list of completion candidates whose final cdr may be an
  ;; integer base-size instead of nil, i.e. an improper list. The type
  ;; language has no alias for a list-with-non-nil-tail shape, and authoring
@@ -285,29 +285,29 @@
        Todo)
  (@def completion-initials-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? _point: Integer)
-       Nil|True|Cons<String~Integer>)
+       Nil|True|Cons<String_Integer>)
  (@def completion-shorthand-try-completion
        (string: String table: CompletionTable pred: CompletionPredicate? point: Integer)
-       Nil|Cons<String~Integer>)
+       Nil|Cons<String_Integer>)
  (@def completion-shorthand-all-completions
        (_string: String _table: CompletionTable _pred: CompletionPredicate? _point: Integer)
        Nil)
  (@def completing-read-default
        (prompt: String collection: CompletionTable &optional predicate: CompletionPredicate?
-        require-match: Any initial-input: String|Cons<String~Integer>?
-        hist: Symbol|Cons<Symbol~Integer>? def: String|List<String>? inherit-input-method: Bool)
+        require-match: Any initial-input: String|Cons<String_Integer>?
+        hist: Symbol|Cons<Symbol_Integer>? def: String|List<String>? inherit-input-method: Bool)
        String)
  (@def minibuffer-insert-file-name-at-point () Nil)
- (@def minibuffer-beginning-of-buffer (&optional arg: Integer|Cons<Integer~Any>|@-|Nil) Nil|Integer)
+ (@def minibuffer-beginning-of-buffer (&optional arg: Integer|Cons<Integer_Any>|@-|Nil) Nil|Integer)
  ;; The macro only executes its body when a live selected-window exists
  ;; before the minibuffer was entered; otherwise it returns nil. `$body'
  ;; cannot express this extra nil branch alongside the body's own type.
  (@check with-minibuffer-selected-window ($todo))
- (@def minibuffer-recenter-top-bottom (&optional arg: Integer|Cons<Integer~Any>|@-|Nil) Any)
- (@def minibuffer-scroll-up-command (&optional arg: Integer|Cons<Integer~Any>|@-|Nil) Any)
- (@def minibuffer-scroll-down-command (&optional arg: Integer|Cons<Integer~Any>|@-|Nil) Any)
- (@def minibuffer-scroll-other-window (&optional arg: Integer|Cons<Integer~Any>|@-|Nil) Any)
- (@def minibuffer-scroll-other-window-down (&optional arg: Integer|Cons<Integer~Any>|@-|Nil) Any)
+ (@def minibuffer-recenter-top-bottom (&optional arg: Integer|Cons<Integer_Any>|@-|Nil) Any)
+ (@def minibuffer-scroll-up-command (&optional arg: Integer|Cons<Integer_Any>|@-|Nil) Any)
+ (@def minibuffer-scroll-down-command (&optional arg: Integer|Cons<Integer_Any>|@-|Nil) Any)
+ (@def minibuffer-scroll-other-window (&optional arg: Integer|Cons<Integer_Any>|@-|Nil) Any)
+ (@def minibuffer-scroll-other-window-down (&optional arg: Integer|Cons<Integer_Any>|@-|Nil) Any)
  ;; The macro first ensures a completions window exists via a side-effecting
  ;; call, then conditionally executes body in that window. `$body' cannot
  ;; express this precondition-establishing step before the body runs.

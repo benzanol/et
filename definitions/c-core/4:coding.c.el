@@ -9,7 +9,7 @@
  (@def read-coding-system
        (prompt: String &optional default-coding-system: Symbol|String?)
        Symbol?)
- (@def check-coding-system ([(<= T Symbol?)] coding-system: T) T))
+ (@def check-coding-system ([(T <: Symbol?)] coding-system: T) T))
 
 ;;; ============================================================
 ;;; Coding system detection
@@ -29,7 +29,7 @@
        Integer|ListFresh<Integer>?)
  (@def check-coding-systems-region
        (start: String|IntOrMarker end: IntOrMarker coding-system-list: &List<Symbol>)
-       ListFresh<ConsFresh<Symbol~ListFresh<Integer>>>))
+       ListFresh<ConsFresh<Symbol_ListFresh<Integer>>>))
 
 ;;; ============================================================
 ;;; Coding conversion
@@ -80,7 +80,7 @@
  ;; The result is a cons from an internal alist, a fresh cons built here, or
  ;; whatever an arbitrary looked-up function returns, so only the general
  ;; cons shape is accurate.
- (@def find-operation-coding-system (operation: Symbol &rest args: &List) Cons<Any~Any>?))
+ (@def find-operation-coding-system (operation: Symbol &rest args: &List) Cons<Any_Any>?))
 
 ;;; ============================================================
 ;;; Coding system priorities
@@ -97,7 +97,7 @@
  (@def coding-system-put (coding-system: Symbol? prop: Symbol val: Any) Any)
  (@def define-coding-system-alias (alias: Symbol coding-system: Symbol?) Nil)
  (@def coding-system-base (coding-system: Symbol?) Symbol)
- (@def coding-system-plist (coding-system: Symbol?) &PlistOf<Symbol~Any>)
+ (@def coding-system-plist (coding-system: Symbol?) &PlistOf<Symbol_Any>)
  (@def coding-system-aliases (coding-system: Symbol?) &List<Symbol>)
  (@def coding-system-eol-type (coding-system: Symbol?) Nil|Integer|VectorFresh<Symbol>))
 

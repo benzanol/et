@@ -14,13 +14,13 @@
 
 (et-declare
  (@def compute-motion
-       (from: IntOrMarker frompos: &Cons<Integer~Integer> to: IntOrMarker
-        topos: &Cons<Integer~Integer>? width: Integer? offsets: &Cons<Integer~Integer>?
+       (from: IntOrMarker frompos: &Cons<Integer_Integer> to: IntOrMarker
+        topos: &Cons<Integer_Integer>? width: Integer? offsets: &Cons<Integer_Integer>?
         window: Window?)
        (Tuple Integer Integer Integer Integer Boolean))
  (@def line-number-display-width (&optional pixelwise: Bool) Integer|Float)
  (@def vertical-motion
-       (lines: Integer|Cons<Number~Integer> &optional window: Window? cur-col: Number?)
+       (lines: Integer|Cons<Number_Integer> &optional window: Window? cur-col: Number?)
        Integer))
 
 ;;; ============================================================

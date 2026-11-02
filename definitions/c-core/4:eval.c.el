@@ -36,7 +36,7 @@
          ($pcase
           `(,sym) ($eval (or (et-symbol-func-type sym)
                              (et-fatal "Not a function: %s" sym)))))
- (@def defvaralias ([(<= V Symbol)] new-alias: Var base-variable: V &optional docstring: String?) V)
+ (@def defvaralias ([(V <: Symbol)] new-alias: Var base-variable: V &optional docstring: String?) V)
  (@def default-toplevel-value (symbol: Symbol) Any)
  (@def set-default-toplevel-value (symbol: Var value: Any) Any)
  (@check [defvar defconst]
@@ -59,8 +59,8 @@
           ($progn ($loop ($if ($at 1) ($tail 2) ($type Nil)))
                   ($must-be ($at 1) ($type Nil)))))
  (@def funcall-with-delayed-message
-       ([R] delay: Number message: String func: fn<Nil~R>) R)
- (@def macroexpand (form: Sexp &optional environment: Alist<Symbol~Any>) Sexp)
+       ([R] delay: Number message: String func: fn<Nil_R>) R)
+ (@def macroexpand (form: Sexp &optional environment: Alist<Symbol_Any>) Sexp)
  (@alias ThrowCatchTag NonNil)
  (@check catch ($body ThrowCatchTag)) ;todo
  (@def throw (tag: ThrowCatchTag value: Any) Never)
@@ -80,11 +80,11 @@
  (@def signal (error-symbol: NonNilSymbol data: Any) Never)
  (@def commandp (function: Any) Boolean)
  (@def autoload
-       ([(<= V Var)] function: V file: String
+       ([(V <: Var)] function: V file: String
         &optional docstring: String interactive: Any
         type: (or Nil @keymap @macro True))
        V)
- (@def autoload-do-load ([(<= V Var)] fundef: V &optional funname: Symbol macro-only: @macro?) V)
+ (@def autoload-do-load ([(V <: Var)] fundef: V &optional funname: Symbol macro-only: @macro?) V)
  (@def eval (form: Sexp &optional lexical: Bool) Any)
  (@def apply ([A R] function: (fn AppendLast<A> R) &rest arguments: A) R)
  (@def run-hooks (&rest hooks: &List<fn>) Nil)
@@ -98,10 +98,10 @@
        Any)
  (@def functionp ([T] object: T) (is? T AnyFn))
  (@def funcall ([A R] function: (fn A R) &rest arguments: A) R)
- (@def func-arity (function: AnyFn) Cons<Integer~Integer|@many|@unevalled>)
+ (@def func-arity (function: AnyFn) Cons<Integer_Integer|@many|@unevalled>)
  (@def special-variable-p (symbol: Symbol) Boolean))
 
-(et-defun et-parse-let-inits (rel: EtRel) Alist<Var~EtCheckFn>
+(et-defun et-parse-let-inits (rel: EtRel) Alist<Var_EtCheckFn>
   (let* ((forms (et-cur-expr rel)))
     (cl-loop for (sym _expr) in forms
              for pos upfrom 0

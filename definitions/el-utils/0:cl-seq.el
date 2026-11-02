@@ -4,51 +4,51 @@
  (@def cl-endp (x: Nil|&Cons) Boolean)
  (@def cl-reduce)
  (@def cl-fill
-       ([E (<= S List<E>|FillableArray<E>)] cl-seq: S cl-item: E
+       ([E (S <: List<E>|FillableArray<E>)] cl-seq: S cl-item: E
         &key start: Integer? end: Integer?)
        S)
  (@def cl-replace
-       ([E (<= S List<E>|AsetSeq<E>)] cl-seq1: S cl-seq2: &LenSeq<E>
+       ([E (S <: List<E>|AsetSeq<E>)] cl-seq1: S cl-seq2: &LenSeq<E>
         &key start1: Integer? end1: Integer?
         start2: Integer? end2: Integer?)
        S)
  (@def cl-remove
-       ([E K (<= S ConcatSeq<E>)] cl-item: Any cl-seq: S
+       ([E K (S <: ConcatSeq<E>)] cl-item: Any cl-seq: S
         &key test: (or Nil (fn (Args Any K) Bool))
         test-not: (or Nil (fn (Args Any K) Bool))
         key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-remove-if
-       ([E K (<= S ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
+       ([E K (S <: ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
         &key key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-remove-if-not
-       ([E K (<= S ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
+       ([E K (S <: ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
         &key key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-delete
-       ([E K (<= S ConcatSeq<E>)] cl-item: Any cl-seq: S
+       ([E K (S <: ConcatSeq<E>)] cl-item: Any cl-seq: S
         &key test: (or Nil (fn (Args Any K) Bool))
         test-not: (or Nil (fn (Args Any K) Bool))
         key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-delete-if
-       ([E K (<= S ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
+       ([E K (S <: ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
         &key key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-delete-if-not
-       ([E K (<= S ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
+       ([E K (S <: ConcatSeq<E>)] cl-pred: (fn (Args K) Bool) cl-list: S
         &key key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-remove-duplicates)
  (@def cl-delete-duplicates
-       ([E K (<= S ConcatSeq<E>)] cl-seq: S
+       ([E K (S <: ConcatSeq<E>)] cl-seq: S
         &key test: (or Nil (fn (Args K K) Bool))
         test-not: (or Nil (fn (Args K K) Bool))
         key: (or (fn (Args E) K) Nil&{K:=:E})
@@ -58,20 +58,20 @@
  (@def cl-substitute-if)
  (@def cl-substitute-if-not)
  (@def cl-nsubstitute
-       ([E K (<= S List<E>|AsetSeq<E>)] cl-new: E cl-old: Any seq: S
+       ([E K (S <: List<E>|AsetSeq<E>)] cl-new: E cl-old: Any seq: S
         &key test: (or Nil (fn (Args Any K) Bool))
         test-not: (or Nil (fn (Args Any K) Bool))
         key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-nsubstitute-if
-       ([E K (<= S List<E>|AsetSeq<E>)] cl-new: E
+       ([E K (S <: List<E>|AsetSeq<E>)] cl-new: E
         cl-pred: (fn (Args K) Bool) cl-list: S
         &key key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
        S)
  (@def cl-nsubstitute-if-not
-       ([E K (<= S List<E>|AsetSeq<E>)] cl-new: E
+       ([E K (S <: List<E>|AsetSeq<E>)] cl-new: E
         cl-pred: (fn (Args K) Bool) cl-list: S
         &key key: (or (fn (Args E) K) Nil&{K:=:E})
         count: Integer? start: Integer? end: Integer? from-end: Bool)
@@ -144,11 +144,11 @@
         start2: Integer? end2: Integer? from-end: Bool)
        Integer?)
  (@def cl-sort
-       ([E K (<= S OrdSeq<E>)] cl-seq: S cl-pred: (fn (Args K K) Bool)
+       ([E K (S <: OrdSeq<E>)] cl-seq: S cl-pred: (fn (Args K K) Bool)
         &key key: (or (fn (Args E) K) Nil&{K:=:E}))
        S)
  (@def cl-stable-sort
-       ([E K (<= S OrdSeq<E>)] cl-seq: S cl-pred: (fn (Args K K) Bool)
+       ([E K (S <: OrdSeq<E>)] cl-seq: S cl-pred: (fn (Args K K) Bool)
         &key key: (or (fn (Args E) K) Nil&{K:=:E}))
        S)
  (@def cl-merge)
@@ -167,33 +167,33 @@
         &key key: (or (fn (Args E) K) Nil&{K:=:E}))
        &List<E>)
  (@def cl-assoc
-       ([K V X] cl-item: Any cl-alist: &Alist<K~V>
+       ([K V X] cl-item: Any cl-alist: &Alist<K_V>
         &key test: (or Nil (fn (Args Any X) Bool))
         test-not: (or Nil (fn (Args Any X) Bool))
         key: (or (fn (Args K) X) Nil&{X:=:K}))
-       &Cons<K~V>?)
+       &Cons<K_V>?)
  (@def cl-assoc-if
-       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K~V>
+       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K_V>
         &key key: (or (fn (Args K) X) Nil&{X:=:K}))
-       &Cons<K~V>?)
+       &Cons<K_V>?)
  (@def cl-assoc-if-not
-       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K~V>
+       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K_V>
         &key key: (or (fn (Args K) X) Nil&{X:=:K}))
-       &Cons<K~V>?)
+       &Cons<K_V>?)
  (@def cl-rassoc
-       ([K V X] cl-item: Any cl-alist: &Alist<K~V>
+       ([K V X] cl-item: Any cl-alist: &Alist<K_V>
         &key test: (or Nil (fn (Args Any X) Bool))
         test-not: (or Nil (fn (Args Any X) Bool))
         key: (or (fn (Args V) X) Nil&{X:=:V}))
-       &Cons<K~V>?)
+       &Cons<K_V>?)
  (@def cl-rassoc-if
-       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K~V>
+       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K_V>
         &key key: (or (fn (Args V) X) Nil&{X:=:V}))
-       &Cons<K~V>?)
+       &Cons<K_V>?)
  (@def cl-rassoc-if-not
-       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K~V>
+       ([K V X] cl-pred: (fn (Args X) Bool) cl-list: &Alist<K_V>
         &key key: (or (fn (Args V) X) Nil&{X:=:V}))
-       &Cons<K~V>?)
+       &Cons<K_V>?)
  (@def cl-union
        ([E K] cl-list1: &List<E> cl-list2: &List<E>
         &key test: (or Nil (fn (Args K K) Bool))

@@ -5,9 +5,9 @@
 
 (et-declare
  (@def format-encode-run-method
-       (method: (or String (fn (Args IntOrMarker IntOrMarker Buffer) (or Integer List<Cons<IntOrMarker~String>>)))
+       (method: (or String (fn (Args IntOrMarker IntOrMarker Buffer) (or Integer List<Cons<IntOrMarker_String>>)))
         from: IntOrMarker to: IntOrMarker &optional buffer: Buffer?)
-       (or Nil Integer List<Cons<IntOrMarker~String>>))
+       (or Nil Integer List<Cons<IntOrMarker_String>>))
  (@def format-decode-run-method
        (method: (or String (fn (Args IntOrMarker IntOrMarker) Integer))
         from: IntOrMarker to: IntOrMarker &optional _buffer: Buffer?)
@@ -39,7 +39,7 @@
 
 (et-declare
  (@def format-replace-strings
-       (alist: &List<&Cons<String~String>> &optional reverse: Bool beg: IntOrMarker? end: IntOrMarker?)
+       (alist: &List<&Cons<String_String>> &optional reverse: Bool beg: IntOrMarker? end: IntOrMarker?)
        Nil))
 
 ;;; ============================================================
@@ -47,7 +47,7 @@
 
 (et-declare
  (@def format-delq-cons ([E] cons: List<E> list: List<E>) List<E>)
- (@def format-make-relatively-unique ([E] a: &List<E> b: &List<E>) Cons<List<E>~List<E>>)
+ (@def format-make-relatively-unique ([E] a: &List<E> b: &List<E>) Cons<List<E>_List<E>>)
  (@def format-reorder ([E] items: List<E> order: &List<E>) List<E>))
 
 ;;; ============================================================
@@ -60,12 +60,12 @@
  ;; default-function marker). The type language cannot yet express this
  ;; value-dependent nested alist shape.
  (@def format-deannotate-region
-       (from: IntOrMarker to: IntOrMarker translations: &List<&Cons<Symbol~Todo>>
+       (from: IntOrMarker to: IntOrMarker translations: &List<&Cons<Symbol_Todo>>
         next-fn: (fn Nil (or (Tuple IntOrMarker IntOrMarker Symbol Bool) Nil)))
        Nil|String)
  (@def format-subtract-regions
-       (minu: &List<&Cons<Integer~Integer?>> subtra: &List<&Cons<Integer~Integer>>)
-       List<Cons<Integer~Integer?>>)
+       (minu: &List<&Cons<Integer_Integer?>> subtra: &List<&Cons<Integer_Integer>>)
+       List<Cons<Integer_Integer?>>)
  (@def format-property-increment-region
        (from: IntOrMarker to: IntOrMarker prop: Symbol delta: Number default: Number)
        Nil))
@@ -75,7 +75,7 @@
 
 (et-declare
  (@def format-insert-annotations
-       (list: &List<&Cons<IntOrMarker~String>> &optional offset: Integer?)
+       (list: &List<&Cons<IntOrMarker_String>> &optional offset: Integer?)
        Nil)
  (@def format-annotate-value
        ([T R] old: T new: R)
@@ -86,9 +86,9 @@
  ;; same unexpressable structure, and its return value is caller-defined
  ;; (a string or an arbitrary annotation representation).
  (@def format-annotate-region
-       (from: IntOrMarker to: IntOrMarker translations: &List<&Cons<Symbol~Todo>>
+       (from: IntOrMarker to: IntOrMarker translations: &List<&Cons<Symbol_Todo>>
         format-fn: (fn (Args Todo Boolean) Any) ignore: &List<Symbol>)
-       List<Cons<IntOrMarker~Any>>))
+       List<Cons<IntOrMarker_Any>>))
 
 ;;; ============================================================
 ;;; Internal functions for format-annotate-region
@@ -98,14 +98,14 @@
  ;; above `format-deannotate-region'; the type language cannot yet express
  ;; it.
  (@def format-annotate-location
-       (loc: IntOrMarker all: Bool ignore: &List<Symbol> translations: &List<&Cons<Symbol~Todo>>)
+       (loc: IntOrMarker all: Bool ignore: &List<Symbol> translations: &List<&Cons<Symbol_Todo>>)
        Vector<Any>)
  ;; TRANSLATIONS has the same value-dependent nested alist shape described
  ;; above `format-deannotate-region'; the type language cannot yet express
  ;; it.
  (@def format-annotate-single-property-change
-       (prop: Symbol old: Any new: Any translations: &List<&Cons<Symbol~Todo>>)
-       Nil|Cons<List<Any>~List<Any>>)
+       (prop: Symbol old: Any new: Any translations: &List<&Cons<Symbol_Todo>>)
+       Nil|Cons<List<Any>_List<Any>>)
  ;; PROP-ALIST is the per-value entry drawn from the TRANSLATIONS structure
  ;; described above `format-deannotate-region'; its shape cannot be
  ;; expressed by the current type language. The default-function branch may

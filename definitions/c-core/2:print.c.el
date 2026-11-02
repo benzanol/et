@@ -18,10 +18,10 @@
  (@def prin1
        ([T] object: T
         &optional printcharfun: True|Buffer|Marker|fn1<Integer>?
-        overrides: True|List<Cons<Symbol~Any>>?)
+        overrides: True|List<Cons<Symbol_Any>>?)
        T)
  (@def prin1-to-string
-       (object: Any &optional noescape: Bool overrides: True|List<Cons<Symbol~Any>>?)
+       (object: Any &optional noescape: Bool overrides: True|List<Cons<Symbol_Any>>?)
        String)
  (@def princ
        ([T] object: T &optional printcharfun: True|Buffer|Marker|fn1<Integer>?)
@@ -37,7 +37,7 @@
 ;;; Error messages
 
 (et-declare
- (@def error-message-string (obj: Cons<Symbol~Any>) String))
+ (@def error-message-string (obj: Cons<Symbol_Any>) String))
 
 ;;; ============================================================
 ;;; Print preprocessing

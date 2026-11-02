@@ -2,7 +2,7 @@
 
 (et-declare
  (@check tabulated-list-get-id ($fn IntOrMarker? Any))
- (@check tabulated-list-get-entry ($fn IntOrMarker? &Vector<String|&Cons<Any~Any>>?))
+ (@check tabulated-list-get-entry ($fn IntOrMarker? &Vector<String|&Cons<Any_Any>>?))
  (@def tabulated-list-put-tag (tag: String &optional advance: Bool) Integer|Nil)
  (@def tabulated-list-clear-all-tags () Nil)
  (@def tabulated-list-make-glyphless-char-display-table () CharTable)
@@ -12,16 +12,16 @@
  (@def tabulated-list-revert (&rest _ignored: &List) Integer)
  (@def tabulated-list-print (&optional remember-pos: Bool update: Bool) Integer)
  (@def tabulated-list-print-entries
-       (entries: &List<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>>
-        sorter: fn2<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>~Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>~Boolean>|Nil
+       (entries: &List<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>>
+        sorter: fn2<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>_Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>_Boolean>|Nil
         update: Bool
         entry-id: Any)
        Integer|Nil)
- (@def tabulated-list-print-entry (id: Any cols: &Vector<String|&Cons<Any~Any>>) Boolean)
- (@def tabulated-list-print-col (n: Integer col-desc: String|&Cons<Any~Any> x: Integer) Integer)
- (@def tabulated-list-delete-entry () Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>|Nil)
+ (@def tabulated-list-print-entry (id: Any cols: &Vector<String|&Cons<Any_Any>>) Boolean)
+ (@def tabulated-list-print-col (n: Integer col-desc: String|&Cons<Any_Any> x: Integer) Integer)
+ (@def tabulated-list-delete-entry () Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>|Nil)
  (@def tabulated-list-set-col
-       (col: Integer|String desc: String|&Cons<Any~Any> &optional change-entry-data: Bool)
+       (col: Integer|String desc: String|&Cons<Any_Any> &optional change-entry-data: Bool)
        Integer|Nil)
  (@def tabulated-list-col-sort (&optional e: Any) Integer|Nil)
  (@def tabulated-list-sort (&optional n: Integer?) Integer|Nil)
@@ -46,31 +46,31 @@
  ;; self-referential structural types without defining a new alias, which
  ;; authoring forbids.
  (@def tabulated-list-groups
-       (entries: &List<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>>
+       (entries: &List<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>>
         metadata: (Plist
-                   :path-function fn1<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>~&List<&List<String>>>
-                   :sort-function fn2<Todo~Integer~Todo>|Nil))
-       List<Cons<String~List<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>>>>)
+                   :path-function fn1<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>_&List<&List<String>>>
+                   :sort-function fn2<Todo_Integer_Todo>|Nil))
+       List<Cons<String_List<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>>>>)
  ;; The result tree is a self-referential alist mapping strings to either a
  ;; nested subtree or a vector of entries. The type language cannot yet
  ;; express recursive, self-referential structural types without defining a
  ;; new alias, which authoring forbids.
  (@def tabulated-list-groups-categorize
-       (entries: &List<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>>
-        path-function: fn1<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>~&List<&List<String>>>)
+       (entries: &List<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>>
+        path-function: fn1<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>_&List<&List<String>>>)
        Todo)
  ;; TREE and SORT-FUNCTION operate on the self-referential group tree
  ;; structure. The type language cannot yet express recursive,
  ;; self-referential structural types without defining a new alias, which
  ;; authoring forbids.
  (@def tabulated-list-groups-sort
-       (tree: Todo sort-function: fn2<Todo~Integer~Todo> &optional level: Integer?)
+       (tree: Todo sort-function: fn2<Todo_Integer_Todo> &optional level: Integer?)
        Todo)
  ;; TREE is the self-referential group tree structure. The type language
  ;; cannot yet express recursive, self-referential structural types without
  ;; defining a new alias, which authoring forbids.
  (@def tabulated-list-groups-flatten
        (tree: Todo)
-       List<Cons<String~List<Cons<Any~Cons<&Vector<String|&Cons<Any~Any>>~Nil>>>>>))
+       List<Cons<String_List<Cons<Any_Cons<&Vector<String|&Cons<Any_Any>>_Nil>>>>>))
 
 ;;; ============================================================

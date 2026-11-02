@@ -9,4 +9,4 @@
  ;; evaluated. A future checker needs a way to accept and discard
  ;; unevaluated operand forms.
  (@check define-widget-keywords ($todo))
- (@def define-widget (name: [(<= T Symbol)] class: Symbol doc: String? &rest args: &List) T))
+ (@def define-widget (name: [(T <: Symbol)] class: Symbol doc: String? &rest args: &List) T))

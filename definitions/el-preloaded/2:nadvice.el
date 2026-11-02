@@ -14,7 +14,7 @@
  ;; can express checking a place-form argument.
  (@check remove-function ($todo))
  (@def advice-function-mapc
-       (f: fn2<AnyFn~Alist<Symbol~Any>> function-def: AnyFn)
+       (f: fn2<AnyFn_Alist<Symbol_Any>> function-def: AnyFn)
        Nil)
  (@def advice-function-member-p
        (advice: AnyFn|Symbol|String function-def: AnyFn)
@@ -25,17 +25,17 @@
 
 (et-declare
  (@alias AdviceFn
-         [(<= OrigFn AnyFn)
-          (<= Place :around|:before|:after|:override|:after-until|:after-while|:before-until|:before-while|:filter-args|:filter-return)]
+         [(OrigFn <: AnyFn)
+          (Place <: :around|:before|:after|:override|:after-until|:after-while|:before-until|:before-while|:filter-args|:filter-return)]
          (eval et-advice-fn-type OrigFn Place))
  (@def advice-add
        (symbol: AnyFn
         how: :around|:before|:after|:override|:after-until|:after-while|:before-until|:before-while|:filter-args|:filter-return
         function: AnyFn
-        &optional props: Alist<Symbol~Any>)
+        &optional props: Alist<Symbol_Any>)
        Nil)
  (@def advice-remove
-       ([(<= OrigFn AnyFn)] symbol: OrigFn function: AnyFn|Symbol|String)
+       ([(OrigFn <: AnyFn)] symbol: OrigFn function: AnyFn|Symbol|String)
        Nil)
  ;; ARGS is a literal (HOW LAMBDA-LIST &optional NAME DEPTH) list that is
  ;; destructured at expansion time rather than evaluated, and BODY is
@@ -44,10 +44,10 @@
  ;; new function definition from unevaluated sub-forms.
  (@check define-advice ($todo))
  (@def advice-mapc
-       ([(<= OrigFn AnyFn)] fun: fn2<AnyFn~Alist<Symbol~Any>> symbol: OrigFn)
+       ([(OrigFn <: AnyFn)] fun: fn2<AnyFn_Alist<Symbol_Any>> symbol: OrigFn)
        Nil)
  (@def advice-member-p
-       ([(<= OrigFn AnyFn)] advice: AnyFn|Symbol|String symbol: OrigFn)
+       ([(OrigFn <: AnyFn)] advice: AnyFn|Symbol|String symbol: OrigFn)
        Bool))
 
 (et-defun et-advice-fn-type (orig-fn: EtType place-type: EtType) EtType
@@ -115,7 +115,7 @@
                  ($at 2))]
          ($progn
           ($expect ($eval (et-advice-fn-type orig place)) ($at 3))
-          ($expect ($type Alist<Symbol~Any>) ($at 4))
+          ($expect ($type Alist<Symbol_Any>) ($at 4))
           ($type Nil)))))
 
 ;;; ============================================================

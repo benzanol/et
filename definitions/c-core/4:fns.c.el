@@ -46,10 +46,10 @@
 
 (et-declare
  ;; nontrivial
- (@def append ([E] &rest sequences: &ListWithLast<&List<E>~List<E>>) List<E>)
+ (@def append ([E] &rest sequences: &ListWithLast<&List<E>_List<E>>) List<E>)
  (@def concat (&rest sequences: &List<&ConcatSeq<Integer>>) String)
  (@def vconcat ([E] &rest sequences: &List<&OrdSeq<E>>) VectorFresh<E>)
- (@def copy-sequence (arg: [<= S &LenSeq]) (freshen-shallow S)))
+ (@def copy-sequence (arg: [S <: &LenSeq]) (freshen-shallow S)))
 
 
 ;;; ============================================================
@@ -69,9 +69,9 @@
 
 (et-declare
  ;; nontrivial
- (@def copy-alist ([L R] alist: &List<&Cons<L~R>>) ListFresh<ConsFresh<L~R>>)
+ (@def copy-alist ([L R] alist: &List<&Cons<L_R>>) ListFresh<ConsFresh<L_R>>)
  (@def substring
-       (string: [<= T (or String &Vector)] &optional from: Integer? to: Integer?)
+       (string: [T <: (or String &Vector)] &optional from: Integer? to: Integer?)
        (freshen-shallow T))
  (@def substring-no-properties (string: String &optional from: Integer? to: Integer?) String)
  ;; nontrivial
@@ -90,14 +90,14 @@
  (@def member ([E] elt: Any list: &List<E>) &List<E>)
  (@def memq   ([E] elt: Any list: &List<E>) &List<E>)
  (@def memql  ([E] elt: Any list: &List<E>) &List<E>)
- (@def assq ([K V] key: K alist: &List<&Cons<K~V>>) &Cons<K~V>?)
- (@def assoc ([K V] key: K alist: &List<&Cons<K~V>>
+ (@def assq ([K V] key: K alist: &List<&Cons<K_V>>) &Cons<K_V>?)
+ (@def assoc ([K V] key: K alist: &List<&Cons<K_V>>
               &optional testfn: (or Nil (fn (Args V V) Any)))
-       &Cons<K~V>?)
- (@def rassq ([K V] key: V alist: &List<&Cons<K~V>>) &Cons<K~V>?)
- (@def rassoc ([K V] key: V alist: &List<&Cons<K~V>>
+       &Cons<K_V>?)
+ (@def rassq ([K V] key: V alist: &List<&Cons<K_V>>) &Cons<K_V>?)
+ (@def rassoc ([K V] key: V alist: &List<&Cons<K_V>>
                &optional testfn: (or Nil (fn (Args V V) Any)))
-       &Cons<K~V>?)
+       &Cons<K_V>?)
  (@def delq ([E] elt: Any list: List<E>) List<E>)
  (@def delete ([E] elt: E seq: List<E>) List<E>))
 
@@ -107,10 +107,10 @@
 
 (et-declare
  ;; nontrivial
- (@def nreverse (seq: [<= S OrdSeq]) S)
- (@def reverse (seq: [<= S &OrdSeq]) (freshen-shallow S))
+ (@def nreverse (seq: [S <: OrdSeq]) S)
+ (@def reverse (seq: [S <: &OrdSeq]) (freshen-shallow S))
  (@def sort
-       ([P E K] seq: [<= S (if-non-nil? P List<E>|Vector<E> &List<E>|&Vector<E>)]
+       ([P E K] seq: [S <: (if-non-nil? P List<E>|Vector<E> &List<E>|&Vector<E>)]
         &key
         key: (or (fn (Args E) K) Nil&{K:=:E})
         lessp: (fn (Args K K) Any)
@@ -126,14 +126,14 @@
  ;; nontrivial
  (@def plist-get
        ([K A] plist: A prop: K
-        &optional predicate: fn2<K~K>?)
-       (expand-1 PlistGet<A~K>))
+        &optional predicate: fn2<K_K>?)
+       (expand-1 PlistGet<A_K>))
  (@def get
-       ([(<= S Symbol)] symbol: Symbol propname: S)
+       ([(S <: Symbol)] symbol: Symbol propname: S)
        (symbol-property S))
  (@def plist-put
-       ([P K] plist: P prop: K val: PlistPut<P~K>
-        &optional predicate: fn2<K~K>?)
+       ([P K] plist: P prop: K val: PlistPut<P_K>
+        &optional predicate: fn2<K_K>?)
        P)
  (@check put
          ($pcase
@@ -145,7 +145,7 @@
                    (et-parse-type `(symbol-property (type ,prop-type)))))
              (et-chk ($expect ($eval value-type) ($at 3)))))))
  (@def plist-member
-       ([K V] plist: &PlistOf<K~V> prop: K
+       ([K V] plist: &PlistOf<K_V> prop: K
         &optional predicate: (or Nil (fn (Args K K) Any)))
        Any)
  (@def eql (obj1: Any obj2: Any) Boolean)
@@ -159,7 +159,7 @@
 
 (et-declare
  ;; nontrivial
- (@def fillarray ([E (<= A FillableArray<E>)] array: A item: E) A)
+ (@def fillarray ([E (A <: FillableArray<E>)] array: A item: E) A)
  (@def clear-string (string: String) Nil)
  (@def nconc ([E] &rest lists: List<List<E>>) List<E>))
 
@@ -176,7 +176,7 @@
        String)
  (@def mapcar ([E O] function: (fn (Args E) O) sequence: &MapSeq<E>) ListFresh<E>)
  (@def mapc ([E O] function: (fn (Args E) O) sequence: &MapSeq<E>) Nil)
- (@def mapcan ([E T (<= L List<T>)] function: (fn (Args E) L) sequence: &MapSeq<E>) L))
+ (@def mapcan ([E T (L <: List<T>)] function: (fn (Args E) L) sequence: &MapSeq<E>) L))
 
 
 ;;; ============================================================
@@ -192,8 +192,8 @@
 
 (et-declare
  (@def featurep (feature: Symbol &optional subfeature: Any) Boolean)
- (@def provide (feature: [(<= F Symbol)] &optional subfeatures: &List<Symbol>) F)
- (@def require (feature: [(<= F Symbol)] &optional filename: String? noerror: Bool) F?))
+ (@def provide (feature: [(F <: Symbol)] &optional subfeatures: &List<Symbol>) F)
+ (@def require (feature: [(F <: Symbol)] &optional filename: String? noerror: Bool) F?))
 
 
 ;;; ============================================================
@@ -246,8 +246,8 @@
 
 (et-declare
  ;; nontrivial
- (@def make-hash-table (&rest keyword-args: &List) HashTableFresh<Any~Any>) ; todo
- (@def copy-hash-table (table: [<= H &HashTable]) (freshen-shallow H))
+ (@def make-hash-table (&rest keyword-args: &List) HashTableFresh<Any_Any>) ; todo
+ (@def copy-hash-table (table: [H <: &HashTable]) (freshen-shallow H))
  (@def hash-table-count (table: &HashTable) Integer)
  (@def hash-table-rehash-size (table: &HashTable) Number)
  (@def hash-table-rehash-threshold (table: &HashTable) Number)
@@ -255,11 +255,11 @@
  (@def hash-table-test (table: &HashTable) Symbol)
  (@def hash-table-weakness (table: &HashTable) (or Nil @key @value @key-or-value @key-and-value))
  (@def hash-table-p ([T] obj: T) (is? T &HashTable))
- (@def clrhash (table: [<= H &HashTable]) H)
- (@def gethash ([V] key: Any table: &HashTable<Any~V> &optional dflt: V?) V)
- (@def puthash ([K V] key: K value: V table: HashTableW<K~V>) V)
- (@def remhash ([K] key: K table: HashTableW<K~Never>) Nil)
- (@def maphash ([K V] function: (fn (Args K V) Any) table: &HashTable<K~V>) Nil)
+ (@def clrhash (table: [H <: &HashTable]) H)
+ (@def gethash ([V] key: Any table: &HashTable<Any_V> &optional dflt: V?) V)
+ (@def puthash ([K V] key: K value: V table: HashTableW<K_V>) V)
+ (@def remhash ([K] key: K table: HashTableW<K_Never>) Nil)
+ (@def maphash ([K V] function: (fn (Args K V) Any) table: &HashTable<K_V>) Nil)
  ;; todo
  (@def define-hash-table-test
        (name: Symbol test: (fn (Args Any Any) Any)
@@ -267,10 +267,10 @@
        (Tuple AnyFn AnyFn))
  (@def internal--hash-table-histogram
        (hash-table: (Emacs hash-table))
-       List<Cons<Integer~Integer>>)
+       List<Cons<Integer_Integer>>)
  (@def internal--hash-table-buckets
        (hash-table: (Emacs hash-table))
-       List<List<Cons<Any~Integer>>>)
+       List<List<Cons<Any_Integer>>>)
  (@def internal--hash-table-index-size
        (hash-table: (Emacs hash-table))
        Integer))
@@ -303,7 +303,7 @@
        Integer?)
  (@def object-intervals
        (object: StringOrBuffer)
-       List<Tuple<Integer~Integer~&List>>)
+       List<Tuple<Integer_Integer_&List>>)
  (@def line-number-at-pos (&optional position: IntOrMarker? absolute: Bool) Integer))
 
 

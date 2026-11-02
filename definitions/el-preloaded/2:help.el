@@ -13,15 +13,15 @@
 
 (et-declare
  (@def help-key () String)
- (@variable help-map Cons<@keymap~Any>)
+ (@variable help-map Cons<@keymap_Any>)
  (@variable help-button-cache Any))
 
 ;;; ============================================================
 ;;; Quick help
 
 (et-declare
- (@variable help-quick-sections List<Cons<String~List<Cons<Symbol~String>>>>)
- (@variable help-quick-use-map Cons<@keymap~Any>)
+ (@variable help-quick-sections List<Cons<String_List<Cons<Symbol_String>>>>)
+ (@variable help-quick-use-map Cons<@keymap_Any>)
  (@def help-quick () String)
  (@def help-quick-toggle () String)
  (@def cheat-sheet () String))
@@ -59,7 +59,7 @@
  (@def describe-gnu-project () Any)
  (@def describe-no-warranty () Any)
  (@def describe-prefix-bindings () Any)
- (@def view-emacs-news (&optional version: Integer|String|Cons<Integer~Nil>?) Any)
+ (@def view-emacs-news (&optional version: Integer|String|Cons<Integer_Nil>?) Any)
  (@def view-emacs-todo (&optional arg: Any) Any)
  (@def view-echo-area-messages () Window?)
  (@def view-order-manuals () Any)
@@ -76,7 +76,7 @@
  (@variable describe-bindings-outline Boolean)
  (@variable describe-bindings-show-prefix-commands Boolean)
  (@variable describe-bindings-outline-rules
-            List<Cons<@match-regexp~String>|Cons<@custom-function~AnyFn>>)
+            List<Cons<@match-regexp_String>|Cons<@custom-function_AnyFn>>)
  (@def describe-bindings (&optional prefix: String|Vector<Any>|List<Any>? buffer: Buffer|String?) Any)
  (@def where-is (definition: Any &optional insert: Bool) Nil)
  (@def help-key-description (key: String|Vector<Any> untranslated: String|Vector<Any>?) String)
@@ -114,7 +114,7 @@
 
 (et-declare
  (@def describe-map
-       (map: &Cons<@keymap~Any>|Symbol
+       (map: &Cons<@keymap_Any>|Symbol
         &optional prefix: String|Vector<Any>? transl: Bool partial: Any shadow: Any
         nomenu: Bool mention-shadow: Bool buffer: Buffer?)
        Any))
@@ -123,8 +123,8 @@
 ;;; Resizing temporary buffer windows
 
 (et-declare
- (@variable temp-buffer-max-height Integer|fn1<Buffer~Integer>)
- (@variable temp-buffer-max-width Integer|fn1<Buffer~Integer>)
+ (@variable temp-buffer-max-height Integer|fn1<Buffer_Integer>)
+ (@variable temp-buffer-max-width Integer|fn1<Buffer_Integer>)
  (@variable temp-buffer-resize-mode Boolean)
  (@def temp-buffer-resize-mode (&optional arg: Bool) Any)
  (@variable resize-temp-buffer-window-inhibit Boolean)
@@ -152,20 +152,20 @@
  (@def help-split-fundoc
        ([A] docstring: String? def: Any &optional section: A)
        (switch A
-               [Nil Nil|Cons<String~String?>]
-               [True Cons<String?~String?>]
+               [Nil Nil|Cons<String_String?>]
+               [True Cons<String?_String?>]
                [@usage String?]
                [@doc String?]
                Nil))
  (@def help-add-fundoc-usage (docstring: String? arglist: True|String|List<Any>) String)
  (@def help-function-arglist (def: Any &optional preserve-names: Bool) List<Any>|String|True)
- (@def help-make-usage (function: Any arglist: List<Any>) ConsFresh<Symbol~ListFresh<Any>>))
+ (@def help-make-usage (function: Any arglist: List<Any>) ConsFresh<Symbol_ListFresh<Any>>))
 
 ;;; ============================================================
 ;;; Confusable characters
 
 (et-declare
- (@variable help-uni-confusables Alist<Integer~String>)
+ (@variable help-uni-confusables Alist<Integer_String>)
  (@variable help-uni-confusables-regexp String)
  (@def help-uni-confusable-suggestions (string: String) String?)
  (@def help-command-error-confusable-suggestions (data: Any context: Any signal: Any) Any))
@@ -176,8 +176,8 @@
 (et-declare
  (@def help-for-help-internal () Any)
  (@def describe-map-tree
-       (startmap: &Cons<@keymap~Any>|Symbol
-        &optional partial: Any shadow: &Cons<@keymap~Any>|Symbol|Nil title: String?
+       (startmap: &Cons<@keymap_Any>|Symbol
+        &optional partial: Any shadow: &Cons<@keymap_Any>|Symbol|Nil title: String?
         no-menu: Bool transl: Bool always-title: Bool mention-shadow: Bool buffer: Buffer?)
        Any))
 

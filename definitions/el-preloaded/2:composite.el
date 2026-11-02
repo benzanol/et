@@ -4,10 +4,10 @@
 ;;; Composition rule encoding
 
 (et-declare
- (@def encode-composition-rule (rule: Integer|Cons<Symbol|Integer~Symbol|Integer>|Cons<Symbol|Integer~Cons<Symbol|Integer~Cons<Integer~Cons<Integer~Nil>>>>) Integer)
- (@def decode-composition-rule (rule-code: Integer) Cons<Symbol~Symbol>|Cons<Symbol~Cons<Integer~Cons<Integer~Cons<Symbol~Nil>>>>)
- (@def encode-composition-components (components: [(<= T Vector<Any>|List<Any>)] &optional nocopy: Bool) T)
- (@def decode-composition-components (components: [(<= T Vector<Any>)] &optional nocopy: Bool) T))
+ (@def encode-composition-rule (rule: Integer|Cons<Symbol|Integer_Symbol|Integer>|Cons<Symbol|Integer_Cons<Symbol|Integer_Cons<Integer_Cons<Integer_Nil>>>>) Integer)
+ (@def decode-composition-rule (rule-code: Integer) Cons<Symbol_Symbol>|Cons<Symbol_Cons<Integer_Cons<Integer_Cons<Symbol_Nil>>>>)
+ (@def encode-composition-components (components: [(T <: Vector<Any>|List<Any>)] &optional nocopy: Bool) T)
+ (@def decode-composition-components (components: [(T <: Vector<Any>)] &optional nocopy: Bool) T))
 
 ;;; ============================================================
 ;;; Composing and decomposing text
@@ -17,13 +17,13 @@
  (@def decompose-region (start: IntOrMarker end: IntOrMarker) Any)
  (@def compose-string (string: String &optional start: Integer? end: Integer? components: Integer|String|&Vector<Any>|&List? modification-func: Any) String)
  (@def decompose-string (string: String) String)
- (@def compose-chars (&rest args: &List<Integer|Cons<Symbol|Integer~Symbol|Integer>|Cons<Symbol|Integer~Cons<Symbol|Integer~Cons<Integer~Cons<Integer~Nil>>>>>) String)
+ (@def compose-chars (&rest args: &List<Integer|Cons<Symbol|Integer_Symbol|Integer>|Cons<Symbol|Integer_Cons<Symbol|Integer_Cons<Integer_Cons<Integer_Nil>>>>>) String)
  ;; The result is a complex value-dependent list whose structure depends
  ;; on DETAIL-P and whether a valid composition was found. The type
  ;; language cannot yet express value-dependent result structure.
  (@def find-composition (pos: IntOrMarker &optional limit: IntOrMarker? string: String? detail-p: Bool) Todo)
  (@def compose-chars-after (pos: IntOrMarker &optional limit: IntOrMarker? object: String?) Any)
- (@def compose-last-chars (args: &Cons<Symbol~&Cons<Integer~&Cons<Integer|String|&Vector<Any>|&List?~Nil>>>) Any))
+ (@def compose-last-chars (args: &Cons<Symbol_&Cons<Integer_&Cons<Integer|String|&Vector<Any>|&List?_Nil>>>) Any))
 
 ;;; ============================================================
 ;;; Glyph-string accessors

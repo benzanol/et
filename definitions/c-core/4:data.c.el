@@ -52,11 +52,11 @@
 
 (et-declare
  (@def car ([T] list: (or Nil^{T:>:Nil} (&Cons T Any))) T)
- (@def car-safe ([O] object: O) (infer O [T] &Cons<T~Any> T Nil))
- (@def cdr ([T] list: (or Nil^{T:>:Nil} &Cons<Any~T>)) T)
- (@def cdr-safe ([O] object: O) (infer O [T] &Cons<Any~T> T Nil))
- (@def setcar ([A B] cell: Cons<A~B> newcar: A) A)
- (@def setcdr ([A B] cell: Cons<A~B> newcdr: B) B))
+ (@def car-safe ([O] object: O) (infer O [T] &Cons<T_Any> T Nil))
+ (@def cdr ([T] list: (or Nil^{T:>:Nil} &Cons<Any_T>)) T)
+ (@def cdr-safe ([O] object: O) (infer O [T] &Cons<Any_T> T Nil))
+ (@def setcar ([A B] cell: Cons<A_B> newcar: A) A)
+ (@def setcdr ([A B] cell: Cons<A_B> newcdr: B) B))
 
 
 ;;; ============================================================
@@ -65,8 +65,8 @@
 (et-declare
  (@def boundp (symbol: Symbol) Boolean)
  (@def fboundp (symbol: Symbol) Boolean)
- (@def makunbound (symbol: [<= S Var]) S)
- (@def fmakunbound (symbol: [<= S Var]) S)
+ (@def makunbound (symbol: [S <: Var]) S)
+ (@def fmakunbound (symbol: [S <: Var]) S)
  (@def symbol-function (symbol: Symbol) Any)
  (@def symbol-plist (symbol: Symbol) Any)
  (@def symbol-name (symbol: Symbol) String)
@@ -79,21 +79,21 @@
        (Emacs symbol-with-pos))
  (@def fset ([T] symbol: Var definition: T) T)
  (@def defalias
-       ([(<= S Var)] symbol: S definition: Any &optional docstring: String?)
+       ([(S <: Var)] symbol: S definition: Any &optional docstring: String?)
        S)
  (@def setplist ([P] symbol: Var newplist: P) P)
  (@def subr-arity (subr: Subr)
-       Cons<Integer~Integer|@many|@unevalled>)
+       Cons<Integer_Integer|@many|@unevalled>)
  (@def subr-name (subr: Subr) String)
  (@def native-comp-function-p ([T] object: T) (is-a? T AnyFn))
  (@def subr-native-lambda-list (subr: Subr) True|&List)
- (@def subr-type (subr: Subr) Tuple<@function~List<Sexp>~Sexp>?)
+ (@def subr-type (subr: Subr) Tuple<@function_List<Sexp>_Sexp>?)
  (@def subr-native-comp-unit (subr: Subr)
        (or Nil (Emacs native-comp-unit)))
  (@def native-comp-unit-file (comp-unit: (Emacs native-comp-unit)) Any)
  (@def native-comp-unit-set-file (comp-unit: (Emacs native-comp-unit) new-file: Any)
        (Emacs native-comp-unit))
- (@def interactive-form (cmd: Any) &Tuple<@interactive~Any>?)
+ (@def interactive-form (cmd: Any) &Tuple<@interactive_Any>?)
  (@def command-modes (command: Any) &List<Symbol>))
 
 
@@ -117,9 +117,9 @@
  (@def default-boundp (symbol: Symbol) Boolean)
  (@def default-value (symbol: Symbol) Any)
  (@def set-default ([T] symbol: Var value: T) T)
- (@def make-variable-buffer-local (variable: [<= V Var]) V)
- (@def make-local-variable (variable: [<= V Var]) V)
- (@def kill-local-variable (variable: [<= V Var]) V)
+ (@def make-variable-buffer-local (variable: [V <: Var]) V)
+ (@def make-local-variable (variable: [V <: Var]) V)
+ (@def kill-local-variable (variable: [V <: Var]) V)
  (@def local-variable-p (variable: Symbol &optional buffer: Buffer?) Boolean)
  (@def local-variable-if-set-p (variable: Symbol &optional buffer: Buffer?) Boolean)
  (@def variable-binding-locus (variable: Symbol) Buffer|Terminal?))
@@ -166,32 +166,32 @@
 ;;; Arithmetic operations
 
 (et-declare
- (@def + (&rest numbers-or-markers: [<= Nums &List<NumOrMarker>])
+ (@def + (&rest numbers-or-markers: [Nums <: &List<NumOrMarker>])
        (switch Nums [Nil 0] [&List<IntOrMarker> Integer] Number))
- (@def - (&optional number-or-marker: [<= Num NumOrMarker]
-                    &rest more-numbers-or-markers: [<= Nums &List<NumOrMarker>])
+ (@def - (&optional number-or-marker: [Num <: NumOrMarker]
+                    &rest more-numbers-or-markers: [Nums <: &List<NumOrMarker>])
        (switch Nums [Nil 0] [&List<IntOrMarker> Integer] Number))
- (@def * ([(<= Nums &List<NumOrMarker>)] &rest numbers-or-markers: Nums)
+ (@def * ([(Nums <: &List<NumOrMarker>)] &rest numbers-or-markers: Nums)
        (switch Nums [Nil 1] [&List<IntOrMarker> Integer] Number))
- (@def / ([(<= N NumOrMarker) (<= Ds &List<NumOrMarker>)] number: N &rest divisors: Ds)
+ (@def / ([(N <: NumOrMarker) (Ds <: &List<NumOrMarker>)] number: N &rest divisors: Ds)
        (extends? N IntOrMarker (extends? Ds &List<IntOrMarker> Integer Number) Number))
  (@def % (x: IntOrMarker y: IntOrMarker) Integer)
- (@def mod ([(<= X NumOrMarker) (<= Y NumOrMarker)] x: X y: Y)
+ (@def mod ([(X <: NumOrMarker) (Y <: NumOrMarker)] x: X y: Y)
        (extends? X IntOrMarker (extends? Y IntOrMarker Integer Number) Number))
  (@def max
-       ([(<= N NumOrMarker) (<= Ns &List<NumOrMarker>)] number-or-marker: N
+       ([(N <: NumOrMarker) (Ns <: &List<NumOrMarker>)] number-or-marker: N
         &rest numbers-or-markers: Ns)
-       (extends? &Cons<N~Ns> &List<IntOrMarker> Integer Number))
- (@def min ([(<= N NumOrMarker) (<= Ns &List<NumOrMarker>)]
+       (extends? &Cons<N_Ns> &List<IntOrMarker> Integer Number))
+ (@def min ([(N <: NumOrMarker) (Ns <: &List<NumOrMarker>)]
             number-or-marker: N &rest numbers-or-markers: Ns)
-       (extends? &Cons<N~Ns> &List<IntOrMarker> Integer Number))
+       (extends? &Cons<N_Ns> &List<IntOrMarker> Integer Number))
  (@def logand (&rest ints-or-markers: &List<IntOrMarker>) Integer)
  (@def logior (&rest ints-or-markers: &List<IntOrMarker>) Integer)
  (@def logxor (&rest ints-or-markers: &List<IntOrMarker>) Integer)
  (@def logcount (value: Integer) Integer)
  (@def ash (value: Integer count: Integer) Integer)
- (@def 1+ (number: [<= N NumOrMarker]) (extends? N IntOrMarker Integer Number))
- (@def 1- (number: [<= N NumOrMarker]) (extends? N IntOrMarker Integer Number))
+ (@def 1+ (number: [N <: NumOrMarker]) (extends? N IntOrMarker Integer Number))
+ (@def 1- (number: [N <: NumOrMarker]) (extends? N IntOrMarker Integer Number))
  (@def lognot (number: Integer) Integer)
  (@def byteorder () 66|108))
 
@@ -203,16 +203,16 @@
  ;; If c is nil, always return the vector.
  ;; If c is a vector, return the vector only if it changed.
  (@def bool-vector-exclusive-or
-       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       ([(C <: BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
        (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-union
-       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       ([(C <: BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
        (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-intersection
-       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       ([(C <: BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
        (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-set-difference
-       ([(<= C BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
+       ([(C <: BoolVector?)] a: BoolVector b: BoolVector &optional c: C)
        (if-nil? C BoolVector BoolVector?))
  (@def bool-vector-subsetp (a: BoolVector b: BoolVector) Boolean)
  (@def bool-vector-not (a: BoolVector &optional b: BoolVector?) BoolVector)

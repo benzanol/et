@@ -13,9 +13,9 @@
 ;;; Keyboard macro execution
 
 (et-declare
- (@def call-last-kbd-macro (&optional prefix: Nil|@-|Cons<Integer~Any>|Integer loopfunc: AnyFn?) Nil)
+ (@def call-last-kbd-macro (&optional prefix: Nil|@-|Cons<Integer_Any>|Integer loopfunc: AnyFn?) Nil)
  (@def execute-kbd-macro
-       (macro: Symbol|String|Vector &optional count: Nil|@-|Cons<Integer~Any>|Integer loopfunc: AnyFn?)
+       (macro: Symbol|String|Vector &optional count: Nil|@-|Cons<Integer_Any>|Integer loopfunc: AnyFn?)
        Nil))
 
 ;;; ============================================================

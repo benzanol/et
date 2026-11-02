@@ -66,8 +66,8 @@
  (@def window-hscroll (&optional window: Window?) Integer)
  (@def set-window-hscroll (window: Window? ncol: Integer) Integer)
  (@def coordinates-in-window-p
-       (coordinates: &Cons<Number~Number> window: Window?)
-       Cons<Number~Number>|@mode-line|@vertical-line|@header-line|@tab-line|@left-fringe|@right-fringe|@left-margin|@right-margin|@right-divider|@bottom-divider?)
+       (coordinates: &Cons<Number_Number> window: Window?)
+       Cons<Number_Number>|@mode-line|@vertical-line|@header-line|@tab-line|@left-fringe|@right-fringe|@left-margin|@right-margin|@right-divider|@bottom-divider?)
  (@def window-at (x: Integer y: Integer &optional frame: Frame?) Window?))
 
 
@@ -79,18 +79,18 @@
  (@def window-old-point (&optional window: Window?) Integer)
  (@def window-start (&optional window: Window?) Integer)
  (@def window-end (&optional window: Window? update: Bool) Integer)
- (@def set-window-point ([(<= P IntOrMarker)] window: Window? pos: P) P)
- (@def set-window-start ([(<= P IntOrMarker)] window: Window? pos: P &optional noforce: Bool) P)
+ (@def set-window-point ([(P <: IntOrMarker)] window: Window? pos: P) P)
+ (@def set-window-start ([(P <: IntOrMarker)] window: Window? pos: P &optional noforce: Bool) P)
  (@def pos-visible-in-window-p
        (&optional pos: IntOrMarker|@t? window: Window? partially: Bool)
-       Boolean|Tuple<Integer~Integer>|Tuple<Integer~Integer~Integer~Integer~Integer~Integer>)
+       Boolean|Tuple<Integer_Integer>|Tuple<Integer_Integer_Integer_Integer_Integer_Integer>)
  (@def window-line-height
        (&optional line: Integer|@header-line|@mode-line? window: Window?)
-       Tuple<Integer~Integer~Integer~Integer>?)
+       Tuple<Integer_Integer_Integer_Integer>?)
  (@def window-lines-pixel-dimensions
        (&optional window: Window? first: Integer? last: Integer?
         body: Bool inverse: Bool left: Bool)
-       List<Cons<Integer~Integer>>))
+       List<Cons<Integer_Integer>>))
 
 
 ;;; ============================================================
@@ -99,13 +99,13 @@
 (et-declare
  (@def window-dedicated-p (&optional window: Window?) Bool)
  (@def set-window-dedicated-p (window: Window? flag: Bool) Bool)
- (@def window-prev-buffers (&optional window: Window?) List<Tuple<Buffer~Integer~Integer>>)
+ (@def window-prev-buffers (&optional window: Window?) List<Tuple<Buffer_Integer_Integer>>)
  (@def set-window-prev-buffers
-       (window: Window? prev_buffers: List<Tuple<Buffer~Integer~Integer>>)
-       List<Tuple<Buffer~Integer~Integer>>)
+       (window: Window? prev_buffers: List<Tuple<Buffer_Integer_Integer>>)
+       List<Tuple<Buffer_Integer_Integer>>)
  (@def window-next-buffers (&optional window: Window?) List<Buffer>)
  (@def set-window-next-buffers (window: Window? next_buffers: List<Buffer>) List<Buffer>)
- (@def window-parameters (&optional window: Window?) Alist<Any~Any>)
+ (@def window-parameters (&optional window: Window?) Alist<Any_Any>)
  (@def window-parameter (window: Window? parameter: Any) Any)
  (@def set-window-parameter (window: Window? parameter: Any value: Any) Any)
  (@def window-display-table (&optional window: Window?) Any)
@@ -138,7 +138,7 @@
  (@def uncombine-window (window: Window?) Boolean)
  (@def split-window-internal
        (old: Window? pixel_size: Integer side: Any normal_size: Any
-        &optional refer: Window|Cons<Window~Window|@t>?)
+        &optional refer: Window|Cons<Window_Window|@t>?)
        Window)
  (@def delete-window-internal (window: Window?) Nil)
  (@def resize-mini-window-internal (window: Window) True)
@@ -166,16 +166,16 @@
        Boolean)
  (@def current-window-configuration (&optional frame: Frame?) WindowConfiguration)
  (@def set-window-margins (window: Window? left_width: Integer? &optional right_width: Integer?) Boolean)
- (@def window-margins (&optional window: Window?) Cons<Integer?~Integer?>)
+ (@def window-margins (&optional window: Window?) Cons<Integer?_Integer?>)
  (@def set-window-fringes
        (window: Window? left_width: Integer?
         &optional right_width: Integer? outside_margins: Bool persistent: Bool)
        Boolean)
- (@def window-fringes (&optional window: Window?) Tuple<Integer~Integer~Boolean~Boolean>)
+ (@def window-fringes (&optional window: Window?) Tuple<Integer_Integer_Boolean_Boolean>)
  (@def set-window-cursor-type
-       (window: Window? type: @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar~Integer>?)
-       @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar~Integer>?)
- (@def window-cursor-type (&optional window: Window?) @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar~Integer>?)
+       (window: Window? type: @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar_Integer>?)
+       @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar_Integer>?)
+ (@def window-cursor-type (&optional window: Window?) @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar_Integer>?)
  (@def window-cursor-info (&optional window: Window?) Nil|Vector<Any>)
  (@def set-window-scroll-bars
        (window: Window? &optional width: Integer? vertical_type: @left|@right|@t?
@@ -183,7 +183,7 @@
        Boolean)
  (@def window-scroll-bars
        (&optional window: Window?)
-       Tuple<Integer?~Integer~@left|@right|@t?~Integer?~Integer~@bottom|@t?~Boolean>)
+       Tuple<Integer?_Integer_@left|@right|@t?_Integer?_Integer_@bottom|@t?_Boolean>)
  (@def window-vscroll (&optional window: Window? pixels_p: Bool) Number)
  (@def set-window-vscroll
        (window: Window? vscroll: Number &optional pixels_p: Bool preserve_vscroll_p: Bool)

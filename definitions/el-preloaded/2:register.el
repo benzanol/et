@@ -121,9 +121,9 @@
                          Marker))))
  (@def register-preview (buffer: String|Buffer &optional show-empty: Bool) Any)
  (@variable register-preview-display-buffer-alist
-            (Cons (or (fn (Args Buffer Alist<Symbol~Any>) Window?)
-                      (List (fn (Args Buffer Alist<Symbol~Any>) Window?)))
-                  Alist<Symbol~Any>))
+            (Cons (or (fn (Args Buffer Alist<Symbol_Any>) Window?)
+                      (List (fn (Args Buffer Alist<Symbol_Any>) Window?)))
+                  Alist<Symbol_Any>))
  (@def register-preview-1
        (buffer: String|Buffer &optional show-empty: Bool types: &List<Symbol>?)
        Any)
@@ -174,8 +174,8 @@
 ;;; Numbers and viewing registers
 
 (et-declare
- (@def number-to-register (number: Nil|@-|Cons<Integer~Any>|Integer register: Integer) Integer)
- (@def increment-register (prefix: Nil|@-|Cons<Integer~Any>|Integer register: Integer) Any)
+ (@def number-to-register (number: Nil|@-|Cons<Integer_Any>|Integer register: Integer) Integer)
+ (@def increment-register (prefix: Nil|@-|Cons<Integer_Any>|Integer register: Integer) Any)
  (@def view-register (register: Integer) Any)
  (@def list-registers () Nil)
  (@def describe-register-1 (register: Integer &optional verbose: Bool) Any)

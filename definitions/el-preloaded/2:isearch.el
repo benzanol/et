@@ -57,19 +57,19 @@
 ;;; Help and keymaps
 
 (et-declare
- (@variable isearch-help-map Cons<@keymap~Any>)
+ (@variable isearch-help-map Cons<@keymap_Any>)
  (@def isearch-help-for-help () Any)
  (@def isearch-describe-bindings () Any)
  (@def isearch-describe-key () Any)
  (@def isearch-describe-mode () Any)
  (@def isearch-tmm-menubar () Any)
  (@variable isearch-menu-bar-commands List<Symbol>)
- (@variable isearch-mode-map Cons<@keymap~Any>)
- (@variable isearch-menu-bar-map Cons<@keymap~Any>)
- (@variable isearch-tool-bar-old-map Cons<@keymap~Any>?)
+ (@variable isearch-mode-map Cons<@keymap_Any>)
+ (@variable isearch-menu-bar-map Cons<@keymap_Any>)
+ (@variable isearch-tool-bar-old-map Cons<@keymap_Any>?)
  (@def isearch-tool-bar-image (image-name: String) Any)
- (@variable isearch-tool-bar-map Cons<@keymap~Any>)
- (@variable minibuffer-local-isearch-map Cons<@keymap~Any>))
+ (@variable isearch-tool-bar-map Cons<@keymap_Any>)
+ (@variable minibuffer-local-isearch-map Cons<@keymap_Any>))
 
 ;;; ============================================================
 ;;; Mode state variables
@@ -137,7 +137,7 @@
  (@variable isearch-mouse-commands List<Symbol>)
  (@def isearch-mouse-leave-buffer () Any)
  (@def isearch-update-ring (string: String &optional regexp: Bool) Any)
- (@def isearch-string-propertize (string: String &optional properties: PlistOf<Symbol~Any>) String)
+ (@def isearch-string-propertize (string: String &optional properties: PlistOf<Symbol_Any>) String)
  (@def isearch-update-from-string-properties (string: String) Any))
 
 ;;; ============================================================
@@ -188,7 +188,7 @@
         isearch-toggle-regexp isearch-toggle-lax-whitespace
         isearch-toggle-case-fold isearch-toggle-invisible]
        () Any)
- (@variable isearch-message-properties PlistOf<Symbol~Any>)
+ (@variable isearch-message-properties PlistOf<Symbol_Any>)
  (@def word-search-regexp (string: String &optional lax: Bool) String)
  (@def word-search-backward (string: String &optional bound: IntOrMarker? noerror: Bool count: Integer?) Integer?)
  (@def word-search-forward (string: String &optional bound: IntOrMarker? noerror: Bool count: Integer?) Integer?)
@@ -360,7 +360,7 @@
  (@variable isearch-lazy-count-current Integer?)
  (@variable isearch-lazy-count-total Integer?)
  (@variable isearch-lazy-count-invisible Integer?)
- (@variable isearch-lazy-count-hash HashTable<Integer~Integer>)
+ (@variable isearch-lazy-count-hash HashTable<Integer_Integer>)
  (@variable lazy-count-update-hook List<AnyFn>)
  (@def lazy-highlight-cleanup (&optional force: Bool procrastinate: Bool) Any)
  (@def isearch-lazy-highlight-new-loop (&optional beg: IntOrMarker? end: IntOrMarker?) Any)
@@ -386,7 +386,7 @@
        fn)
  (@def isearch-search-fun-in-noncontiguous-region
        (search-fun: (or Nil (fn (Args String IntOrMarker? Bool Integer?) Integer?))
-        bounds: &List<&Cons<Integer~Integer>>)
+        bounds: &List<&Cons<Integer_Integer>>)
        (fn (Args String IntOrMarker? Bool Integer?) Integer?))
  (@def isearch-search-fun-in-text-property
        (search-fun: (or Nil (fn (Args String IntOrMarker? Bool Integer?) Integer?))

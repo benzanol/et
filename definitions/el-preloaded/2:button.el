@@ -22,14 +22,14 @@
 (et-declare
  (@def button-start (button: Overlay|IntOrMarker) Integer)
  (@def button-end (button: Overlay|IntOrMarker) Integer)
- (@def button-get (button: Overlay|IntOrMarker|Cons<String~Integer> prop: Symbol) Any)
- (@def button-put (button: Overlay|IntOrMarker|Cons<String~Integer> prop: Symbol val: Any) Any)
+ (@def button-get (button: Overlay|IntOrMarker|Cons<String_Integer> prop: Symbol) Any)
+ (@def button-put (button: Overlay|IntOrMarker|Cons<String_Integer> prop: Symbol val: Any) Any)
  (@def button-activate
-       (button: Overlay|IntOrMarker|Cons<String~Integer> &optional use-mouse-action: Bool)
+       (button: Overlay|IntOrMarker|Cons<String_Integer> &optional use-mouse-action: Bool)
        Any)
- (@def button-label (button: Overlay|IntOrMarker|Cons<String~Integer>) String)
- (@def button-type (button: Overlay|IntOrMarker|Cons<String~Integer>) Symbol)
- (@def button-has-type-p (button: Overlay|IntOrMarker|Cons<String~Integer> type: Symbol) Boolean))
+ (@def button-label (button: Overlay|IntOrMarker|Cons<String_Integer>) String)
+ (@def button-type (button: Overlay|IntOrMarker|Cons<String_Integer>) Symbol)
+ (@def button-has-type-p (button: Overlay|IntOrMarker|Cons<String_Integer> type: Symbol) Boolean))
 
 ;;; ============================================================
 ;;; Creating overlay buttons
@@ -43,7 +43,7 @@
 
 (et-declare
  (@def make-text-button
-       ([(<= B String|IntOrMarker)] beg: B end: IntOrMarker? &rest properties: &List<Any>)
+       ([(B <: String|IntOrMarker)] beg: B end: IntOrMarker? &rest properties: &List<Any>)
        (extends? B String String B))
  (@def insert-text-button (label: String &rest properties: &List<Any>) Integer))
 

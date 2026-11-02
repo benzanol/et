@@ -16,23 +16,23 @@
  ;; generic used elsewhere in this file does not apply. See timer-create
  ;; for why the timer type itself cannot be expressed.
  (@def timer-inc-time (timer: Todo secs: Number &optional usecs: Integer? psecs: Integer?) TimeOutput)
- (@def timer-set-function (timer: [T] function: fn<&List~Any> &optional args: &List?) T)
+ (@def timer-set-function (timer: [T] function: fn<&List_Any> &optional args: &List?) T)
  ;; The timer and reuse-cell parameters both embed the unrepresentable
  ;; timer type: reuse-cell is a mutable cons cell spliced directly into
  ;; `timer-list' or `timer-idle-list', whose car holds a timer. See
  ;; timer-create for why the timer type itself cannot be expressed.
- (@def timer-activate (timer: Todo &optional triggered-p: Bool reuse-cell: Cons<Todo~List<Todo>>?) Nil)
+ (@def timer-activate (timer: Todo &optional triggered-p: Bool reuse-cell: Cons<Todo_List<Todo>>?) Nil)
  ;; Same limitation as timer-activate: the timer type cannot be expressed,
  ;; and reuse-cell is a mutable cons cell holding a timer.
- (@def timer-activate-when-idle (timer: Todo &optional dont-wait: Bool reuse-cell: Cons<Todo~List<Todo>>?) Nil)
+ (@def timer-activate-when-idle (timer: Todo &optional dont-wait: Bool reuse-cell: Cons<Todo_List<Todo>>?) Nil)
  ;; The timer parameter embeds the unrepresentable timer type. See
  ;; timer-create for why the timer type itself cannot be expressed.
  (@def cancel-timer (timer: Todo) Nil)
  ;; Same limitation as cancel-timer for the parameter; the return value is
  ;; the same kind of mutable cons cell described for timer-activate's
  ;; reuse-cell, or nil if the timer was not found in either list.
- (@def cancel-timer-internal (timer: Todo) Cons<Todo~List<Todo>>?)
- (@def cancel-function-timers (function: fn<&List~Any>) Nil)
+ (@def cancel-timer-internal (timer: Todo) Cons<Todo_List<Todo>>?)
+ (@def cancel-function-timers (function: fn<&List_Any>) Nil)
  ;; The timer parameter embeds the unrepresentable timer type. See
  ;; timer-create for why the timer type itself cannot be expressed.
  (@def timer-until (timer: Todo time: Timestamp) Number)
@@ -43,16 +43,16 @@
  (@def timeout-event-p (event: Any) Boolean)
  ;; The return value is a newly created timer. See timer-create for why
  ;; the timer type itself cannot be expressed.
- (@def run-at-time (time: Timestamp|String|True repeat: Number? function: fn<&List~Any> &rest args: &List) Todo)
+ (@def run-at-time (time: Timestamp|String|True repeat: Number? function: fn<&List_Any> &rest args: &List) Todo)
  ;; Same limitation as run-at-time: the return value is a newly created
  ;; timer whose type cannot be expressed.
- (@def run-with-timer (secs: Number repeat: Number? function: fn<&List~Any> &rest args: &List) Todo)
+ (@def run-with-timer (secs: Number repeat: Number? function: fn<&List_Any> &rest args: &List) Todo)
  ;; Same limitation as run-at-time: the return value is a newly created
  ;; timer whose type cannot be expressed.
  (@def add-timeout (secs: Number function: fn1<Any> object: Any &optional repeat: Number?) Todo)
  ;; Same limitation as run-at-time: the return value is a newly created
  ;; timer whose type cannot be expressed.
- (@def run-with-idle-timer (secs: Timestamp repeat: Bool function: fn<&List~Any> &rest args: &List) Todo)
+ (@def run-with-idle-timer (secs: Timestamp repeat: Bool function: fn<&List_Any> &rest args: &List) Todo)
  ;; with-timeout destructures its first operand into a SECONDS expression
  ;; and TIMEOUT-FORMS, evaluates SECONDS and BODY, and returns either
  ;; BODY's value or TIMEOUT-FORMS' value depending on whether a timeout

@@ -10,7 +10,7 @@
  (@def string-to-char (string: String) Integer)
  (@def point () Integer)
  (@def point-marker () Marker)
- (@def goto-char ([(<= P IntOrMarker)] position: P) P)
+ (@def goto-char ([(P <: IntOrMarker)] position: P) P)
  (@def region-beginning () Integer)
  (@def region-end () Integer)
  (@def mark-marker () Marker)
@@ -141,13 +141,13 @@
 
 (et-declare
  (@def ngettext
-       ([(<= S String) (<= P String)] msgid: S msgid-plural: P n: Integer)
+       ([(S <: String) (P <: String)] msgid: S msgid-plural: P n: Integer)
        S|P)
  (@def message (format-string: String? &rest args: &List) String?)
  (@def message-box (format-string: String? &rest args: &List) String?)
  (@def message-or-box (format-string: String? &rest args: &List) String?)
  (@def current-message () String?)
- (@def propertize (string: String &rest properties: &PlistOf<Symbol~Any>) String)
+ (@def propertize (string: String &rest properties: &PlistOf<Symbol_Any>) String)
  (@def format (string: String &rest objects: &List) String)
  (@def format-message (string: String &rest objects: &List) String))
 

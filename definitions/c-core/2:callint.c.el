@@ -20,6 +20,6 @@
 ;;; Prefix arguments
 
 (et-declare
- (@def prefix-numeric-value (raw: Nil|@-|Cons<Integer~Any>|Integer) Integer))
+ (@def prefix-numeric-value (raw: Nil|@-|Cons<Integer_Any>|Integer) Integer))
 
 ;;; ============================================================

@@ -11,7 +11,7 @@
  (@def frame-windows-min-size
        (frame: Frame horizontal: Bool ignore: Any pixelwise: Bool)
        Integer)
- (@def make-terminal-frame (parms: Alist<Symbol~Any>) Frame))
+ (@def make-terminal-frame (parms: Alist<Symbol_Any>) Frame))
 
 
 ;;; ============================================================
@@ -19,7 +19,7 @@
 
 (et-declare
  (@def select-frame (frame: Frame &optional norecord: Bool) Frame?)
- (@def handle-switch-frame (event: Frame|Cons<@switch-frame~Cons<Frame~Any>>) Frame?)
+ (@def handle-switch-frame (event: Frame|Cons<@switch-frame_Cons<Frame_Any>>) Frame?)
  (@def selected-frame () Frame)
  (@def old-selected-frame () Frame)
  (@def frame-list () List<Frame>)
@@ -63,9 +63,9 @@
 ;;; Frame parameters and geometry
 
 (et-declare
- (@def frame-parameters (&optional frame: Frame?) Alist<Symbol~Any>?)
+ (@def frame-parameters (&optional frame: Frame?) Alist<Symbol_Any>?)
  (@def frame-parameter (frame: Frame? parameter: Symbol) Any)
- (@def modify-frame-parameters (frame: Frame? alist: Alist<Symbol~Any>) Nil)
+ (@def modify-frame-parameters (frame: Frame? alist: Alist<Symbol_Any>) Nil)
  (@def frame-char-height (&optional frame: Frame?) Integer)
  (@def frame-char-width (&optional frame: Frame?) Integer)
  (@def frame-native-width (&optional frame: Frame?) Integer)
@@ -93,7 +93,7 @@
  (@def set-frame-size
        (frame: Frame? width: Integer height: Integer &optional pixelwise: Bool)
        Nil)
- (@def frame-position (&optional frame: Frame?) Cons<Integer~Integer>)
+ (@def frame-position (&optional frame: Frame?) Cons<Integer_Integer>)
  (@def set-frame-position (frame: Frame? x: Integer y: Integer) True)
  (@def set-frame-size-and-position-pixelwise
        (frame: Frame? width: Integer height: Integer x: Integer y: Integer
@@ -112,7 +112,7 @@
        (attribute: String class: String &optional component: String? subclass: String?)
        String?)
  (@def x-parse-geometry (string: String)
-       Alist<@left|@top|@width|@height~Integer|Tuple<@plus|@minus~Integer>>))
+       Alist<@left|@top|@width|@height_Integer|Tuple<@plus|@minus_Integer>>))
 
 
 ;;; ============================================================
@@ -120,7 +120,7 @@
 
 (et-declare
  (@def frame-pointer-visible-p (&optional frame: Frame?) Boolean)
- (@def mouse-position-in-root-frame () Cons<Integer~Integer>?)
+ (@def mouse-position-in-root-frame () Cons<Integer_Integer>?)
  (@def reconsider-frame-fonts (frame: Frame?) Nil))
 
 ;;; ============================================================

@@ -24,15 +24,15 @@
  ;; runtime value.
  (@def read-from-minibuffer
        (prompt: String
-        &optional initial-contents: String|Cons<String~Integer?>?
-        keymap: (or Nil Cons<@keymap~Any> Symbol) read: Bool
-        hist: Symbol|Cons<Symbol~Integer?>?
+        &optional initial-contents: String|Cons<String_Integer?>?
+        keymap: (or Nil Cons<@keymap_Any> Symbol) read: Bool
+        hist: Symbol|Cons<Symbol_Integer?>?
         default-value: String|List<String>? inherit-input-method: Bool)
        Todo)
  (@def read-string
        (prompt: String
-        &optional initial-input: String|Cons<String~Integer?>?
-        history: Symbol|Cons<Symbol~Integer?>?
+        &optional initial-input: String|Cons<String_Integer?>?
+        history: Symbol|Cons<Symbol_Integer?>?
         default-value: String|List<String>? inherit-input-method: Bool)
        String)
  (@def read-command (prompt: String &optional default-value: Symbol|String|List<String>?) Symbol?)
@@ -49,25 +49,25 @@
  (@def try-completion
        (string: String
         collection: (or (Emacs hash-table) Obarray Vector
-                        List<Cons<String|Symbol~Any>|String|Symbol>
+                        List<Cons<String|Symbol_Any>|String|Symbol>
                         AnyFn)
         &optional predicate: AnyFn?)
        String|Boolean)
  (@def all-completions
        (string: String
         collection: (or (Emacs hash-table) Obarray Vector
-                        List<Cons<String|Symbol~Any>|String|Symbol>
+                        List<Cons<String|Symbol_Any>|String|Symbol>
                         AnyFn)
         &optional predicate: AnyFn?)
        ListFresh<String>)
  (@def completing-read
        (prompt: String
         collection: (or (Emacs hash-table) Obarray Vector
-                        List<Cons<String|Symbol~Any>|String|Symbol>
+                        List<Cons<String|Symbol_Any>|String|Symbol>
                         AnyFn)
         &optional predicate: AnyFn? require-match: Any
-        initial-input: String|Cons<String~Integer?>?
-        hist: Symbol|Cons<Symbol~Integer?>?
+        initial-input: String|Cons<String_Integer?>?
+        hist: Symbol|Cons<Symbol_Integer?>?
         def: String|List<String>? inherit-input-method: Bool)
        String)
  ;; A non-nil return is documented to mean "valid completion", but when
@@ -77,7 +77,7 @@
  (@def test-completion
        (string: String
         collection: (or (Emacs hash-table) Obarray Vector
-                        List<Cons<String|Symbol~Any>|String|Symbol>
+                        List<Cons<String|Symbol_Any>|String|Symbol>
                         AnyFn)
         &optional predicate: AnyFn?)
        Bool)
@@ -87,9 +87,9 @@
  ;; parameter's runtime value.
  (@def internal-complete-buffer (string: String predicate: AnyFn? flag: Any) Todo)
  (@def assoc-string
-       (key: String|Symbol list: List<Cons<String|Symbol~Any>|String|Symbol>
+       (key: String|Symbol list: List<Cons<String|Symbol_Any>|String|Symbol>
         &optional case-fold: Bool)
-       Cons<String|Symbol~Any>|String|Symbol|Nil))
+       Cons<String|Symbol_Any>|String|Symbol|Nil))
 
 ;;; ============================================================
 ;;; Minibuffer information
