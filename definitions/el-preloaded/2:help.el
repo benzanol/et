@@ -32,7 +32,7 @@
 (et-declare
  (@def help-quit () Nil)
  (@variable help-return-method
-            (or Nil (Cons Window True|@quit-window) (Tuple Window Buffer Integer Integer)))
+            (or Nil (Cons Window True|@quit-window) (tuple Window Buffer Integer Integer)))
  (@def help-print-return-message (&optional function: fn1<String>?) Any))
 
 ;;; ============================================================

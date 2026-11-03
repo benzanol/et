@@ -26,7 +26,7 @@
 ;;; Color handling
 
 (et-declare
- (@def color-values-from-color-spec (spec: String) (or Nil (Tuple Integer Integer Integer)))
+ (@def color-values-from-color-spec (spec: String) (or Nil (tuple Integer Integer Integer)))
  (@def color-gray-p (color: String &optional frame: Frame?) Boolean)
  (@def color-supported-p (color: String &optional frame: Frame? background-p: Bool) Boolean))
 
@@ -39,7 +39,7 @@
  ;; each position (family: String, width/weight/slant: Symbol,
  ;; point-size: Integer, fixed-p: Boolean, full: String, registry: String).
  ;; Vector<E> only expresses one homogeneous element type; the type
- ;; language has no per-position vector-tuple facility (unlike Tuple for
+ ;; language has no per-position vector-tuple facility (unlike tuple for
  ;; Cons chains).
  (@def x-family-fonts (&optional family: String? frame: Frame?) List<Vector<Any>>)
  (@def x-list-fonts
@@ -71,7 +71,7 @@
  (@def internal-get-lisp-face-attribute
        (symbol: Symbol keyword: Symbol &optional frame: True|Frame?)
        Any)
- (@def internal-lisp-face-attribute-values (attr: Symbol) (or Nil (Tuple True Nil)))
+ (@def internal-lisp-face-attribute-values (attr: Symbol) (or Nil (tuple True Nil)))
  (@def internal-merge-in-global-face (face: Symbol frame: Frame) Nil)
  (@def face-font
        (face: Symbol &optional frame: True|Frame? character: Integer?)
@@ -90,7 +90,7 @@
        ([R] color1: (or String &ColorTriple)
         color2: (or String &ColorTriple)
         &optional frame: Frame?
-        metric: (or Nil (fn (Args &ColorTriple &ColorTriple) R)))
+        metric: (or Nil (fn (&tuple &ColorTriple &ColorTriple) R)))
        Integer|R))
 
 

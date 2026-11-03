@@ -22,7 +22,7 @@
  (@variable isearch-message-function fn?)
  (@variable isearch-wrap-function fn?)
  (@variable isearch-push-state-function fn?)
- (@variable isearch-filter-predicate (fn (Args IntOrMarker IntOrMarker) Boolean))
+ (@variable isearch-filter-predicate (fn (&tuple IntOrMarker IntOrMarker) Boolean))
  (@variable isearch-text-conversion-style Any)
  (@variable search-ring List<String>)
  (@variable regexp-search-ring List<String>)
@@ -31,7 +31,7 @@
  (@variable search-ring-yank-pointer List<String>?)
  (@variable regexp-search-ring-yank-pointer List<String>?)
  (@variable search-ring-update Boolean)
- (@variable search-default-mode Boolean|(fn (Args String Bool?) String)))
+ (@variable search-default-mode Boolean|(fn (&tuple String Bool?) String)))
 
 ;;; ============================================================
 ;;; Highlighting customization
@@ -77,7 +77,7 @@
 (et-declare
  (@variable isearch-forward Boolean)
  (@variable isearch-regexp Boolean)
- (@variable isearch-regexp-function Boolean|(fn (Args String Bool?) String))
+ (@variable isearch-regexp-function Boolean|(fn (&tuple String Bool?) String))
  (@variable isearch-lax-whitespace Boolean)
  (@variable isearch-regexp-lax-whitespace Boolean)
  (@variable isearch-cmds List<Any>)
@@ -131,7 +131,7 @@
 ;;; Mode setup and updating
 
 (et-declare
- (@def isearch-mode (forward: Bool &optional regexp: Bool op-fun: fn? recursive-edit: Bool regexp-function: Boolean|(fn (Args String Bool?) String)) Boolean)
+ (@def isearch-mode (forward: Bool &optional regexp: Bool op-fun: fn? recursive-edit: Bool regexp-function: Boolean|(fn (&tuple String Bool?) String)) Boolean)
  (@def isearch-update () Any)
  (@def isearch-done (&optional nopush: Bool edit: Bool) Any)
  (@variable isearch-mouse-commands List<Symbol>)
@@ -153,7 +153,7 @@
 (et-declare
  (@def isearch-exit () Any)
  (@def isearch-fail-pos (&optional msg: Bool) Integer?)
- (@variable isearch-new-regexp-function Boolean|(fn (Args String Bool?) String))
+ (@variable isearch-new-regexp-function Boolean|(fn (&tuple String Bool?) String))
  (@variable isearch-suspended Boolean)
  ;; The body forms must type-check under the macro's dynamic rebinding of
  ;; many isearch-* globals, but the macro's return value comes from later
@@ -293,9 +293,9 @@
 ;;; Search execution
 
 (et-declare
- (@variable isearch-search-fun-function (fn Nil (fn (Args String IntOrMarker? Bool Integer?) Integer?)))
- (@def isearch-search-fun () (fn (Args String IntOrMarker? Bool Integer?) Integer?))
- (@def isearch-search-fun-default () (fn (Args String IntOrMarker? Bool Integer?) Integer?))
+ (@variable isearch-search-fun-function (fn Nil (fn (&tuple String IntOrMarker? Bool Integer?) Integer?)))
+ (@def isearch-search-fun () (fn (&tuple String IntOrMarker? Bool Integer?) Integer?))
+ (@def isearch-search-fun-default () (fn (&tuple String IntOrMarker? Bool Integer?) Integer?))
  (@def isearch-search-string (string: String bound: IntOrMarker? noerror: Bool) Integer?)
  (@def isearch-search () Any))
 
@@ -354,7 +354,7 @@
  (@variable isearch-lazy-highlight-regexp Boolean)
  (@variable isearch-lazy-highlight-lax-whitespace Boolean)
  (@variable isearch-lazy-highlight-regexp-lax-whitespace Boolean)
- (@variable isearch-lazy-highlight-regexp-function Boolean|(fn (Args String Bool?) String))
+ (@variable isearch-lazy-highlight-regexp-function Boolean|(fn (&tuple String Bool?) String))
  (@variable isearch-lazy-highlight-forward Boolean)
  (@variable isearch-lazy-highlight-error String?)
  (@variable isearch-lazy-count-current Integer?)
@@ -377,29 +377,29 @@
  (@variable minibuffer-lazy-count-format String?)
  (@def minibuffer-lazy-highlight-setup
        (&key highlight: Boolean|@all-windows cleanup: Boolean
-             transform: (fn (Args String) String)
-             filter: (or Nil (fn (Args IntOrMarker IntOrMarker) Boolean))
+             transform: (fn (&tuple String) String)
+             filter: (or Nil (fn (&tuple IntOrMarker IntOrMarker) Boolean))
              regexp: Boolean
-             regexp-function: Boolean|(fn (Args String Bool?) String)
+             regexp-function: Boolean|(fn (&tuple String Bool?) String)
              case-fold: Boolean|@yes
              lax-whitespace: Boolean)
        fn)
  (@def isearch-search-fun-in-noncontiguous-region
-       (search-fun: (or Nil (fn (Args String IntOrMarker? Bool Integer?) Integer?))
+       (search-fun: (or Nil (fn (&tuple String IntOrMarker? Bool Integer?) Integer?))
         bounds: &List<&Cons<Integer_Integer>>)
-       (fn (Args String IntOrMarker? Bool Integer?) Integer?))
+       (fn (&tuple String IntOrMarker? Bool Integer?) Integer?))
  (@def isearch-search-fun-in-text-property
-       (search-fun: (or Nil (fn (Args String IntOrMarker? Bool Integer?) Integer?))
+       (search-fun: (or Nil (fn (&tuple String IntOrMarker? Bool Integer?) Integer?))
         properties: Symbol|&List<Symbol>)
-       (fn (Args String IntOrMarker? Bool Integer?) Integer?))
+       (fn (&tuple String IntOrMarker? Bool Integer?) Integer?))
  (@def search-within-boundaries
-       (search-fun: (or Nil (fn (Args String IntOrMarker? Bool Integer?) Integer?))
-        get-fun: (fn (Args Integer) Bool)
-        next-fun: (fn (Args Integer) Integer?)
+       (search-fun: (or Nil (fn (&tuple String IntOrMarker? Bool Integer?) Integer?))
+        get-fun: (fn (&tuple Integer) Bool)
+        next-fun: (fn (&tuple Integer) Integer?)
         string: String
         &optional bound: IntOrMarker? noerror: Bool count: Integer?)
        Integer?)
- (@def isearch-resume (string: String regexp: Bool word: Boolean|(fn (Args String Bool?) String) forward: Bool message: String case-fold: Boolean|@yes) Any)
+ (@def isearch-resume (string: String regexp: Bool word: Boolean|(fn (&tuple String Bool?) String) forward: Bool message: String case-fold: Boolean|@yes) Any)
  (@variable isearch-fold-quotes-mode Boolean)
  (@def isearch-fold-quotes-mode (&optional arg: Any) Any)
  (@def isearch-mode-help () Any))

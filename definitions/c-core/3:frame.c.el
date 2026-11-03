@@ -112,7 +112,7 @@
        (attribute: String class: String &optional component: String? subclass: String?)
        String?)
  (@def x-parse-geometry (string: String)
-       Alist<@left|@top|@width|@height_Integer|Tuple<@plus|@minus_Integer>>))
+       Alist<@left|@top|@width|@height_Integer|tuple<@plus|@minus_Integer>>))
 
 
 ;;; ============================================================

@@ -122,7 +122,7 @@
        (completions: List<String> prefix-len: Integer &optional base-size: Integer?)
        Todo)
  (@def display-completion-list
-       (completions: &List<String|Symbol|Tuple<String_String>|Tuple<String_String_String>>
+       (completions: &List<String|Symbol|tuple<String_String>|tuple<String_String_String>>
         &optional common-substring: String? group-fun: fn2<String_Boolean_String?>)
        Nil)
  (@def minibuffer-completion-help (&optional start: IntOrMarker? end: IntOrMarker?) Nil)

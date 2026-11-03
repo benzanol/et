@@ -95,7 +95,7 @@
  ;; check operands as evaluated expressions, not branch on unevaluated
  ;; list shape.
  (@check minibuffer-with-setup-hook ($todo))
- (@def find-file-read-args (prompt: String mustmatch: Any) (Tuple String True))
+ (@def find-file-read-args (prompt: String mustmatch: Any) (tuple String True))
  (@def find-file (filename: String &optional wildcards: Bool) Buffer|List<Buffer>)
  (@def find-file-other-window (filename: String &optional wildcards: Bool) Buffer|List<Buffer>)
  (@def find-file-other-frame (filename: String &optional wildcards: Bool) Buffer|List<Buffer>)
@@ -125,7 +125,7 @@
        Buffer)
  (@def insert-file-contents-literally
        (filename: String &optional visit: Bool beg: IntOrMarker? end: IntOrMarker? replace: Bool)
-       (Tuple String Integer))
+       (tuple String Integer))
  (@def insert-file-1 (filename: String insert-func: fn1<String_Cons<String_Cons<Integer_Nil>>>) String?)
  (@def insert-file-literally (filename: String) String?)
  (@def find-file-literally (filename: String) Buffer)

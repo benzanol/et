@@ -15,7 +15,7 @@
  ;; of chosen events or the arbitrary VALUE of the chosen menu item,
  ;; depending on whether MENU is a keymap or a pane list; Any covers both.
  (@def x-popup-menu
-       (position: (or Boolean (Tuple (Tuple Integer Integer) Window|Frame) Todo)
+       (position: (or Boolean (tuple (tuple Integer Integer) Window|Frame) Todo)
         menu: (or Cons<@keymap_Any> List<Cons<@keymap_Any>>
                   Cons<String_List<Cons<String_List<Cons<String_Any>|String>>>>))
        Any))
@@ -28,8 +28,8 @@
  ;; list, an object shape the type system does not yet model. The return
  ;; value is the arbitrary VALUE of the chosen item.
  (@def x-popup-dialog
-       (position: (or Boolean Window Frame (Tuple (Tuple Integer Integer) Window|Frame) Todo)
-        contents: (Tuple* Any List<Cons<String_Any>|String?>)
+       (position: (or Boolean Window Frame (tuple (tuple Integer Integer) Window|Frame) Todo)
+        contents: (tuple* Any List<Cons<String_Any>|String?>)
         &optional header: Bool)
        Any))
 

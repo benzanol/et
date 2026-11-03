@@ -23,10 +23,10 @@
 
 (et-declare
  (@def map-keymap-internal
-       (function: (fn (Args Any Any) Any) keymap: &Cons<@keymap_Any>|Symbol)
+       (function: (fn (&tuple Any Any) Any) keymap: &Cons<@keymap_Any>|Symbol)
        &Cons<@keymap_Any>|Symbol?)
  (@def map-keymap
-       (function: (fn (Args Any Any) Any) keymap: &Cons<@keymap_Any>|Symbol
+       (function: (fn (&tuple Any Any) Any) keymap: &Cons<@keymap_Any>|Symbol
                   &optional sort_first: Bool)
        Any)
  (@def copy-keymap (keymap: &Cons<@keymap_Any>|Symbol) ConsFresh<@keymap_Any>))

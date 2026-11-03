@@ -70,7 +70,7 @@
 (et-declare
  (@def window-total-size (&optional window: Window? horizontal: Bool round: Any) Integer)
  (@def window-size (&optional window: Window? horizontal: Bool pixelwise: Bool round: Any) Integer)
- (@def window-preserve-size (&optional window: Window? horizontal: Bool preserve: Bool) Tuple<Buffer_Integer?_Integer?>)
+ (@def window-preserve-size (&optional window: Window? horizontal: Bool preserve: Bool) tuple<Buffer_Integer?_Integer?>)
  (@def window-preserved-size (&optional window: Window? horizontal: Bool) Integer?)
  (@def window-safe-min-size (&optional window: Window? horizontal: Bool pixelwise: Bool) Integer)
  (@def window-min-size (&optional window: Window? horizontal: Bool ignore: @safe|@preserved|Window|Boolean pixelwise: Bool) Integer)
@@ -136,18 +136,18 @@
 ;;; Window edges
 
 (et-declare
- (@def window-edges (&optional window: Window? body: Bool absolute: Bool pixelwise: Bool) Tuple<Integer_Integer_Integer_Integer>)
- (@def window-body-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-edges (&optional window: Window? body: Bool absolute: Bool pixelwise: Bool) tuple<Integer_Integer_Integer_Integer>)
+ (@def window-body-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
  ;; Alias of `window-body-edges'.
- (@def window-inside-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
- (@def window-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
- (@def window-body-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-inside-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
+ (@def window-pixel-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
+ (@def window-body-pixel-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
  ;; Alias of `window-body-pixel-edges'.
- (@def window-inside-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
- (@def window-absolute-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
- (@def window-absolute-body-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-inside-pixel-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
+ (@def window-absolute-pixel-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
+ (@def window-absolute-body-pixel-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
  ;; Alias of `window-absolute-body-pixel-edges'.
- (@def window-inside-absolute-pixel-edges (&optional window: Window?) Tuple<Integer_Integer_Integer_Integer>)
+ (@def window-inside-absolute-pixel-edges (&optional window: Window?) tuple<Integer_Integer_Integer_Integer>)
  (@def window-absolute-pixel-position (&optional position: IntOrMarker? window: Window?) Cons<Integer_Integer>?)
  (@def frame-root-window-p (window: Window) Boolean)
  ;; Same recursive window-tree structure as the internal subtree
@@ -339,7 +339,7 @@
  (@def window-largest-empty-rectangle
        (&optional window: Window? count: Integer|Cons<Integer_Bool>? min-width: Integer? min-height: Integer?
         positions: Cons<Integer_Integer>? left: Bool)
-       (is-non-nil? count List<Tuple<Integer_Integer_Integer_Integer>>? Tuple<Integer_Integer_Integer>?))
+       (is-non-nil? count List<tuple<Integer_Integer_Integer_Integer>>? tuple<Integer_Integer_Integer>?))
  (@def kill-buffer-and-window () Any))
 
 ;;; ============================================================

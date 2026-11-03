@@ -82,9 +82,9 @@
 
 (et-declare
  (@def current-frame-configuration ()
-       (Cons @frame-configuration (List (Tuple Frame (Alist Symbol Any) WindowConfiguration))))
+       (Cons @frame-configuration (List (tuple Frame (Alist Symbol Any) WindowConfiguration))))
  (@def set-frame-configuration
-       (configuration: (Cons @frame-configuration (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+       (configuration: (Cons @frame-configuration (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
         &optional nodelete: Bool)
        List<Frame>))
 
@@ -116,15 +116,15 @@
  (@def frame-current-scroll-bars (&optional frame: Frame?) Cons<@left|@right?_@bottom?>)
  (@def frame-geometry (&optional frame: Frame?) Alist<Symbol_Any>)
  (@def frame-edges (&optional frame: Frame? type: @outer-edges|@native-edges|@inner-edges?)
-       (Tuple Integer Integer Integer Integer))
+       (tuple Integer Integer Integer Integer))
  (@def mouse-absolute-pixel-position () Cons<Integer_Integer>)
  (@def set-mouse-absolute-pixel-position (x: Integer y: Integer) Any)
  (@def frame-monitor-attributes (&optional frame: Frame?) Alist<Symbol_Any>)
  (@def frame-monitor-attribute (attribute: Symbol &optional frame: Frame? x: Integer? y: Integer?) Any)
  (@def frame-monitor-geometry (&optional frame: Frame? x: Integer? y: Integer?)
-       (or (Tuple Integer Integer Integer Integer) Nil))
+       (or (tuple Integer Integer Integer Integer) Nil))
  (@def frame-monitor-workarea (&optional frame: Frame? x: Integer? y: Integer?)
-       (or (Tuple Integer Integer Integer Integer) Nil))
+       (or (tuple Integer Integer Integer Integer) Nil))
  (@def frame-list-z-order (&optional display: Terminal|Frame|String?) List<Frame>)
  (@def frame-restack (frame1: Frame frame2: Frame &optional above: Bool) Any)
  (@def frame-size-changed-p (&optional frame: Frame?) Boolean))
@@ -169,11 +169,11 @@
 
 (et-declare
  (@def frame-geom-value-cons
-       (type: @top|@left value: (or Integer (Tuple @+ Integer) (Tuple @- Integer)) &optional frame: Frame?)
-       (Tuple @+ Integer))
+       (type: @top|@left value: (or Integer (tuple @+ Integer) (tuple @- Integer)) &optional frame: Frame?)
+       (tuple @+ Integer))
  (@def frame-geom-spec-cons
-       (spec: (Cons (or @top @left) (or Integer (Tuple @+ Integer) (Tuple @- Integer))) &optional frame: Frame?)
-       (Cons (or @top @left) (Tuple @+ Integer)))
+       (spec: (Cons (or @top @left) (or Integer (tuple @+ Integer) (tuple @- Integer))) &optional frame: Frame?)
+       (Cons (or @top @left) (tuple @+ Integer)))
  (@def delete-other-frames (&optional frame: Frame? iconify: Bool) Nil)
  (@variable undelete-frame-mode Boolean)
  (@def undelete-frame-mode (&optional arg: Integer|@toggle?) Boolean)

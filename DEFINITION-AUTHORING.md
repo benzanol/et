@@ -388,21 +388,21 @@ generic `E` has a default value of `Any`. So `List` with no arguments is
 `(Plist :key1 Type1 :key2 Type2)` is a spec macro for typed property lists
 with known fixed keys.
 
-#### Tuple types (spec macros)
+#### tuple types (spec macros)
 
 | Macro | Meaning |
 |-------|---------|
-| `(Tuple A B C)` | `Cons<A_Cons<B_Cons<C_Nil>>>` — fixed-length list |
-| `(Tuple* A B C)` | `Cons<A_Cons<B_C>>` — dotted-pair chain |
-| `(Args A B C)` | Same as Tuple but uses read-only cons (`&Cons`) — for function arglists |
-| `(Args* A B C)` | Same as Tuple* but with `&Cons` |
+| `(tuple A B C)` | `Cons<A_Cons<B_Cons<C_Nil>>>` — fixed-length list |
+| `(tuple* A B C)` | `Cons<A_Cons<B_C>>` — dotted-pair chain |
+| `(&tuple A B C)` | Same as tuple but uses read-only cons (`&Cons`) — for function arglists |
+| `(&tuple* A B C)` | Same as tuple* but with `&Cons` |
 
 #### Function types
 
 ```elisp
 (et-defalias AnyFn [] (Function Never Any))
 (et-defalias IdFn [T] (Function T T))
-(et-defalias Sink [T] (Function (Args T) Nil))
+(et-defalias Sink [T] (Function (&tuple T) Nil))
 ```
 
 Additional function syntax:
@@ -418,12 +418,12 @@ Additional function syntax:
 | `fn2<ARG1_ARG2>` | Two-arg function returning Any |
 | `fn2<ARG1_ARG2_RET>` | Two-arg function with return type |
 
-Arglist types use `(Args ...)` for positional parameters. A `&rest` parameter
+Arglist types use `(&tuple ...)` for positional parameters. A `&rest` parameter
 is encoded by ending the arglist with `&List<T>` (for a rest of type T) or
 just `&List` (for an untyped rest). For example:
 
-- `(fn (Args Integer String) Boolean)` — takes an integer and a string
-- `(fn (Args Integer &List<String>) Nil)` — one integer then any number of strings
+- `(fn (&tuple Integer String) Boolean)` — takes an integer and a string
+- `(fn (&tuple Integer &List<String>) Nil)` — one integer then any number of strings
 - `(fn &List Any)` — variadic function (any args, returns anything)
 
 #### Booleans
@@ -443,7 +443,7 @@ Use `Boolean` for values that must actually be `nil` or `t`.
 (et-defalias Font [] (or FontSpec FontEntity FontObject))
 (et-defalias IntOrMarker [] (or Integer Marker))
 (et-defalias NumOrMarker [] (or Number Marker))
-(et-defalias ColorTriple [] (Tuple Integer Integer Integer))
+(et-defalias ColorTriple [] (tuple Integer Integer Integer))
 ```
 
 #### S-expressions
@@ -460,16 +460,16 @@ Use `Boolean` for values that must actually be `nil` or `t`.
   (or Nil Number
       (&Cons Integer Integer)
       (&Cons Integer (&Cons Integer Integer))
-      (&Tuple Integer Integer)
-      (&Tuple Integer Integer Integer)
-      (&Tuple Integer Integer Integer Integer)))
+      (&tuple Integer Integer)
+      (&tuple Integer Integer Integer)
+      (&tuple Integer Integer Integer Integer)))
 
 (et-defalias TimeOutput []
   (or Integer (Cons Integer Integer)
-      (Tuple Integer Integer Integer Integer)))
+      (tuple Integer Integer Integer Integer)))
 
 (et-defalias Timezone []
-  (or Nil True @wall String Integer (&Tuple Integer String)))
+  (or Nil True @wall String Integer (&tuple Integer String)))
 ```
 
 #### Sequence types
@@ -510,7 +510,7 @@ functions that operate on either a string or buffer with a position argument.
 
 (et-defalias CompletionFunction []
   (fn [A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>]
-      (Args String CompletionPredicate? A)
+      (&tuple String CompletionPredicate? A)
       (switch A
               [Nil Boolean|String]
               [True &List<String>]
@@ -527,7 +527,7 @@ functions that operate on either a string or buffer with a position argument.
 
 ```elisp
 (et-defalias VariableEvent [] (or @set @let @unlet @makunbound @defvaralias))
-(et-defalias VariableWatcher [] (fn (Args Symbol Any VariableEvent Buffer?)))
+(et-defalias VariableWatcher [] (fn (&tuple Symbol Any VariableEvent Buffer?)))
 ```
 
 
@@ -595,9 +595,9 @@ List-based syntax is used for more complex type expressions:
 - `(and A B)` — intersection
 - `(Cons A B)` — parameterized type
 - `(Literal value)` — literal value
-- `(Tuple A B C)` — fixed-length list type
-- `(Tuple* A B C)` — cons chain ending with C
-- `(Args A B C)` — read-only arglist tuple
+- `(tuple A B C)` — fixed-length list type
+- `(tuple* A B C)` — cons chain ending with C
+- `(&tuple A B C)` — read-only arglist tuple
 - `(Plist :key1 Type1 :key2 Type2)` — typed property list
 - `(fn ARGLIST RETURN)` — function type
 - `(fn [GENVEC] ARGLIST RETURN)` — generic function type
@@ -755,8 +755,8 @@ signature for multiple functions:
 (@def call-process
       (program: String &optional infile: String?
        destination: (or Buffer String Boolean Integer
-                        (Tuple @file String)
-                        (Tuple Buffer|String|Boolean String|Boolean))
+                        (tuple @file String)
+                        (tuple Buffer|String|Boolean String|Boolean))
        display: Bool &rest args: &List<String>)
       Nil|Integer|String)
 ```
@@ -809,7 +809,7 @@ signature for multiple functions:
 ### Read-only types
 
 Read-only (`&`) applies only to container types: `Cons`, `List`, `Vector`,
-`HashTable`, and aliases built on them (like `Tuple`, `Alist`, `Tree`).
+`HashTable`, and aliases built on them (like `tuple`, `Alist`, `Tree`).
 It does not apply to atomic types like `Integer`, `String`, or `Symbol` —
 those have no write interface, so `&Integer` is meaningless.
 

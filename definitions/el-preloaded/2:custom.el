@@ -1,5 +1,6 @@
 ;; -*- lexical-binding: t; -*-
 
+
 ;;; ============================================================
 ;;; The defcustom macro
 
@@ -54,7 +55,7 @@ Unknown and structurally complicated widget types deliberately fall back to
     (`(,(or 'number 'float) . ,_)
      (et Number))
     (`(,(or 'string 'regexp 'file 'directory 'color 'key 'key-sequence
-           'coding-system 'charset 'mule-input-method-string 'text)
+            'coding-system 'charset 'mule-input-method-string 'text)
        . ,_)
      (et String))
     (`(,(or 'symbol 'variable 'face 'group) . ,_)
@@ -163,7 +164,7 @@ Unknown and structurally complicated widget types deliberately fall back to
            ($expect ($eval (or (et-global-var-type name) (et-any))) ($at 2))
            ($expect
             ($type
-             (Args*
+             (&Cons
               String?
               (or
                Nil
@@ -186,6 +187,7 @@ Unknown and structurally complicated widget types deliberately fall back to
                 :load Nil|String|Symbol))))
             ($tail-tuple 3)))))))
 
+
 ;;; ============================================================
 ;;; The defface macro
 
@@ -195,6 +197,7 @@ Unknown and structurally complicated widget types deliberately fall back to
  ;; than evaluated. There is no checker shortcut for a form that quotes
  ;; one operand and treats another as a structured spec instead of code.
  (@check defface ($todo)))
+
 
 ;;; ============================================================
 ;;; The defgroup macro
@@ -212,7 +215,7 @@ Unknown and structurally complicated widget types deliberately fall back to
            ($eval (et-literal symbol))
            ($expect
             ($type
-             (Args*
+             (&tuple*
               &List<&Cons<Symbol_&Cons<Symbol_Nil>>>
               String?
               (or
@@ -227,8 +230,9 @@ Unknown and structurally complicated widget types deliberately fall back to
                 :tag String?
                 :set-after &List<Symbol>))))
             ($tail-tuple 2))))))
- (@def custom-add-to-group (group: Symbol option: Symbol widget: Symbol) List<Any>)
- (@def custom-group-of-mode (mode: Symbol) Symbol))
+(@def custom-add-to-group (group: Symbol option: Symbol widget: Symbol) List<Any>)
+(@def custom-group-of-mode (mode: Symbol) Symbol))
+
 
 ;;; ============================================================
 ;;; Properties
@@ -258,6 +262,7 @@ Unknown and structurally complicated widget types deliberately fall back to
  (@def customize-mark-as-set (symbol: Symbol) Boolean)
  (@def custom-reevaluate-setting (symbol: Symbol) Any))
 
+
 ;;; ============================================================
 ;;; Custom themes
 
@@ -268,6 +273,7 @@ Unknown and structurally complicated widget types deliberately fall back to
  (@def custom-fix-face-spec (spec: &List) List<Any>)
  (@def custom-set-variables (&rest args: &List<List<Any>>) Nil)
  (@def custom-theme-set-variables (theme: Symbol &rest args: &List<List<Any>>) Nil))
+
 
 ;;; ============================================================
 ;;; Defining themes
@@ -289,6 +295,7 @@ Unknown and structurally complicated widget types deliberately fall back to
  (@def custom-theme-name-valid-p (name: Any) Boolean)
  (@def custom-available-themes () List<Symbol>))
 
+
 ;;; ============================================================
 ;;; Enabling and disabling loaded themes
 
@@ -300,6 +307,7 @@ Unknown and structurally complicated widget types deliberately fall back to
  (@def custom-theme-recalc-variable (variable: Symbol) Any)
  (@def custom-theme-recalc-face (face: Symbol) Nil))
 
+
 ;;; ============================================================
 ;;; XEmacs compatibility functions
 
@@ -307,5 +315,6 @@ Unknown and structurally complicated widget types deliberately fall back to
  (@def custom-theme-reset-variables (theme: Symbol &rest args: &List<Cons<Symbol_Cons<Any_Nil>>>) Nil)
  (@def custom-reset-variables (&rest args: &List<Cons<Symbol_Cons<Any_Nil>>>) Nil)
  (@def custom-add-choice (variable: Symbol choice: Any) List<Any>))
+
 
 ;;; ============================================================

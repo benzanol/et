@@ -77,7 +77,7 @@
  ;; when FULL is non-nil. The type language cannot express result structure
  ;; that branches on a parameter's runtime value.
  (@def network-interface-list (&optional full: Bool family: @ipv4|@ipv6?) List<Todo>?)
- (@def network-interface-info (ifname: String) (or Nil (Tuple Any Any Any Any Any)))
+ (@def network-interface-info (ifname: String) (or Nil (tuple Any Any Any Any Any)))
  (@def network-lookup-address-info
        (name: String &optional family: @ipv4|@ipv6? hint: @numeric?)
        List<Vector<Integer>>?)

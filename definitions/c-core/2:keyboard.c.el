@@ -14,7 +14,7 @@
 ;;; Idle time
 
 (et-declare
- (@def current-idle-time () (or Nil (Cons Integer Integer) (Tuple Integer Integer Integer Integer))))
+ (@def current-idle-time () (or Nil (Cons Integer Integer) (tuple Integer Integer Integer Integer))))
 
 ;;; ============================================================
 ;;; Event processing
@@ -62,7 +62,7 @@
  (@def set-input-meta-mode (meta: Any &optional terminal: Terminal|Frame?) Nil)
  (@def set-quit-char (quit: Integer) Nil)
  (@def set-input-mode (interrupt: Bool flow: Bool meta: Any &optional quit: Integer?) Nil)
- (@def current-input-mode () (Tuple Boolean Boolean Integer|@encoded|Boolean Integer)))
+ (@def current-input-mode () (tuple Boolean Boolean Integer|@encoded|Boolean Integer)))
 
 ;;; ============================================================
 ;;; Position queries

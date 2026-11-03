@@ -38,7 +38,7 @@
  (@def macroexp-small-p (exp: Sexp) Boolean)
  (@def macroexp-const-p (exp: Sexp) Bool)
  (@def macroexp-copyable-p (exp: Sexp) Bool)
- (@def macroexp-quote (v: [T]) (or T (Tuple @quote T))))
+ (@def macroexp-quote (v: [T]) (or T (tuple @quote T))))
 
 ;;; ============================================================
 ;;; Load-time macro-expansion

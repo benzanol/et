@@ -23,7 +23,7 @@
 ;;; Code:
 
 (require 'et)
-(require 'et-macros)
+(require 'et-annotate)
 (require 'seq)
 
 
@@ -54,7 +54,7 @@
 
 (et-declare
  (@alias EtFuncParameters [T]
-         (Tuple &List<T> &List<T> &List<T> Nil|&Tuple<T>))
+         (tuple &List<T> &List<T> &List<T> Nil|&tuple<T>))
  (@alias EtFuncDeclarations
          (Plist :parameters EtFuncParameters<Var>
                 :props PlistOf<Var_Any>
@@ -220,7 +220,7 @@
     ;; to determine a type recommendation for each argument
     (let* ((arg-gens (cl-loop for _ in (cdr (et-cur-expr))
                               collect (intern (symbol-name (gensym "Arg")))))
-           (fn-repr (et-parse-repr `(Function (Args ,@arg-gens)
+           (fn-repr (et-parse-repr `(Function (&tuple ,@arg-gens)
                                               ,(or (et-cur-recommendation) 'Any))
                                    arg-gens))
            (fn-matcher (et:match-matcher-new :generics arg-gens :repr fn-repr))
@@ -1988,92 +1988,22 @@ Returns the type of the last expression in the body."
 
 ;;; ============================================================
 ;;; Identifiers - `et:identify'
-;;;; @alias
+;;;; require
 
-(et-set-identifier '@alias #'et:identify-@alias)
+(et-set-identifier #'require #'et:identify-require)
 
-(et-defun et:identify-@alias (&rest args) EtIdentifyPlist
-  "Identify an alias definition, returning a processing plist.
+(et-defvar et:identify--require-loaded-libs List<Symbol> nil
+  "List of libraries which have been processed due to a `require'.")
 
-During identification, declares the alias name and generics.
-Returns a plist with :constrain and :populate functions."
-  (let* ((name (pop args))
-         (_ (or (symbolp name) (et-fatal 1 "Alias name must be a symbol")))
-         (genvec (if (vectorp (car args)) (pop args) []))
-         (spec (pop args)))
-
-    (et:type-identify-alias name genvec spec args)
-    (list
-     :constrain
-     (lambda ()
-       ;; Parse the generic constraints (which reference other types)
-       (when genvec (et-at 2 (et:type-constrain-alias name))))
-
-     :populate
-     (lambda ()
-       ;; Parse the spec into a repr
-       (et-at (if genvec 3 2) (et:type-declare-alias name))))))
-
-
-;;;; @variable/defvar
-
-(et-set-identifier #'et-defvar #'et:identify-et-defvar)
-(et-set-identifier '@variable #'et:identify-et-defvar)
-
-(et-defun et:identify-et-defvar (name: Var spec: EtSpec &rest _) EtIdentifyPlist
-  (list :declare (lambda () (et-set-global-var-type name (et-at 2 (et-parse-type spec))))))
-
-
-;;;; @check/@def/def*
-
-(et-set-identifier #'defun #'et:identify-defun)
-(et-set-identifier #'cl-defun #'et:identify-defun)
-(et-set-identifier #'defmacro #'et:identify-defun)
-
-(et-defun et:identify-defun (name: Var arglist: &List &rest rest: Sexps) EtIdentifyPlist
-  (list
-   :declare
-   (lambda ()
-     (let* ((params (et-at 2 (et-parse-arglist arglist)))
-            (decls (et-at-offset 3 (et-find-and-parse-func-decls params rest))))
-       (when decls (et-symbol-set-func-decls name decls))))))
-
-(et-set-identifier '@def #'et:identify-@def)
-
-(et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List ret: EtSpec &rest declares: Sexps)
-          EtIdentifyPlist
-  (dolist (name (if (vectorp names) (append names nil) (list names)))
-    (et-deferred-declare name
-      (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist ,ret (declare (et ,@declares))))))
-        (funcall (plist-get (apply #'et:identify-defun (cdr defun-expr)) :declare))))))
-
-(et-set-identifier '@check #'et:identify-@check)
-
-(et-defun et:identify-@check (names: Var|&Vector<Var> chk: Sexp) EtIdentifyPlist
-  (list
-   :declare
-   (lambda ()
-     (dolist (name (if (vectorp names) (append names nil) (list names)))
-       (et-deferred-declare name
-         (et-set-chk name chk))))))
-
-
-;;;; @expand
-
-;; Make a symbol identify by identifying its macro expansion
-;; This is different from the $expand checker because it
-;; applies to identification, not just checking.
-
-(et-set-identifier '@expand #'et:identify-@expand)
-
-(defun et:identify-@expand (symbol)
-  (et-set-identifier symbol #'et:identify-macroexpand)
-  nil)
-
-(defun et:identify-macroexpand (&rest _body)
-  "Identify an expression by identifying its macro expansion."
-  (let* ((expanded (macroexpand-1 et-identifying-expr)))
-    (et-at 0 (et-with-sticky-path (et-identify-expr expanded)))))
+(et-defun et:identify-require (name: Symbol) EtIdentifyPlist
+  (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
+         (load-path (cons dir load-path))
+         (library (or (locate-library (symbol-name (eval name)))
+                      (error "Library `%s' not found" name))))
+    (unless (member library et:identify--require-loaded-libs)
+      (push library et:identify--require-loaded-libs)
+      ;; Process the buffer without propagating diagnostics
+      (et-process-exprs (et-process-file-exprs library)))))
 
 
 ;;;; defstruct
@@ -2147,10 +2077,10 @@ Returns a plist with :constrain and :populate functions."
                   (output-repr
                    (et-parse-repr
                     (et-q (or (and True (bindsof (and T (Struct ,name ,@never-args))))
-                              (and Nil (bindsof (subtract T (Struct ,name ,@never-args))))))
+                              (and Nil (bindsof (minus T (Struct ,name ,@never-args))))))
                     '(T))))
              (put predicate 'et-symbol-func-type
-                  (et-dt 'PolyFunction (et-parse-matcher '(Args T) [T]) output-repr))))
+                  (et-dt 'PolyFunction (et-parse-matcher '(&tuple T) [T]) output-repr))))
 
          ;; --- Accessors ---
          (dolist (slot slots)
@@ -2188,6 +2118,106 @@ Returns a plist with :constrain and :populate functions."
                                          arglist-repr struct-repr))))))))
 
 
+;;;; Identify via evaluation
+
+;; If a form of these types is encountered in the file, evaluate it
+(et-set-identifier 'et-defalias #'et:identify-via-eval)
+(et-set-identifier 'et-defspec #'et:identify-via-eval)
+(et-set-identifier 'et-defop #'et:identify-via-eval)
+
+(et-defun et:identify-via-eval (&rest _body) EtIdentifyPlist
+  (eval et-identifying-expr t)
+  nil)
+
+
+;;;; @variable/defvar
+
+(et-set-identifier #'et-defvar #'et:identify-et-defvar)
+(et-set-identifier '@variable #'et:identify-et-defvar)
+
+(et-defun et:identify-et-defvar (name: Var spec: EtSpec &rest _) EtIdentifyPlist
+  (list :declare (lambda () (et-set-global-var-type name (et-at 2 (et-parse-type spec))))))
+
+
+;;;; @check/@def/def*
+
+(et-set-identifier #'defun #'et:identify-defun)
+(et-set-identifier #'cl-defun #'et:identify-defun)
+(et-set-identifier #'defmacro #'et:identify-defun)
+
+(et-defun et:identify-defun (name: Var arglist: &List &rest rest: Sexps) EtIdentifyPlist
+  (list
+   :declare
+   (lambda ()
+     (let* ((params (et-at 2 (et-parse-arglist arglist)))
+            (decls (et-at-offset 3 (et-find-and-parse-func-decls params rest))))
+       (when decls (et-symbol-set-func-decls name decls))))))
+
+(et-set-identifier '@def #'et:identify-@def)
+
+(et-defun et:identify-@def (names: Var|&Vector<Var> arglist: &List ret: EtSpec &rest declares: Sexps)
+          EtIdentifyPlist
+  (dolist (name (if (vectorp names) (append names nil) (list names)))
+    (et-deferred-declare name
+      (let* ((defun-expr (macroexpand-1 `(et-defun ,name ,arglist ,ret (declare (et ,@declares))))))
+        (funcall (plist-get (apply #'et:identify-defun (cdr defun-expr)) :declare))))))
+
+(et-set-identifier '@check #'et:identify-@check)
+
+(et-defun et:identify-@check (names: Var|&Vector<Var> chk: Sexp) EtIdentifyPlist
+  (list
+   :declare
+   (lambda ()
+     (dolist (name (if (vectorp names) (append names nil) (list names)))
+       (et-deferred-declare name
+         (et-set-chk name chk))))))
+
+
+;;;; @alias
+
+(et-set-identifier '@alias #'et:identify-@alias)
+
+(et-defun et:identify-@alias (&rest args) EtIdentifyPlist
+  "Identify an alias definition, returning a processing plist.
+
+During identification, declares the alias name and generics.
+Returns a plist with :constrain and :populate functions."
+  (let* ((name (pop args))
+         (_ (or (symbolp name) (et-fatal 1 "Alias name must be a symbol")))
+         (genvec (if (vectorp (car args)) (pop args) []))
+         (spec (pop args)))
+
+    (et:type-identify-alias name genvec spec args)
+    (list
+     :constrain
+     (lambda ()
+       ;; Parse the generic constraints (which reference other types)
+       (when genvec (et-at 2 (et:type-constrain-alias name))))
+
+     :populate
+     (lambda ()
+       ;; Parse the spec into a repr
+       (et-at (if genvec 3 2) (et:type-declare-alias name))))))
+
+
+;;;; @expand/macroexpand
+
+;; Make a symbol identify by identifying its macro expansion
+;; This is different from the $expand checker because it
+;; applies to identification, not just checking.
+
+(et-set-identifier '@expand #'et:identify-@expand)
+
+(defun et:identify-@expand (symbol)
+  (et-set-identifier symbol #'et:identify-macroexpand)
+  nil)
+
+(defun et:identify-macroexpand (&rest _body)
+  "Identify an expression by identifying its macro expansion."
+  (let* ((expanded (macroexpand-1 et-identifying-expr)))
+    (et-at 0 (et-with-sticky-path (et-identify-expr expanded)))))
+
+
 ;;;; @symbol-property
 
 (et-set-identifier '@symbol-property #'et:identify-@get)
@@ -2208,22 +2238,22 @@ Returns a plist with :declare to set the symbol type."
     (_ (et-fatal nil "Expected format (@symbol-property SYMBOL TYPE)"))))
 
 
-;;;; require
+;;;; @spec
 
-(et-set-identifier #'require #'et:identify-require)
+(et-set-identifier '@spec #'et:identify-@spec)
 
-(et-defvar et:identify--require-loaded-libs List<Symbol> nil
-  "List of libraries which have been processed due to a `require'.")
+(et-defun et:identify-@spec (name arglist &rest body) EtIdentifyPlist
+  (eval `(et-defspec ,name ,arglist ,@body) t)
+  nil)
 
-(et-defun et:identify-require (name: Symbol) EtIdentifyPlist
-  (let* ((dir (when buffer-file-name (file-name-parent-directory buffer-file-name)))
-         (load-path (cons dir load-path))
-         (library (or (locate-library (symbol-name (eval name)))
-                      (error "Library `%s' not found" name))))
-    (unless (member library et:identify--require-loaded-libs)
-      (push library et:identify--require-loaded-libs)
-      ;; Process the buffer without propagating diagnostics
-      (et-process-exprs (et-process-file-exprs library)))))
+
+;;;; @eval
+
+(et-set-identifier '@eval #'et:identify-@eval)
+
+(et-defun et:identify-@eval (&rest body) EtIdentifyPlist
+  (eval `(progn ,@body) t)
+  nil)
 
 
 ;;; ============================================================

@@ -51,11 +51,11 @@
        (from: IntOrMarker to: IntOrMarker
               &optional targetdepth: Integer? stopbefore: Bool
               oldstate: (or Nil
-                            (Tuple Integer Integer? Integer? Boolean|Integer Boolean|Integer
+                            (tuple Integer Integer? Integer? Boolean|Integer Boolean|Integer
                                    Boolean Integer @syntax-table|Integer? Integer?
                                    List<Integer> Integer?))
               commentstop: Any)
-       (Tuple Integer Integer? Integer? Boolean|Integer Boolean|Integer
+       (tuple Integer Integer? Integer? Boolean|Integer Boolean|Integer
               Boolean Integer @syntax-table|Integer? Integer?
               List<Integer> Integer?)))
 

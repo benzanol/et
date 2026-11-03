@@ -25,7 +25,7 @@
 ;;; Mouse and frame lookup
 
 (et-declare
- (@def tty-frame-at (x: Integer y: Integer) (or Nil (Tuple Frame Integer Integer)))
+ (@def tty-frame-at (x: Integer y: Integer) (or Nil (tuple Frame Integer Integer)))
  (@def gpm-mouse-start () Nil)
  (@def gpm-mouse-stop () Nil))
 
@@ -35,7 +35,7 @@
 
 (et-declare
  (@def tty-frame-geometry (&optional frame: Frame?) Alist<Symbol_Any>?)
- (@def tty-frame-edges (&optional frame: Frame? type: Any) (or Nil (Tuple Integer Integer Integer Integer)))
+ (@def tty-frame-edges (&optional frame: Frame? type: Any) (or Nil (tuple Integer Integer Integer Integer)))
  (@def tty-frame-list-z-order (&optional frame: Frame?) List<Frame>)
  (@def tty-frame-restack (frame1: Frame frame2: Frame &optional above: Bool) Never)
  (@def tty-display-pixel-width (&optional display: Frame?) Integer)

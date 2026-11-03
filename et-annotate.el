@@ -1,4 +1,4 @@
-;;; et-macros.el --- Standalone minimal macros for et.el  -*- lexical-binding: t; -*-
+;;; et-annotate.el --- Standalone minimal macros for et.el  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Adam Tillou
 
@@ -32,6 +32,10 @@
 (require 'cl-lib)
 
 
+;; Define stubs for 'def' functions
+(dolist (sym '(et-defalias et-defspec et-defop))
+  (unless (fboundp sym) (fset sym (cons 'macro #'ignore))))
+
 (defmacro et: (_spec expr) (declare (indent 1)) expr)
 (defmacro et! (_spec expr) (declare (indent 1)) expr)
 
@@ -39,11 +43,18 @@
 (defmacro et-test (&rest _) nil)
 
 (defmacro et-defvar (symbol _type &rest rest)
-  "Expands to a normal defvar, but with a place for a type annotation.
+  "Expands to a normal defvar.
 
 \(fn SYMBOL TYPE &optional INITVALUE DOCSTRING)"
   (declare (indent 3) (doc-string 4))
   `(defvar ,symbol . ,rest))
+
+(defmacro et-defvar-local (symbol _type &rest rest)
+  "Expands to a normal defvar-local.
+
+\(fn SYMBOL TYPE &optional INITVALUE DOCSTRING)"
+  (declare (indent 3) (doc-string 4))
+  `(defvar-local ,symbol . ,rest))
 
 (et-declare (@expand et-defstruct))
 (defmacro et-defstruct (name &rest args)
@@ -56,7 +67,7 @@
         ,@(cdr-safe name))
      ,@args))
 
-(defun et:macros-parse-arglist (body)
+(defun et:annotate-parse-arglist (body)
   (let* ((arglist (pop body))
          (return (pop body))
          (doc (when (stringp (car body)) (pop body)))
@@ -77,7 +88,7 @@
 
 \(fn NAME ARGLIST RETURN [DOCSTRING] [DECL] [INTERACTIVE] BODY...)"
   (declare (indent 3) (doc-string 4))
-  `(cl-defun ,name ,@(et:macros-parse-arglist (cons arglist (cons return body)))))
+  `(cl-defun ,name ,@(et:annotate-parse-arglist (cons arglist (cons return body)))))
 
 (et-declare (@expand et-lambda))
 (defmacro et-lambda (arglist return &rest body)
@@ -85,12 +96,12 @@
 
 \(fn NAME ARGLIST RETURN [DOCSTRING] [DECL] [INTERACTIVE] BODY...)"
   (declare (indent 3) (doc-string 4))
-  `(lambda ,@(et:macros-parse-arglist (cons arglist (cons return body)))))
+  `(lambda ,@(et:annotate-parse-arglist (cons arglist (cons return body)))))
 
 (setf (alist-get 'et defun-declarations-alist) (list #'ignore)
       (alist-get 'et macro-declarations-alist) (list #'ignore))
 
-(provide 'et-macros)
+(provide 'et-annotate)
 
 
-;;; et-macros.el ends here
+;;; et-annotate.el ends here

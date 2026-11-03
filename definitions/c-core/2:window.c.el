@@ -83,10 +83,10 @@
  (@def set-window-start ([(P <: IntOrMarker)] window: Window? pos: P &optional noforce: Bool) P)
  (@def pos-visible-in-window-p
        (&optional pos: IntOrMarker|@t? window: Window? partially: Bool)
-       Boolean|Tuple<Integer_Integer>|Tuple<Integer_Integer_Integer_Integer_Integer_Integer>)
+       Boolean|tuple<Integer_Integer>|tuple<Integer_Integer_Integer_Integer_Integer_Integer>)
  (@def window-line-height
        (&optional line: Integer|@header-line|@mode-line? window: Window?)
-       Tuple<Integer_Integer_Integer_Integer>?)
+       tuple<Integer_Integer_Integer_Integer>?)
  (@def window-lines-pixel-dimensions
        (&optional window: Window? first: Integer? last: Integer?
         body: Bool inverse: Bool left: Bool)
@@ -99,10 +99,10 @@
 (et-declare
  (@def window-dedicated-p (&optional window: Window?) Bool)
  (@def set-window-dedicated-p (window: Window? flag: Bool) Bool)
- (@def window-prev-buffers (&optional window: Window?) List<Tuple<Buffer_Integer_Integer>>)
+ (@def window-prev-buffers (&optional window: Window?) List<tuple<Buffer_Integer_Integer>>)
  (@def set-window-prev-buffers
-       (window: Window? prev_buffers: List<Tuple<Buffer_Integer_Integer>>)
-       List<Tuple<Buffer_Integer_Integer>>)
+       (window: Window? prev_buffers: List<tuple<Buffer_Integer_Integer>>)
+       List<tuple<Buffer_Integer_Integer>>)
  (@def window-next-buffers (&optional window: Window?) List<Buffer>)
  (@def set-window-next-buffers (window: Window? next_buffers: List<Buffer>) List<Buffer>)
  (@def window-parameters (&optional window: Window?) Alist<Any_Any>)
@@ -171,7 +171,7 @@
        (window: Window? left_width: Integer?
         &optional right_width: Integer? outside_margins: Bool persistent: Bool)
        Boolean)
- (@def window-fringes (&optional window: Window?) Tuple<Integer_Integer_Boolean_Boolean>)
+ (@def window-fringes (&optional window: Window?) tuple<Integer_Integer_Boolean_Boolean>)
  (@def set-window-cursor-type
        (window: Window? type: @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar_Integer>?)
        @t|@box|@hollow|@bar|@hbar|Cons<@box|@bar|@hbar_Integer>?)
@@ -183,7 +183,7 @@
        Boolean)
  (@def window-scroll-bars
        (&optional window: Window?)
-       Tuple<Integer?_Integer_@left|@right|@t?_Integer?_Integer_@bottom|@t?_Boolean>)
+       tuple<Integer?_Integer_@left|@right|@t?_Integer?_Integer_@bottom|@t?_Boolean>)
  (@def window-vscroll (&optional window: Window? pixels_p: Bool) Number)
  (@def set-window-vscroll
        (window: Window? vscroll: Number &optional pixels_p: Bool preserve_vscroll_p: Bool)

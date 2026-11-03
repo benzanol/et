@@ -23,7 +23,7 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'et-macros)
+(require 'et-annotate)
 (require 'seq)
 (require 'subr-x)
 
@@ -43,7 +43,7 @@
  (@alias EtRel &Tree<Integer>) ; An (unflattened) relative path
  (@alias EtPath List<Integer>)
  (@alias EtSeverity (or @error @warning @hint))
- (@alias EtDiagnostic (Tuple EtPath EtSeverity String)))
+ (@alias EtDiagnostic (tuple EtPath EtSeverity String)))
 
 (et-declare
  (@alias EtLabel (Plist :field Symbol :position Number?))
@@ -54,7 +54,7 @@
 (et-declare
  (@alias EtDatatypeRole (or @CONST @CO @CONTRA @ISO))
  (@alias EtDatatypeProps
-         (Plist :args (or List<EtDatatypeRole> (Function (Args &List) List<EtDatatypeRole>))
+         (Plist :args (or List<EtDatatypeRole> (Function (&tuple &List) List<EtDatatypeRole>))
                 :overlap True|List<Symbol>
                 :predicate (or Nil (Function Any True|List))))
  (@alias EtDatatypeName (or @Any @Literal @NonNil
@@ -65,14 +65,14 @@
  (@alias EtDatatypeArgs &List)
 
  (@alias EtPolymorphConstraint
-         (Tuple (or @P:LEQ @P:NLEQ @P:GEQ @P:NGEQ) EtType))
+         (tuple (or @P:LEQ @P:NLEQ @P:GEQ @P:NGEQ) EtType))
  (@alias EtPolymorphicTypes Alist<EtGeneric_&List<EtPolymorphConstraint>>)
 
  (@alias EtGeneric Var)
  ;; There is no vector tuple type supported yet
- (@alias EtGenVec (&Vector (or EtGeneric (&Tuple EtGeneric (or @<: @:>) Any))))
+ (@alias EtGenVec (&Vector (or EtGeneric (&tuple EtGeneric (or @<: @:>) Any))))
  ;; Alias GenVecs also have an (=) option (for default values)
- (@alias EtAliasGenVec (&Vector (or EtGeneric (&Tuple EtGeneric (or @= @<: @:>) Any))))
+ (@alias EtAliasGenVec (&Vector (or EtGeneric (&tuple EtGeneric (or @= @<: @:>) Any))))
 
  (@alias EtAliasName NonNilSymbol)
  (@alias EtAliasDefinitionPlist
@@ -97,13 +97,13 @@
  (@alias EtConstrainResult *et:match-result<List<EtMatchConstraint>>)
  (@alias EtMatchResult *et:match-result<List<EtType>>)
 
- (@alias EtMatchStack (List (Tuple @SUB|@SUPER EtRepr EtType)))
+ (@alias EtMatchStack (List (tuple @SUB|@SUPER EtRepr EtType)))
  (@alias EtTypeConstraint
-         (Tuple (or @Q:GEQ @Q:LEQ) EtGeneric EtType))
+         (tuple (or @Q:GEQ @Q:LEQ) EtGeneric EtType))
  (@alias EtNoinferConstraint
-         (Tuple (or @R:LEQ @R:GEQ) EtRepr EtType))
+         (tuple (or @R:LEQ @R:GEQ) EtRepr EtType))
  (@alias EtMatchFunctionConstraint
-         (Tuple @R:FN
+         (tuple @R:FN
                 ;; The PolyFunction matcher and output (sub)
                 *et:match-matcher EtRepr
                 ;; The Function input and output (super)
@@ -113,13 +113,13 @@
              EtMatchFunctionConstraint))
 
  (@alias EtReprFactor
-         (or (Tuple* @S:DT EtDatatypeName List)
-             (Tuple* @S:ALIAS EtAliasName List<EtRepr>)
-             (Tuple @S:GENERIC EtGeneric)
-             (Tuple @S:POLY EtGeneric)
-             (Tuple @S:NOINFER EtRepr Alist<EtGeneric_EtRepr>)
-             (Tuple* @S:OP Var List)
-             (Tuple @S:SET EtRepr EtType @SUB|@SUPER|@EQ)))
+         (or (tuple* @S:DT EtDatatypeName List)
+             (tuple* @S:ALIAS EtAliasName List<EtRepr>)
+             (tuple @S:GENERIC EtGeneric)
+             (tuple @S:POLY EtGeneric)
+             (tuple @S:NOINFER EtRepr Alist<EtGeneric_EtRepr>)
+             (tuple* @S:OP Var List)
+             (tuple @S:SET EtRepr EtType @SUB|@SUPER|@EQ)))
 
  (@alias EtReprCase (&List EtReprFactor))
  (@alias EtReprDnf (&List EtReprCase))
@@ -130,7 +130,7 @@
  (@alias EtSpec Any))
 
 (et-declare
- (@alias EtIndeterminate (Tuple (or @I:LEQ @I:GEQ) EtGeneric EtType))
+ (@alias EtIndeterminate (tuple (or @I:LEQ @I:GEQ) EtGeneric EtType))
  (@alias EtSubtypeResult *et:match-result<List<EtIndeterminate>>))
 
 
@@ -780,7 +780,7 @@ always have one element."
           ,@body)))))
 
 (et-defun et:type--destructure-function (func-type: EtType &optional overloads: Bool)
-          (List (Tuple EtPolymorphicTypes EtType EtType))
+          (List (tuple EtPolymorphicTypes EtType EtType))
   "Destructure FUNC-TYPE into its input and output types.
 
 Converting the input of a PolyFunction to a type requires concrete types
@@ -795,13 +795,13 @@ constraints have on the resolved return type.
 
 For example, the function
 
-[T] (Args T) => (or String (if-nil? T Never Nil))
+[T] (&tuple T) => (or String (if-nil? T Never Nil))
 
 would have overloads
 
-(((T (P:LEQ Nil))) Args<T> String)
+(((T (P:LEQ Nil))) &tuple<T> String)
 and
-(((T (P:NLEQ Nil))) Args<T> String?)
+(((T (P:NLEQ Nil))) &tuple<T> String?)
 
 This is a common pattern for functions that have a `noerror' argument."
   (pcase (et-type-single (et-expand-aliases func-type))
@@ -1220,7 +1220,7 @@ FUNC is called with two arguments, ARG and ROLE, where role is one of
 FUNC is called with one argument, the current argument"
   (declare (et (@generics [T R])
                (dt-name Var) (dt-args &List<T|Any>)
-               (func (Function (Args T) R))
+               (func (Function (&tuple T) R))
                (@return List)))
   (cl-loop for arg in dt-args
            for role in (et:dt-arg-roles dt-name dt-args)
@@ -1961,7 +1961,7 @@ in GEN-REPLS, if it exists."
 ;; before resolving that structure to an actual string
 ;; B=read-write, R=read, W=write, O=other
 (et-declare
- (@alias EtToString (or String Tuple<@B|@R|@W|@O_EtToString_EtToString>)))
+ (@alias EtToString (or String tuple<@B|@R|@W|@O_EtToString_EtToString>)))
 
 (cl-defmethod cl-print-object ((repr et:repr) stream)
   (princ (format "#R<%s>" (et-repr-to-string repr)) stream))
@@ -2012,11 +2012,13 @@ in GEN-REPLS, if it exists."
                     collect str into brace-strs
                     else collect str into nobrace-strs
                     finally return
-                    (concat
-                     (pcase nobrace-strs
-                       ((or 'nil `(,only)) (et:repr--tostring-resolve (or only "Any")))
-                       (nb (mapconcat (lambda (x) (format "{%s}" (et:repr--tostring-resolve x))) nb)))
-                     (mapconcat #'et:repr--tostring-resolve brace-strs)))
+                    (if (and (eq 1 (length nobrace-strs)) (null brace-strs))
+                        (car nobrace-strs)
+                      (concat
+                       (pcase nobrace-strs
+                         ((or 'nil `(,only)) (et:repr--tostring-resolve (or only "Any")))
+                         (nb (mapconcat (lambda (x) (format "{%s}" (et:repr--tostring-resolve x))) nb)))
+                       (mapconcat #'et:repr--tostring-resolve brace-strs))))
            into or-strings
            finally return
            (let* ((str (pcase or-strings
@@ -2057,7 +2059,7 @@ in GEN-REPLS, if it exists."
      `(,op ,(et:repr--tostring-noresolve car) ,(et:repr--tostring-noresolve cdr)))
 
     (`(PolyFunction ,matcher ,output-type)
-     (format "(%s) -> %s" (et-pp-matcher (et! *et:match-matcher matcher))
+     (format "PolyFunction<%s -> %s>" (et-pp-matcher (et! *et:match-matcher matcher))
              (et:repr--tostring-0 output-type)))
 
     ;; Display recursive loop aliases inline
@@ -2127,7 +2129,7 @@ indeterminates slot."
  (@symbol-property et-spec-parse
                    (Cons Symbol (fn &List<EtSpec> List)))
  (@symbol-property et-repr-to-type
-                   (Function (Args* NonNilSymbol &List<EtRepr>)
+                   (Function (args NonNilSymbol &rest &List<EtRepr>)
                              (or EtType *et:type-case List<*et:type-case>)))
  (@symbol-property et-repr-print (Function &List<EtRepr> String)))
 
@@ -2235,11 +2237,11 @@ indeterminates slot."
 
 ;; fn0 (with no args) is equivalent to fn (with no args). Prefer the latter.
 (et-defspec fn0 (&optional ret) `(fn Nil ,ret))
-(et-defspec fn1 (arg &optional ret) `(fn (Args ,(or arg 'Any)) ,ret))
-(et-defspec fn2 (a1 a2 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any)) ,ret))
-(et-defspec fn3 (a1 a2 a3 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any)) ,ret))
-(et-defspec fn4 (a1 a2 a3 a4 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any)) ,ret))
-(et-defspec fn5 (a1 a2 a3 a4 a5 &optional ret) `(fn (Args ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any) ,(or a5 'Any)) ,ret))
+(et-defspec fn1 (arg &optional ret) `(fn (&tuple ,(or arg 'Any)) ,ret))
+(et-defspec fn2 (a1 a2 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any)) ,ret))
+(et-defspec fn3 (a1 a2 a3 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any)) ,ret))
+(et-defspec fn4 (a1 a2 a3 a4 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any)) ,ret))
+(et-defspec fn5 (a1 a2 a3 a4 a5 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any) ,(or a5 'Any)) ,ret))
 
 
 ;;;; Op macros
@@ -2341,7 +2343,7 @@ indeterminates slot."
 
 ;;;; Op definitions
 
-(et-defop subtract (a b)
+(et-defop minus (a b)
   :to-string (format "{%s - %s}" (et:repr--tostring-0 a) (et:repr--tostring-0 b))
   (et-subtract a b))
 
@@ -2469,6 +2471,9 @@ indeterminates slot."
   :to-string (format "{when %s then %s}" (et:repr--tostring-0 cond) (et:repr--tostring-0 then))
   (et:algebra-when cond then))
 
+(et-defop subsect (a b) (et-subsect a b))
+(et-defop supersect (a b) (et-supersect a b))
+
 (et-defop is? (type is)
   :to-string (format "{%s is %s}" (et:repr--tostring-0 type) (et:repr--tostring-0 is))
   (et-union (et:algebra-when (et-supersect type is) (et True))
@@ -2489,7 +2494,7 @@ indeterminates slot."
   `(extends? (and ,a ,b) Never ,(or no 'Never) ,yes))
 
 (et-defspec replace-in (type from to)
-  `(or (subtract ,type ,from) (overlapping? ,type ,from ,to)))
+  `(or (minus ,type ,from) (overlapping? ,type ,from ,to)))
 
 (et-defop freshen-shallow (type)
   (et:algebra-freshen-type-shallow type))
@@ -2638,7 +2643,7 @@ same as [T (T <: Number)]."
 ;;;; Match results
 
 (et-defvar et:match--constraints-stack
-    (Alist (Tuple @sub|@super EtRepr EtType) EtConstrainResult)
+    (Alist (tuple @sub|@super EtRepr EtType) EtConstrainResult)
     nil
   "Stack of calls to `et--sub/super-constraints' for preventing loops.
 
@@ -3672,7 +3677,7 @@ This returns an `et-match-result' in case matching fails."
            (et:match-result-new :success t :value (apply #'et-supersect types))))
 
 
-;;;; Tuple
+;;;; tuple
 
 (et-defun et-tuple (cons: Symbol types: &List<EtType>) EtType
   (if (null types) (et-literal nil)
@@ -4068,10 +4073,8 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias Alist [K V] (List (Cons K V)))
 
-(et-defspec Tuple (&rest args) (et:type-tuple-spec 'Cons args))
-(et-defspec Args (&rest args) (et:type-tuple-spec '&Cons args))
-(et-defspec Tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
-(et-defspec Args* (&rest args) (et:type-tuple-star-spec '&Cons args))
+(et-defspec tuple (&rest args) (et:type-tuple-spec 'Cons args))
+(et-defspec tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
 
 (et-defspec args (&rest specs)
   (let ((required nil)
@@ -4172,7 +4175,7 @@ lazily because `List' is not yet defined when this file loads.")
 ;; All functions are a subtype of AnyFn
 (et-defalias AnyFn [] (Function Never Any))
 (et-defalias IdFn [T] (Function T T))
-(et-defalias Sink [T] (Function (Args T) Nil))
+(et-defalias Sink [T] (Function (&tuple T) Nil))
 
 (et-defalias Indirect [T] T)
 
@@ -4188,21 +4191,21 @@ lazily because `List' is not yet defined when this file loads.")
       (Vector Sexp)))
 (et-defalias Sexps [] List<Sexp>)
 
-(et-defalias ColorTriple [] (Tuple Integer Integer Integer))
+(et-defalias ColorTriple [] (tuple Integer Integer Integer))
 
 
 ;;;; Time aliases
 
 (et-defalias Timestamp []
   (or Nil Number (&Cons Integer Integer) (&Cons Integer (&Cons Integer Integer))
-      (&Tuple Integer Integer) (&Tuple Integer Integer Integer)
-      (&Tuple Integer Integer Integer Integer)))
+      (&tuple Integer Integer) (&tuple Integer Integer Integer)
+      (&tuple Integer Integer Integer Integer)))
 
 (et-defalias TimeOutput []
-  (or Integer (Cons Integer Integer) (Tuple Integer Integer Integer Integer)))
+  (or Integer (Cons Integer Integer) (tuple Integer Integer Integer Integer)))
 
 (et-defalias Timezone []
-  (or Nil True @wall String Integer (&Tuple Integer String)))
+  (or Nil True @wall String Integer (&tuple Integer String)))
 
 
 ;;;; Seq aliases
@@ -4243,7 +4246,7 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias CompletionFunction []
   (fn [A <: Boolean|@lambda|@metadata|Cons<@boundaries_String>]
-      (Args String CompletionPredicate? A)
+      (&tuple String CompletionPredicate? A)
       (switch A
               [Nil Boolean|String]
               [True &List<String>]
@@ -4259,7 +4262,7 @@ lazily because `List' is not yet defined when this file loads.")
 ;;;; Specific aliases
 
 (et-defalias VariableEvent [] (or @set @let @unlet @makunbound @defvaralias))
-(et-defalias VariableWatcher [] (fn (Args Symbol Any VariableEvent Buffer?)))
+(et-defalias VariableWatcher [] (fn (&tuple Symbol Any VariableEvent Buffer?)))
 
 ;; Use for `apply'
 (et-defalias AppendLast [T]

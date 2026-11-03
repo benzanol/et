@@ -146,7 +146,7 @@
  (@def rassq-delete-all ([K V] value: V alist: Alist<K_V>) Alist<K_V>)
  (@def alist-get
        ([K V] key: K alist: &Alist<K_V>
-        &optional default: V remove: Bool testfn: (or Nil (fn (Args K K) Any)))
+        &optional default: V remove: Bool testfn: (or Nil (fn (&tuple K K) Any)))
        V?)
  (@def remove
        ([E] element: Any sequence: [S <: &OrdSeq<E>])
@@ -175,7 +175,7 @@
        ([(C <: Symbol)] command: C &optional mapvar: Symbol? name: String?)
        C)
  (@def map-keymap-sorted
-       (function: (fn (Args Any Any) Any)
+       (function: (fn (&tuple Any Any) Any)
                   keymap: &Cons<@keymap_Any>|Symbol)
        Nil)
  (@def keymap-canonicalize
@@ -583,23 +583,23 @@
  (@def call-process-shell-command
        (command: String &optional infile: String?
                  buffer: (or Buffer String Boolean Integer
-                             (Tuple @file String)
-                             (Tuple Buffer|String|Boolean String|Boolean))
+                             (tuple @file String)
+                             (tuple Buffer|String|Boolean String|Boolean))
                  display: Bool &rest args: &List<String>)
        Nil|Integer|String)
  (@def process-file-shell-command
        (command: String &optional infile: String?
                  buffer: (or Buffer String Boolean Integer
-                             (Tuple @file String)
-                             (Tuple Buffer|String|Boolean String|Boolean))
+                             (tuple @file String)
+                             (tuple Buffer|String|Boolean String|Boolean))
                  display: Bool &rest args: &List<String>)
        Nil|Integer|String)
  (@def call-shell-region
        (start: IntOrMarker end: IntOrMarker command: String
                &optional delete: Bool
                buffer: (or Buffer String Boolean Integer
-                           (Tuple @file String)
-                           (Tuple Buffer|String|Boolean String|Boolean)))
+                           (tuple @file String)
+                           (tuple Buffer|String|Boolean String|Boolean)))
        Nil|Integer|String))
 
 

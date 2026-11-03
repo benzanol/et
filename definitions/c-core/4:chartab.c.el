@@ -19,9 +19,9 @@
  (@def set-char-table-range
        ([T] char-table: CharTable range: True|Integer|Cons<Integer_Integer>? value: T)
        T)
- (@def optimize-char-table (char-table: CharTable &optional test: (or Nil (fn (Args Any Any) Any))) Nil)
+ (@def optimize-char-table (char-table: CharTable &optional test: (or Nil (fn (&tuple Any Any) Any))) Nil)
  (@def map-char-table
-       (function: (fn (Args (or Integer Cons<Integer_Integer>) Any) Any) char-table: CharTable)
+       (function: (fn (&tuple (or Integer Cons<Integer_Integer>) Any) Any) char-table: CharTable)
        Nil))
 
 ;;; ============================================================

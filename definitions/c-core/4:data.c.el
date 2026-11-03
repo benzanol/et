@@ -87,13 +87,13 @@
  (@def subr-name (subr: Subr) String)
  (@def native-comp-function-p ([T] object: T) (is-a? T AnyFn))
  (@def subr-native-lambda-list (subr: Subr) True|&List)
- (@def subr-type (subr: Subr) Tuple<@function_List<Sexp>_Sexp>?)
+ (@def subr-type (subr: Subr) tuple<@function_List<Sexp>_Sexp>?)
  (@def subr-native-comp-unit (subr: Subr)
        (or Nil (Emacs native-comp-unit)))
  (@def native-comp-unit-file (comp-unit: (Emacs native-comp-unit)) Any)
  (@def native-comp-unit-set-file (comp-unit: (Emacs native-comp-unit) new-file: Any)
        (Emacs native-comp-unit))
- (@def interactive-form (cmd: Any) &Tuple<@interactive_Any>?)
+ (@def interactive-form (cmd: Any) &tuple<@interactive_Any>?)
  (@def command-modes (command: Any) &List<Symbol>))
 
 

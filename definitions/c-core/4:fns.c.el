@@ -92,11 +92,11 @@
  (@def memql  ([E] elt: Any list: &List<E>) &List<E>)
  (@def assq ([K V] key: K alist: &List<&Cons<K_V>>) &Cons<K_V>?)
  (@def assoc ([K V] key: K alist: &List<&Cons<K_V>>
-              &optional testfn: (or Nil (fn (Args V V) Any)))
+              &optional testfn: (or Nil (fn (&tuple V V) Any)))
        &Cons<K_V>?)
  (@def rassq ([K V] key: V alist: &List<&Cons<K_V>>) &Cons<K_V>?)
  (@def rassoc ([K V] key: V alist: &List<&Cons<K_V>>
-               &optional testfn: (or Nil (fn (Args V V) Any)))
+               &optional testfn: (or Nil (fn (&tuple V V) Any)))
        &Cons<K_V>?)
  (@def delq ([E] elt: Any list: List<E>) List<E>)
  (@def delete ([E] elt: E seq: List<E>) List<E>))
@@ -112,8 +112,8 @@
  (@def sort
        ([P E K] seq: [S <: (if-non-nil? P List<E>|Vector<E> &List<E>|&Vector<E>)]
         &key
-        key: (or (fn (Args E) K) Nil&{K:=:E})
-        lessp: (fn (Args K K) Any)
+        key: (or (fn (&tuple E) K) Nil&{K:=:E})
+        lessp: (fn (&tuple K K) Any)
         reverse: Bool
         in-place: P)
        S))
@@ -146,7 +146,7 @@
              (et-chk ($expect ($eval value-type) ($at 3)))))))
  (@def plist-member
        ([K V] plist: &PlistOf<K_V> prop: K
-        &optional predicate: (or Nil (fn (Args K K) Any)))
+        &optional predicate: (or Nil (fn (&tuple K K) Any)))
        Any)
  (@def eql (obj1: Any obj2: Any) Boolean)
  (@def equal (o1: Any o2: Any) Boolean)
@@ -170,13 +170,13 @@
 (et-declare
  ;; nontrivial
  (@def mapconcat
-       ([E] function: (fn (Args E) &OrdSeq<Integer>)
+       ([E] function: (fn (&tuple E) &OrdSeq<Integer>)
         sequence: &MapSeq<E>
         &optional separator: &OrdSeq<Integer>?)
        String)
- (@def mapcar ([E O] function: (fn (Args E) O) sequence: &MapSeq<E>) ListFresh<E>)
- (@def mapc ([E O] function: (fn (Args E) O) sequence: &MapSeq<E>) Nil)
- (@def mapcan ([E T (L <: List<T>)] function: (fn (Args E) L) sequence: &MapSeq<E>) L))
+ (@def mapcar ([E O] function: (fn (&tuple E) O) sequence: &MapSeq<E>) ListFresh<E>)
+ (@def mapc ([E O] function: (fn (&tuple E) O) sequence: &MapSeq<E>) Nil)
+ (@def mapcan ([E T (L <: List<T>)] function: (fn (&tuple E) L) sequence: &MapSeq<E>) L))
 
 
 ;;; ============================================================
@@ -203,7 +203,7 @@
  (@def widget-put ([V] widget: Cons property: Any value: V) V)
  (@def widget-get (widget: &Cons? property: Any) Any)
  (@def widget-apply (widget: &Cons property: Any &rest args: &List) Any)
- (@def locale-info (item: Symbol) (or Nil String &Vector<String> (Tuple Integer Integer))))
+ (@def locale-info (item: Symbol) (or Nil String &Vector<String> (tuple Integer Integer))))
 
 
 ;;; ============================================================
@@ -259,12 +259,12 @@
  (@def gethash ([V] key: Any table: &HashTable<Any_V> &optional dflt: V?) V)
  (@def puthash ([K V] key: K value: V table: HashTableW<K_V>) V)
  (@def remhash ([K] key: K table: HashTableW<K_Never>) Nil)
- (@def maphash ([K V] function: (fn (Args K V) Any) table: &HashTable<K_V>) Nil)
+ (@def maphash ([K V] function: (fn (&tuple K V) Any) table: &HashTable<K_V>) Nil)
  ;; todo
  (@def define-hash-table-test
-       (name: Symbol test: (fn (Args Any Any) Any)
-              hash: (fn (Args Any) Any))
-       (Tuple AnyFn AnyFn))
+       (name: Symbol test: (fn (&tuple Any Any) Any)
+              hash: (fn (&tuple Any) Any))
+       (tuple AnyFn AnyFn))
  (@def internal--hash-table-histogram
        (hash-table: (Emacs hash-table))
        List<Cons<Integer_Integer>>)
@@ -297,13 +297,13 @@
 (et-declare
  (@def buffer-line-statistics
        (&optional buffer-or-name: StringOrBuffer?)
-       (Tuple Integer Integer Number))
+       (tuple Integer Integer Number))
  (@def string-search
        (needle: String haystack: String &optional start-pos: Integer?)
        Integer?)
  (@def object-intervals
        (object: StringOrBuffer)
-       List<Tuple<Integer_Integer_&List>>)
+       List<tuple<Integer_Integer_&List>>)
  (@def line-number-at-pos (&optional position: IntOrMarker? absolute: Bool) Integer))
 
 

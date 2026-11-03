@@ -471,20 +471,20 @@ input (see the call cache)."
  ;; What the variable is narrowed to matters
  (not (et:cache--same-hash? (et &Cons 1&{$a::3} 2) (et &Cons 1&{$a::4} 2)))
  ;; Relative variable order matters
- (et:cache--same-hash? (et Tuple 1&{$a::1} 2&{$b::2} 3&{$b::2})
-                       (et Tuple 1&{$b::1} 2&{$a::2} 3&{$a::2}))
- (not (et:cache--same-hash? (et Tuple 1&{$a::1} 2&{$a::2} 3&{$b::2})
-                            (et Tuple 1&{$b::1} 2&{$a::2} 3&{$a::2})))
+ (et:cache--same-hash? (et tuple 1&{$a::1} 2&{$b::2} 3&{$b::2})
+                       (et tuple 1&{$b::1} 2&{$a::2} 3&{$a::2}))
+ (not (et:cache--same-hash? (et tuple 1&{$a::1} 2&{$a::2} 3&{$b::2})
+                            (et tuple 1&{$b::1} 2&{$a::2} 3&{$a::2})))
 
  ;; Same but for typeofs
  (not (et:cache--same-hash? (et &Cons 1 2) (et &Cons 1&{::$a} 2)))
  (et:cache--same-hash? (et &Cons 1&{::$a} 2) (et &Cons 1&{::$b} 2))
  (not (et:cache--same-hash? (et &Cons 1&{$a::Any} 2) (et &Cons 1&{::$b} 2)))
  (et:cache--same-hash? (et &Cons 1&{::$a} 2&{::$b}) (et &Cons 1&{::$b} 2&{::$a}))
- (et:cache--same-hash? (et Tuple 1&{::$a} 2&{::$b} 3&{::$b})
-                       (et Tuple 1&{::$b} 2&{::$a} 3&{::$a}))
- (not (et:cache--same-hash? (et Tuple 1&{::$a} 2&{::$a} 3&{::$b})
-                            (et Tuple 1&{::$b} 2&{::$a} 3&{::$a})))
+ (et:cache--same-hash? (et tuple 1&{::$a} 2&{::$b} 3&{::$b})
+                       (et tuple 1&{::$b} 2&{::$a} 3&{::$a}))
+ (not (et:cache--same-hash? (et tuple 1&{::$a} 2&{::$a} 3&{::$b})
+                            (et tuple 1&{::$b} 2&{::$a} 3&{::$a})))
 
  ;; A polymorph's active constraints are part of its structural hash.
  (let* ((case (car (et:type->cases (et Any))))

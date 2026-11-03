@@ -59,8 +59,8 @@
 
 (et-declare
  (@def garbage-collect ()
-       (or Nil (ListFresh (or (Tuple Symbol Integer Integer)
-                              (Tuple Symbol Integer Integer Integer)))))
+       (or Nil (ListFresh (or (tuple Symbol Integer Integer)
+                              (tuple Symbol Integer Integer Integer)))))
  (@def garbage-collect-maybe (factor: Integer) Boolean))
 
 
@@ -68,8 +68,8 @@
 ;;; Memory information
 
 (et-declare
- (@def memory-info () (or Nil (Tuple Integer Integer Integer Integer)))
- (@def memory-use-counts () (Tuple Integer Integer Integer Integer Integer Integer Integer))
+ (@def memory-info () (or Nil (tuple Integer Integer Integer Integer)))
+ (@def memory-use-counts () (tuple Integer Integer Integer Integer Integer Integer Integer))
  (@def malloc-info () Nil)
  (@def malloc-trim (&optional leave-padding: Integer) Boolean))
 

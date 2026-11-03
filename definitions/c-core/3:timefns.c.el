@@ -25,7 +25,7 @@
        String)
  (@def decode-time
        (&optional time: Timestamp zone: Timezone form: (or Nil @integer True))
-       (Tuple (or Integer (Cons Integer Integer))
+       (tuple (or Integer (Cons Integer Integer))
               Integer Integer Integer Integer Integer Integer
               (or Integer Nil True)
               (or Integer Nil)))
@@ -35,7 +35,7 @@
  ;; arity-dependent parameter structure.
  (@def encode-time
        (time: Todo &rest obsolescent-arguments: &List<Todo>)
-       (or Integer (Tuple Integer Integer) (Cons Integer Integer)))
+       (or Integer (tuple Integer Integer) (Cons Integer Integer)))
  (@def time-convert (time: Timestamp &optional form: (or Nil True @integer @list Integer)) TimeOutput))
 
 
@@ -43,11 +43,11 @@
 ;;; Current time
 
 (et-declare
- (@def current-time () (or (Cons Integer Integer) (Tuple Integer Integer Integer Integer)))
+ (@def current-time () (or (Cons Integer Integer) (tuple Integer Integer Integer Integer)))
  (@def current-cpu-time () (Cons Integer Integer))
  (@def current-time-string (&optional specified-time: Timestamp zone: Timezone) String)
  (@def current-time-zone (&optional specified-time: Timestamp zone: Timezone)
-       (Tuple (or Integer Nil) String)))
+       (tuple (or Integer Nil) String)))
 
 
 ;;; ============================================================

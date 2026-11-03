@@ -90,7 +90,7 @@
  (@def next-overlay-change (pos: IntOrMarker) Integer)
  (@def previous-overlay-change (pos: IntOrMarker) Integer)
  (@def overlay-lists ()
-       (and ListFresh<ListFresh<Overlay>> (Tuple ListFresh<Overlay>)))
+       (and ListFresh<ListFresh<Overlay>> (tuple ListFresh<Overlay>)))
  (@def overlay-recenter (pos: IntOrMarker) Nil)
  (@def overlay-get (overlay: Overlay prop: Any) Any)
  (@def overlay-put ([T] overlay: Overlay prop: Any value: T) T)

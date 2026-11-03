@@ -36,4 +36,4 @@
  ;; handling of plist-shaped operands.
  (@check defvar-keymap ($todo))
  (@def make-non-key-event ([(T <: Symbol)] symbol: T) T)
- (@def keymap-read-only-bind (binding: [T]) (Tuple @menu-item (Literal "") T :filter Closure)))
+ (@def keymap-read-only-bind (binding: [T]) (tuple @menu-item (Literal "") T :filter Closure)))

@@ -21,24 +21,24 @@
             (Alist Integer
                    (or Nil String Number Marker *registerv List<String>
                        (Cons @file String)
-                       (Tuple @file-query String Integer)
+                       (tuple @file-query String Integer)
                        (Cons @buffer String)
-                       (Tuple WindowConfiguration Marker)
-                       (Tuple (Cons @frame-configuration
-                                    (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                       (tuple WindowConfiguration Marker)
+                       (tuple (Cons @frame-configuration
+                                    (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                               Marker))))
  (@variable register-separator Integer?)
  (@variable register-preview-delay Number?)
  (@variable register-preview-default-keys List<String>)
  (@variable register-preview-function
-            (or Nil (fn (Args (Cons Integer
+            (or Nil (fn (&tuple (Cons Integer
                                      (or Nil String Number Marker *registerv List<String>
                                          (Cons @file String)
-                                         (Tuple @file-query String Integer)
+                                         (tuple @file-query String Integer)
                                          (Cons @buffer String)
-                                         (Tuple WindowConfiguration Marker)
-                                         (Tuple (Cons @frame-configuration
-                                                      (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                                         (tuple WindowConfiguration Marker)
+                                         (tuple (Cons @frame-configuration
+                                                      (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                                                 Marker))))
                           String)))
  (@variable register-use-preview True|@insist|Nil|@never|@traditional)
@@ -46,11 +46,11 @@
        (register: Integer)
        (or Nil String Number Marker *registerv List<String>
            (Cons @file String)
-           (Tuple @file-query String Integer)
+           (tuple @file-query String Integer)
            (Cons @buffer String)
-           (Tuple WindowConfiguration Marker)
-           (Tuple (Cons @frame-configuration
-                        (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+           (tuple WindowConfiguration Marker)
+           (tuple (Cons @frame-configuration
+                        (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                   Marker)))
  (@def set-register ([V] register: Integer value: V) V)
  (@def register-describe-oneline (c: Integer) String))
@@ -63,22 +63,22 @@
        (r: (Cons Integer
                  (or Nil String Number Marker *registerv List<String>
                      (Cons @file String)
-                     (Tuple @file-query String Integer)
+                     (tuple @file-query String Integer)
                      (Cons @buffer String)
-                     (Tuple WindowConfiguration Marker)
-                     (Tuple (Cons @frame-configuration
-                                  (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                     (tuple WindowConfiguration Marker)
+                     (tuple (Cons @frame-configuration
+                                  (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                             Marker))))
        String)
  (@def register-preview-default
        (r: (Cons Integer
                  (or Nil String Number Marker *registerv List<String>
                      (Cons @file String)
-                     (Tuple @file-query String Integer)
+                     (tuple @file-query String Integer)
                      (Cons @buffer String)
-                     (Tuple WindowConfiguration Marker)
-                     (Tuple (Cons @frame-configuration
-                                  (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                     (tuple WindowConfiguration Marker)
+                     (tuple (Cons @frame-configuration
+                                  (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                             Marker))))
        String)
  (@def make-register-preview-info
@@ -101,11 +101,11 @@
        (register: (Cons Integer
                         (or Nil String Number Marker *registerv List<String>
                             (Cons @file String)
-                            (Tuple @file-query String Integer)
+                            (tuple @file-query String Integer)
                             (Cons @buffer String)
-                            (Tuple WindowConfiguration Marker)
-                            (Tuple (Cons @frame-configuration
-                                         (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                            (tuple WindowConfiguration Marker)
+                            (tuple (Cons @frame-configuration
+                                         (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                                    Marker))))
        @string|@number|@marker|@buffer|@file|@file-query|@window|@frame|@kmacro?)
  (@def register-of-type-alist
@@ -113,16 +113,16 @@
        (Alist Integer
               (or Nil String Number Marker *registerv List<String>
                   (Cons @file String)
-                  (Tuple @file-query String Integer)
+                  (tuple @file-query String Integer)
                   (Cons @buffer String)
-                  (Tuple WindowConfiguration Marker)
-                  (Tuple (Cons @frame-configuration
-                               (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                  (tuple WindowConfiguration Marker)
+                  (tuple (Cons @frame-configuration
+                               (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                          Marker))))
  (@def register-preview (buffer: String|Buffer &optional show-empty: Bool) Any)
  (@variable register-preview-display-buffer-alist
-            (Cons (or (fn (Args Buffer Alist<Symbol_Any>) Window?)
-                      (List (fn (Args Buffer Alist<Symbol_Any>) Window?)))
+            (Cons (or (fn (&tuple Buffer Alist<Symbol_Any>) Window?)
+                      (List (fn (&tuple Buffer Alist<Symbol_Any>) Window?)))
                   Alist<Symbol_Any>))
  (@def register-preview-1
        (buffer: String|Buffer &optional show-empty: Bool types: &List<Symbol>?)
@@ -139,17 +139,17 @@
  (@def point-to-register
        (register: Integer &optional arg: Bool)
        (is-non-nil? arg
-                     (Tuple (Cons @frame-configuration
-                                  (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                     (tuple (Cons @frame-configuration
+                                  (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                             Marker)
                      Marker))
  (@def window-configuration-to-register
        (register: Integer &optional _arg: Any)
-       (Tuple WindowConfiguration Marker))
+       (tuple WindowConfiguration Marker))
  (@def frame-configuration-to-register
        (register: Integer &optional _arg: Any)
-       (Tuple (Cons @frame-configuration
-                    (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+       (tuple (Cons @frame-configuration
+                    (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
               Marker)))
 
 ;;; ============================================================
@@ -160,11 +160,11 @@
  (@def register-val-jump-to
        (_val: (or Nil String Number Marker *registerv List<String>
                   (Cons @file String)
-                  (Tuple @file-query String Integer)
+                  (tuple @file-query String Integer)
                   (Cons @buffer String)
-                  (Tuple WindowConfiguration Marker)
-                  (Tuple (Cons @frame-configuration
-                               (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                  (tuple WindowConfiguration Marker)
+                  (tuple (Cons @frame-configuration
+                               (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                          Marker))
         _arg: Bool)
        Any)
@@ -182,11 +182,11 @@
  (@def register-val-describe
        (val: (or Nil String Number Marker *registerv List<String>
                  (Cons @file String)
-                 (Tuple @file-query String Integer)
+                 (tuple @file-query String Integer)
                  (Cons @buffer String)
-                 (Tuple WindowConfiguration Marker)
-                 (Tuple (Cons @frame-configuration
-                              (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                 (tuple WindowConfiguration Marker)
+                 (tuple (Cons @frame-configuration
+                              (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                         Marker))
         verbose: Bool)
        Any))
@@ -199,11 +199,11 @@
  (@def register-val-insert
        (_val: (or Nil String Number Marker *registerv List<String>
                   (Cons @file String)
-                  (Tuple @file-query String Integer)
+                  (tuple @file-query String Integer)
                   (Cons @buffer String)
-                  (Tuple WindowConfiguration Marker)
-                  (Tuple (Cons @frame-configuration
-                               (List (Tuple Frame (Alist Symbol Any) WindowConfiguration)))
+                  (tuple WindowConfiguration Marker)
+                  (tuple (Cons @frame-configuration
+                               (List (tuple Frame (Alist Symbol Any) WindowConfiguration)))
                          Marker)))
        Any)
  (@def copy-to-register

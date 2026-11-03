@@ -73,10 +73,10 @@
 (et-declare
  (@def file-selinux-context
        (filename: String)
-       (Tuple String? String? String? String?))
+       (tuple String? String? String? String?))
  (@def set-file-selinux-context
        (filename: String
-                  context: (&Tuple String? String? String? String?))
+                  context: (&tuple String? String? String? String?))
        Boolean)
  (@def file-acl (filename: String) String?)
  (@def set-file-acl (filename: String acl-string: String) Boolean)
@@ -93,9 +93,9 @@
                   &optional timestamp: (or Nil Number
                                            (&Cons Integer Integer)
                                            (&Cons Integer (&Cons Integer Integer))
-                                           (&Tuple Integer Integer)
-                                           (&Tuple Integer Integer Integer)
-                                           (&Tuple Integer Integer Integer Integer))
+                                           (&tuple Integer Integer)
+                                           (&tuple Integer Integer Integer)
+                                           (&tuple Integer Integer Integer Integer))
                   flag: @nofollow?)
        Boolean)
  (@def unix-sync () Nil)
@@ -108,7 +108,7 @@
 (et-declare
  (@def insert-file-contents
        (filename: String &optional visit: Any beg: Integer? end: Integer? replace: Any)
-       (Tuple String Integer))
+       (tuple String Integer))
  (@def write-region
        ([] start: [S <: String|IntOrMarker?]
         end: (switch S [IntOrMarker] [String? Nil])
@@ -129,14 +129,14 @@
  (@def visited-file-modtime
        ()
        (or -1 0 (Cons Integer Integer)
-           (Tuple Integer Integer Integer Integer)))
+           (tuple Integer Integer Integer Integer)))
  (@def set-visited-file-modtime
        (&optional time-flag: (or Nil Number
                                  (&Cons Integer Integer)
                                  (&Cons Integer (&Cons Integer Integer))
-                                 (&Tuple Integer Integer)
-                                 (&Tuple Integer Integer Integer)
-                                 (&Tuple Integer Integer Integer Integer)))
+                                 (&tuple Integer Integer)
+                                 (&tuple Integer Integer Integer)
+                                 (&tuple Integer Integer Integer Integer)))
        Nil))
 
 
@@ -160,7 +160,7 @@
        Boolean)
  (@def file-system-info
        (filename: String)
-       (or Nil (Tuple Integer Integer Integer))))
+       (or Nil (tuple Integer Integer Integer))))
 
 
 ;;; ============================================================

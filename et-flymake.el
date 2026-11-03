@@ -22,21 +22,15 @@
 ;;; Commentary:
 ;;; Code:
 
+(require 'cl-lib)
+(require 'et-cache)
 (require 'find-func)
 (require 'flymake)
+(require 'subr-x)
 
 
-(defvar-local et:flymake--process nil
-  "The current ET Flymake process.")
-
-(define-minor-mode et-mode
-  "Typecheck the current buffer."
-  :lighter nil
-  (if et-mode
-      (add-hook 'flymake-diagnostic-functions #'et:flymake--checker nil t)
-    (remove-hook 'flymake-diagnostic-functions #'et:flymake--checker t))
-  (when flymake-mode
-    (flymake-start)))
+;;; ============================================================
+;;; Globals
 
 (defcustom et-source-directory nil
   "Directory containing et.el source files.
@@ -46,11 +40,6 @@ et.el."
   :type '(choice (const :tag "Find et.el automatically" nil)
                  directory)
   :group 'et)
-
-(defun et:flymake-source-directory ()
-  "Return the directory containing the et.el source files."
-  (or et-source-directory
-      (find-library-name "et")))
 
 (defcustom et-flymake-temp-directory
   (expand-file-name "et-flymake" temporary-file-directory)
@@ -63,8 +52,42 @@ et.el."
   :type 'boolean
   :group 'et)
 
+(defvar-local et:flymake--process nil
+  "The current ET Flymake process.")
+
 (defvar-local et:flymake--temp-file nil
   "Path to the temp file for the current Flymake run.")
+
+
+;;; ============================================================
+;;; Mode
+
+(define-minor-mode et-mode
+  "Typecheck the current buffer."
+  :lighter nil
+  (if et-mode
+      (progn
+        (add-hook 'flymake-diagnostic-functions #'et:flymake--checker nil t)
+        (flymake-mode 1)
+        (flymake-start nil t))
+    (remove-hook 'flymake-diagnostic-functions #'et:flymake--checker t)
+    (when flymake-mode
+      (flymake-start))))
+
+
+;;; ============================================================
+;;; Flymake
+;;;; Checker command
+
+(defun et:flymake-source-directory ()
+  "Return the directory containing the et.el source files."
+  (or et-source-directory
+      (when-let* ((library
+                   (condition-case nil
+                       (find-library-name "et")
+                     (file-error nil))))
+        (file-name-directory library))
+      (error "Could not find the directory providing et.el")))
 
 (defun et:flymake--temp-file ()
   "Write current buffer contents to a temp file and return its path."
@@ -82,11 +105,14 @@ et.el."
           "--eval" (format "(add-to-list 'load-path %S)" source-directory)
           "--eval" "(setq load-prefer-newer t)"
           "-l" "et-cache"
-          "--eval" (format "(et-process-directory %S :eval t)"
+          "--eval" (format "(et-process-directory %S :eval nil)"
                            (expand-file-name "definitions" source-directory))
           "--eval" "(setq max-lisp-eval-depth 2400)"
           "--eval" (format "(et-flycheck-check-file %S %S :eval nil :check t :test %S)"
                            true-file temp-file et-flymake-do-test))))
+
+
+;;;; Diagnostics
 
 (defun et:flymake--position (buffer line column)
   "Return the position in BUFFER at one-based LINE and COLUMN."
@@ -130,7 +156,7 @@ et.el."
       (nreverse diagnostics))))
 
 
-;;; Show progress
+;;;; Process handling
 
 (defun et:flymake--process-filter (process output)
   "Record PROCESS OUTPUT and display ET progress messages."
@@ -195,6 +221,9 @@ et.el."
         (when (buffer-live-p output-buffer)
           (kill-buffer output-buffer))))))
 
+
+;;;; Flymake backend
+
 (defun et:flymake--checker (report-fn &rest _args)
   "Flymake backend for the ET Emacs Lisp type checker.
 
@@ -224,6 +253,167 @@ REPORT-FN is Flymake's diagnostic reporting callback."
       (process-put process 'et:flymake--report-fn report-fn)
       (setq et:flymake--process process))))
 
+
+;;; ============================================================
+;;; Peeking
+
+(defvar-local et:peek--process nil
+  "The current ET peeking process.")
+
+(defun et:peek--bounds ()
+  "Return the bounds of the expression at point."
+  (save-restriction
+    (widen)
+    (save-excursion
+      (condition-case nil
+          (let (start end)
+            (forward-sexp)
+            (setq end (point))
+            (backward-sexp)
+            (setq start (point))
+            (cons start end))
+        (error nil)))))
+
+(defun et:peek--root-index (start end)
+  "Return the index of the top-level expression containing START through END."
+  (save-restriction
+    (widen)
+    (save-excursion
+      (goto-char (point-min))
+      (cl-loop for index from 0
+               do (forward-comment (buffer-size))
+               while (< (point) (point-max))
+               for root-start = (point)
+               for root-end = (condition-case nil
+                                  (progn (forward-sexp) (point))
+                                (error nil))
+               when (and root-end
+                         (<= root-start start)
+                         (<= end root-end))
+               return index
+               unless root-end
+               return nil))))
+
+(defun et:peek--temp-file (source-buffer start end id)
+  "Copy SOURCE-BUFFER to a temp file and wrap START through END with ID."
+  (unless (file-directory-p et-flymake-temp-directory)
+    (make-directory et-flymake-temp-directory t))
+  (let ((contents
+         (with-current-buffer source-buffer
+           (save-restriction
+             (widen)
+             (buffer-substring-no-properties (point-min) (point-max)))))
+        (temp-file
+         (make-temp-file
+          (expand-file-name "et-peek-" et-flymake-temp-directory)
+          nil ".el")))
+    (with-temp-buffer
+      (insert contents)
+      (goto-char end)
+      (insert " " (prin1-to-string id) ")")
+      (goto-char start)
+      (insert "(:typeof ")
+      (write-region (point-min) (point-max) temp-file nil 'silent))
+    temp-file))
+
+(defun et:peek--command (true-file temp-file root-index)
+  "Return the command for peeking in TRUE-FILE using TEMP-FILE.
+
+Only the top-level expression at ROOT-INDEX is type-checked."
+  (let ((source-directory (et:flymake-source-directory)))
+    (list "emacs" "--batch"
+          "--eval" (format "(add-to-list 'load-path %S)" source-directory)
+          "--eval" "(setq load-prefer-newer t)"
+          "-l" "et-cache"
+          "--eval" (format "(et-process-directory %S :eval nil)"
+                           (expand-file-name "definitions" source-directory))
+          "--eval" "(setq max-lisp-eval-depth 2400)"
+          "--eval" (format "(et-flycheck-check-file %S %S :eval nil :only-check %S)"
+                           true-file temp-file root-index))))
+
+(defun et:peek--parse-output (output-buffer id)
+  "Return the type marked with ID in OUTPUT-BUFFER, or nil."
+  (with-current-buffer output-buffer
+    (goto-char (point-min))
+    (let ((regexp
+           (concat
+            ": hint: "
+            "\\(?:\\[[^]\r\n]*\\] \\)*"
+            "\\[" (regexp-quote id) "\\] "
+            "\\([^\r\n]*\\)\\(?:\r\\)?$"))
+          types)
+      (while (re-search-forward regexp nil t)
+        (push (string-trim (match-string-no-properties 1)) types))
+      (when types
+        (string-join (nreverse types) "\n")))))
+
+(defun et:peek--process-sentinel (process _event)
+  "Report the type when the peeking PROCESS finishes."
+  (unless (process-live-p process)
+    (let ((source-buffer (process-get process 'et:peek--source-buffer))
+          (output-buffer (process-buffer process))
+          (temp-file (process-get process 'et:peek--temp-file))
+          (id (process-get process 'et:peek--id)))
+      (unwind-protect
+          (when (and (buffer-live-p source-buffer)
+                     (eq process
+                         (buffer-local-value 'et:peek--process source-buffer)))
+            (with-current-buffer source-buffer
+              (setq et:peek--process nil)
+              (message
+               "%s"
+               (or (and (zerop (process-exit-status process))
+                        (et:peek--parse-output output-buffer id))
+                   "Could not determine expression type"))))
+        (when (and temp-file (file-exists-p temp-file))
+          (delete-file temp-file))
+        (when (buffer-live-p output-buffer)
+          (kill-buffer output-buffer))))))
+
+(defun et-peek ()
+  "Show the type of the expression at point in the minibuffer."
+  (interactive)
+  (unless buffer-file-name
+    (user-error "Current buffer is not visiting a file"))
+  (pcase-let* ((`(,start . ,end)
+                (or (et:peek--bounds)
+                    (user-error "No expression at point")))
+               (root-index
+                (or (et:peek--root-index start end)
+                    (user-error "Expression is not inside a top-level form")))
+               (source-buffer (current-buffer))
+               (id (format "et-peek-%s-%s" (emacs-pid) (abs (random))))
+               (temp-file (et:peek--temp-file
+                           source-buffer start end id))
+               (output-buffer (generate-new-buffer " *et-peek*"))
+               (old-process et:peek--process))
+    (setq et:peek--process nil)
+    (when (process-live-p old-process)
+      (kill-process old-process))
+    (condition-case err
+        (let ((process
+               (make-process
+                :name "et-peek"
+                :buffer output-buffer
+                :command (et:peek--command
+                          buffer-file-name temp-file root-index)
+                :connection-type 'pipe
+                :sentinel #'et:peek--process-sentinel
+                :noquery t)))
+          (process-put process 'et:peek--source-buffer source-buffer)
+          (process-put process 'et:peek--temp-file temp-file)
+          (process-put process 'et:peek--id id)
+          (setq et:peek--process process))
+      (error
+       (when (file-exists-p temp-file)
+         (delete-file temp-file))
+       (when (buffer-live-p output-buffer)
+         (kill-buffer output-buffer))
+       (signal (car err) (cdr err))))))
+
+
+;;; ============================================================
+;;; Provide
 
 (provide 'et-flymake)
 ;;; et-flymake.el ends here

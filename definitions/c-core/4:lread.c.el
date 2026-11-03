@@ -20,7 +20,7 @@
        (&optional buffer: Buffer|String? printflag: Bool filename: String? unibyte: Any do-allow-print: Bool)
        Nil)
  (@def eval-region
-       (start: IntOrMarker end: IntOrMarker &optional printflag: Bool read-function: (or Nil (fn (Args Any) Any)))
+       (start: IntOrMarker end: IntOrMarker &optional printflag: Bool read-function: (or Nil (fn (&tuple Any) Any)))
        Nil)
  (@def read (&optional stream: Buffer|Marker|String|AnyFn|True?) Sexp)
  (@def read-positioning-symbols (&optional stream: Buffer|Marker|String|AnyFn|True?) Sexp)
@@ -36,6 +36,6 @@
  (@def obarray-make (&optional size: Integer?) Obarray)
  (@def obarrayp (object: Any) Boolean)
  (@def obarray-clear (obarray: Obarray) Nil)
- (@def mapatoms (function: (fn (Args Symbol) Any) &optional obarray: Obarray?) Nil))
+ (@def mapatoms (function: (fn (&tuple Symbol) Any) &optional obarray: Obarray?) Nil))
 
 ;;; ============================================================

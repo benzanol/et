@@ -5,11 +5,11 @@
 
 (et-declare
  (@def format-encode-run-method
-       (method: (or String (fn (Args IntOrMarker IntOrMarker Buffer) (or Integer List<Cons<IntOrMarker_String>>)))
+       (method: (or String (fn (&tuple IntOrMarker IntOrMarker Buffer) (or Integer List<Cons<IntOrMarker_String>>)))
         from: IntOrMarker to: IntOrMarker &optional buffer: Buffer?)
        (or Nil Integer List<Cons<IntOrMarker_String>>))
  (@def format-decode-run-method
-       (method: (or String (fn (Args IntOrMarker IntOrMarker) Integer))
+       (method: (or String (fn (&tuple IntOrMarker IntOrMarker) Integer))
         from: IntOrMarker to: IntOrMarker &optional _buffer: Buffer?)
        Integer)
  ;; The return value is whatever TO-FN produces, and TO-FN is looked up at
@@ -31,7 +31,7 @@
  (@def format-encode-region (beg: IntOrMarker end: IntOrMarker &optional format: Symbol|List<Symbol>) Nil)
  (@def format-write-file (filename: String format: Symbol|List<Symbol> &optional confirm: Bool) Nil)
  (@def format-find-file (filename: String format: Symbol|List<Symbol>) Nil|Integer)
- (@def format-insert-file (filename: String format: Symbol|List<Symbol> &optional beg: Integer? end: Integer?) (Tuple String Integer))
+ (@def format-insert-file (filename: String format: Symbol|List<Symbol> &optional beg: Integer? end: Integer?) (tuple String Integer))
  (@def format-read (&optional prompt: String?) List<Symbol>))
 
 ;;; ============================================================
@@ -61,7 +61,7 @@
  ;; value-dependent nested alist shape.
  (@def format-deannotate-region
        (from: IntOrMarker to: IntOrMarker translations: &List<&Cons<Symbol_Todo>>
-        next-fn: (fn Nil (or (Tuple IntOrMarker IntOrMarker Symbol Bool) Nil)))
+        next-fn: (fn Nil (or (tuple IntOrMarker IntOrMarker Symbol Bool) Nil)))
        Nil|String)
  (@def format-subtract-regions
        (minu: &List<&Cons<Integer_Integer?>> subtra: &List<&Cons<Integer_Integer>>)
@@ -79,7 +79,7 @@
        Nil)
  (@def format-annotate-value
        ([T R] old: T new: R)
-       (Cons (or Nil (Tuple T)) (or Nil (Tuple R))))
+       (Cons (or Nil (tuple T)) (or Nil (tuple R))))
  ;; TRANSLATIONS has the same value-dependent nested alist shape described
  ;; above `format-deannotate-region'; the type language cannot yet express
  ;; it. FORMAT-FN's first argument is an annotation name drawn from that
@@ -87,7 +87,7 @@
  ;; (a string or an arbitrary annotation representation).
  (@def format-annotate-region
        (from: IntOrMarker to: IntOrMarker translations: &List<&Cons<Symbol_Todo>>
-        format-fn: (fn (Args Todo Boolean) Any) ignore: &List<Symbol>)
+        format-fn: (fn (&tuple Todo Boolean) Any) ignore: &List<Symbol>)
        List<Cons<IntOrMarker_Any>>))
 
 ;;; ============================================================

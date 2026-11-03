@@ -62,11 +62,11 @@
  ;; The result pairs each pending with-timeout timer with a time-delta
  ;; value; the timer element embeds the unrepresentable timer type. See
  ;; timer-create for why the timer type itself cannot be expressed.
- (@def with-timeout-suspend () (ListFresh (Tuple Todo TimeOutput)))
+ (@def with-timeout-suspend () (ListFresh (tuple Todo TimeOutput)))
  ;; The argument pairs a timer with a time-delta value; the timer element
  ;; embeds the unrepresentable timer type. See timer-create for why the
  ;; timer type itself cannot be expressed.
- (@def with-timeout-unsuspend (timer-spec-list: (read-only (List (Tuple Todo TimeOutput)))) Nil)
+ (@def with-timeout-unsuspend (timer-spec-list: (read-only (List (tuple Todo TimeOutput)))) Nil)
  (@def y-or-n-p-with-timeout (prompt: String seconds: Number default-value: [T]) T|Boolean)
  (@def timer-duration (string: String) Number?)
  (@def internal-timer-start-idle () Nil))
