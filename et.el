@@ -714,39 +714,37 @@ Source: gpt-5.6.sol high."
 (defun et:type--normalize-poly-constraints (constraints)
   "Return simplified CONSTRAINTS, or `INCONSISTENT'."
   (setq constraints (delete-dups (copy-sequence constraints)))
-  (when (cl-loop for (a . rest) on constraints
-                 thereis
-                 (cl-loop for b in rest
-                          thereis
-                          (et:type--poly-constraints-conflict? a b)))
-    (cl-return-from et:type--normalize-poly-constraints 'INCONSISTENT))
-  (cl-loop for constraint in constraints
-           for index from 0
-           unless
-           (cl-loop for other in constraints
-                    for other-index from 0
-                    thereis
-                    (and
-                     (/= index other-index)
-                     (et:type--poly-constraint-implies? other constraint)
-                     ;; Remove CONSTRAINT if OTHER is strictly stronger. If they
-                     ;; are equivalent, retain whichever appeared first.
-                     (or (< other-index index)
-                         (not (et:type--poly-constraint-implies?
-                               constraint other)))))
-           collect constraint))
+  (if (cl-loop for (a . rest) on constraints
+               thereis
+               (cl-loop for b in rest
+                        thereis
+                        (et:type--poly-constraints-conflict? a b)))
+      'INCONSISTENT
+    (cl-loop for constraint in constraints
+             for index from 0
+             unless
+             (cl-loop for other in constraints
+                      for other-index from 0
+                      thereis
+                      (and
+                       (/= index other-index)
+                       (et:type--poly-constraint-implies? other constraint)
+                       ;; Remove CONSTRAINT if OTHER is strictly stronger. If they
+                       ;; are equivalent, retain whichever appeared first.
+                       (or (< other-index index)
+                           (not (et:type--poly-constraint-implies?
+                                 constraint other)))))
+             collect constraint)))
 
 (defun et:type--normalize-overloads (overloads)
   (cl-loop for overload in overloads
            collect
-           (catch 'inconsistent
-             (cl-loop
-              for (generic . constraints) in overload
-              for normalized =
-              (et:type--normalize-poly-constraints constraints)
-              when (eq normalized 'INCONSISTENT)
-              do (throw 'inconsistent 'INCONSISTENT)
-              collect (cons generic normalized)))
+           (cl-loop for (generic . constraints) in overload
+                    for normalized =
+                    (et:type--normalize-poly-constraints constraints)
+                    when (eq normalized 'INCONSISTENT)
+                    return 'INCONSISTENT
+                    collect (cons generic normalized))
            into cs
            finally return (delete-dups (delq 'INCONSISTENT cs))))
 

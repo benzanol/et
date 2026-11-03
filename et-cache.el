@@ -702,7 +702,7 @@ pass straight through to ORIG."
         ;; store (guarded), then propagate as usual. ORIG runs exactly once.
         (_
          (pcase expr
-           (`(,(or 'defun 'et-defun defmacro) ,fn . ,_) (et-report-progress "Checking `%s'" fn))
+           (`(,(or 'defun 'et-defun 'defmacro) ,fn . ,_) (et-report-progress "Checking `%s'" fn))
            (`(,a ,b . ,_) (et-report-progress "Checking `(%s %s ...)'" a b))
            (a (et-report-progress "Checking `%s'" a)))
          (let* ((et--fp-active t)

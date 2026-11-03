@@ -185,7 +185,7 @@ Unknown and structurally complicated widget types deliberately fall back to
                 :package-version Nil|&Cons<Symbol_String>
                 :tag String?
                 :load Nil|String|Symbol))))
-            ($tail-tuple 3)))))))
+            ($tail-tuple 3))))))
 
 
 ;;; ============================================================
@@ -229,9 +229,9 @@ Unknown and structurally complicated widget types deliberately fall back to
                 :load Nil|String|Symbol
                 :tag String?
                 :set-after &List<Symbol>))))
-            ($tail-tuple 2))))))
-(@def custom-add-to-group (group: Symbol option: Symbol widget: Symbol) List<Any>)
-(@def custom-group-of-mode (mode: Symbol) Symbol))
+            ($tail-tuple 2)))))
+ (@def custom-add-to-group (group: Symbol option: Symbol widget: Symbol) List<Any>)
+ (@def custom-group-of-mode (mode: Symbol) Symbol))
 
 
 ;;; ============================================================
