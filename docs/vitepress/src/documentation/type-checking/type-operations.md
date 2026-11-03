@@ -23,7 +23,7 @@ In the simplest case, where all of the arguments to the defop are types, `:parse
   (et-subtract a b)) ; both a and b are type objects
 ```
 
-Sometimes, not all arguments to an operation are types. For example, consder the `infer` operation. `infer` matches `TYPE` against `PATTERN`. If it matches, it evaluates `IF`, and if not, it evaluates `ELSE`.  
+Sometimes, not all arguments to an operation are types. For example, consider the `infer` operation. `infer` matches `TYPE` against `PATTERN`. If it matches, it evaluates `IF`, and if not, it evaluates `ELSE`.  
 
 ```emacs-lisp
 ;; (infer TYPE [GENERICS...] PATTERN IF ELSE)

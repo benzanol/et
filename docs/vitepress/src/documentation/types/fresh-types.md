@@ -49,13 +49,13 @@ The newly-created cons cell is simultaneously assigned to a `Cons<Integer_Intege
 because `ConsFresh<1_2>` is automatically unfreshened to `&Cons<1_2>` before passing it to `cons-same`.  
 
 
-## freshen and freshen-shallow
+## freshen-deep and freshen-shallow
 
-The `freshen` and `freshen-shallow` type-utilitys can be used to turn a concrete type into an equivalent fresh type:  
+The `freshen-deep` and `freshen-shallow` type utilities can be used to turn a concrete type into an equivalent fresh type:  
 
 ```emacs-lisp
 (et-defun list (&rest objects: [T]) (freshen-shallow T))
-(et-defun copy-tree (x: [T]) (freshen T))
+(et-defun copy-tree (x: [T]) (freshen-deep T))
 
 (et-defvar my-nested-list List<List<Integer>> nil)
 (apply #'list my-nested-list) ; => ListFresh<List<Integer>>

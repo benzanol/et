@@ -24,4 +24,14 @@ Then, navigate to the buffer you want to type-check and run
 M-x et-mode
 ```
 
-Keep in mind that the checker will only analyze annotated code.
+Keep in mind that the checker will only analyze annotated code.  
+
+You can also run `M-x et-peek` to view the inferred type of the expression in front of the point.  
+
+```emacs-lisp
+(et-defun my-fn (x: Number) String
+  (make-string (round (* x 10)) ?a))
+; │            │      │         ╰──> Literal<97>
+; │            │      ╰──> Number
+; ╰─> String   ╰──> Integer
+```

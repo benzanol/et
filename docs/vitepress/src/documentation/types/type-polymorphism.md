@@ -4,7 +4,7 @@ title: "Type polymorphism"
 
 # Type polymorphism
 
-`et` also supports polymorphic function types. Polymorphic function types allows the output for a function to depend on the input of the function.  
+`et` also supports polymorphic function types. Polymorphic function types allow the output of a function to depend on the input of the function.  
 
 ```emacs-lisp
 (defun my-cons (a b)
@@ -63,7 +63,7 @@ This syntax also allows constraints, as follows:
   (cons a b))
 ```
 
-The shorthand however cannot express multiple generics on a single constraint; for this, the standard syntax must be used.  
+The shorthand cannot express multiple constraints on a single generic; for this, the standard syntax must be used.  
 
 
 ## Polymorphic function types

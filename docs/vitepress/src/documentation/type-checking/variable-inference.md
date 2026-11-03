@@ -26,9 +26,9 @@ One solution to this is to explicitly widen the type of each value:
   ...)
 ```
 
-This works, but requires significantly changing that way that the developer writes code.  
+This works, but requires significantly changing the way that the developer writes code.  
 
-Instead, when checking a `let` expression, `et` will perform a first pass over the body and determine each place that a variable is used. Then, it will make a *best guess* for what the variable type should be, and proceed with type-checking using the best-guess type. This will eliminate the need for type-checking in most cases.  
+Instead, when checking a `let` expression, `et` will perform a first pass over the body and determine each place that a variable is used. Then, it will make a *best guess* for what the variable type should be, and proceed with type-checking using the best-guess type. This will eliminate the need for explicitly casting the value to the correct type.  
 In this example, the first pass yields the following requirements:  
 
 ```emacs-lisp

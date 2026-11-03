@@ -1,4 +1,4 @@
-* Et
+* et
 =et= is an external typesystem and type-checker for elisp code, similar to [[https://www.typescriptlang.org/][Typescript]] (for Javascript) or [[https://mypy-lang.org/][mypy]]/[[https://microsoft.github.io/pyright/#/][Pyright]] (for Python).
 
 =et= defines:
@@ -9,8 +9,17 @@
 To learn more about =et=, visit the [[https://benzanol.github.io/et/][documentation]].
 
 ** Roadmap
-Top-priority
-- The documentation is currently incomplete.
+=et= is currently *experimental software*. All APIs and behaviors are subject to change. The project is currently far from a complete or stable state.
+
+The following items are high-priority:
+- The typesystem is missing a comprehensive behavior spec and test suite
+- Only a tiny fraction of the standard library has type annotations
+- A robust design is needed for handling =setf= places
+- More options beyond =et:/et!= are needed for annotating local variable types
+- Early returns such as /throw-catch/ are not handled correctly
+- The current =defop= API is unstable
+- The program design needs to be better documented in [[./docs/implementation.org]].
+- =et= does not currently type-check itself (due to incomplete annotations, missing standard library definitions, etc)
 
 ** Project organization
 - =et.el= - Defines the core typesystem (=et:type=, =et:repr=, datatypes, aliases, type algebra)

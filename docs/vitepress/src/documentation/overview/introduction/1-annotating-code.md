@@ -18,7 +18,7 @@ Type annotations can be defined using standard elisp `declare` forms, without th
 ```
 
 -   The only requirement for a function annotation is the `@return` type.
--   Any parameter types which are ommitted will default to the `Any` type.
+-   Any parameter types which are omitted will default to the `Any` type.
 -   Adding `(@skip)` will tell the type-checker not to type-check the body of this function.
 
 A top-level declare form can be used to define types for global variables.  
@@ -60,4 +60,4 @@ For global variables:
 (defvar-local my-local-number 4)
 ```
 
-I will use the `et-annotate` syntax throught this documentation, however it is completely optional, and all of `et`'s features are available without the extra dependency.
+I will use the `et-annotate` syntax throughout this documentation; however, it is completely optional, and all of `et`'s features are available without the extra dependency.

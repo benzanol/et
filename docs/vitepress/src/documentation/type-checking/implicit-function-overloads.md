@@ -4,7 +4,7 @@ title: "Implicit function overloads"
 
 # Implicit function overloads
 
-Many languages allow for function overloading, where the same function has multiple signatures. Elisp lacks overloads feature, but many functions still exhibit overload-like behavior: their return types vary based on optional flags, argument types, etc.  
+Many languages allow for function overloading, where the same function has multiple signatures. Elisp lacks explicit overloading, but many functions still exhibit overload-like behavior: their return types vary based on flags, argument types, etc.  
 For example, a (somewhat) common pattern in elisp is for a function to provide a `noerror` flag. If this flag is non-nil, then the function will return the value `nil` instead of throwing an error if it fails. This can be expressed by the typesystem as follows:  
 
 ```emacs-lisp

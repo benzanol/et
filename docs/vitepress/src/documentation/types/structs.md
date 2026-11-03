@@ -4,7 +4,7 @@ title: "Structs"
 
 # Structs
 
-When using `cl-defstruct`, the `:et` slot-property can be used to indicate the type of a struct slots. Slots without an `:et` property are given the `Any` type.  
+When using `cl-defstruct`, the `:et` slot property can be used to indicate the type of a struct's slots. Slots without an `:et` property are given the `Any` type.  
 
 ```emacs-lisp
 (cl-defstruct my-person

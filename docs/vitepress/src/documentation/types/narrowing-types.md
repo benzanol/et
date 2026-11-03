@@ -88,7 +88,7 @@ Not all predicates exhaustively classify an entire type. For example, `evenp` re
 Then, if we evaluate `(my-evenp obj)`, we get the following conversion  
 
 ```emacs-lisp
-(is-a? String|Integer{= obj} Nil)
+(is-a? String|Integer{= obj} Integer)
 => True{obj : Integer} | Nil{obj: String|Integer}
 ```
 
@@ -142,7 +142,7 @@ The `isnt?` type utility, the opposite of `is?`, is defined by simply flipping t
 
 ### Why upper-bound type-intersection?
 
-When intersecting/subtracting two-types, a perfect answer is not always possible (e.g. intersecting `Integer` with `Positive`).  
+When intersecting or subtracting two types, a perfect answer is not always possible (e.g. intersecting `Integer` with `Positive`).  
 A *lower-bound intersection*, as is performed by the `subsect` utility, is guaranteed to be entirely contained within the true intersection. Namely, the `Never` type is a (trivially) valid lower-bound intersection for *any* pair of types; For `Integer` and `Positive`, it is the *only* valid lower-bound.  
 An *upper-bound intersection*, as is performed by the `supersect` utility, is guaranteed to entirely *contain* the true intersection. For our example, both `Integer` and `Positive` would be valid upper-bound intersections, as a type itself is always guaranteed to be at least as large as its intersection with any other type.  
 

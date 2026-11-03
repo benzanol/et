@@ -28,7 +28,7 @@ However, `BoolVector` is clearly not an array of numbers. The solution is to att
 
 As shown, `:=:` only succeeds when the type variable matches exactly (it is an *invariant* assignment). Alternatively, `:>:` (*covariant* assignment) succeeds when the type variable contains its assignment, and the less common `:<:` (*contravariant* assignment) succeeds when the type variable is contained within its assignment.  
 
-Since the read-only version of an alias is designed to turn the alias from invariant to covariant, it will automatically convert all *invariant* assignment to *covariant* ones.  
+Since the read-only version of an alias is designed to turn the alias from invariant to covariant, it will automatically convert all *invariant* assignments to *covariant* ones.  
 
 ```emacs-lisp
 &MyArray<E> := &Vector<E> | BoolVector{E:>:Boolean} ; auto-generated
