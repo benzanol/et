@@ -22,7 +22,7 @@ Type annotations can be defined using standard elisp =declare= forms, without th
     (+ n m))
 #+end_src
 - The only requirement for a function annotation is the =@return= type.
-- Any parameter types which are ommitted will default to the =Any= type.
+- Any parameter types which are omitted will default to the =Any= type.
 - Adding ~(@skip)~ will tell the type-checker not to type-check the body of this function.
 
 A top-level declare form can be used to define types for global variables.
@@ -57,7 +57,7 @@ For global variables:
   (defvar my-number 4)
   (defvar-local my-local-number 4)
 #+end_src
-I will use the =et-annotate= syntax throught this documentation, however it is completely optional, and all of =et='s features are available without the extra dependency.
+I will use the =et-annotate= syntax throughout this documentation; however, it is completely optional, and all of =et='s features are available without the extra dependency.
 
 *** 2. Running the type-checker
 The type-checker is built in four main layers:
@@ -330,7 +330,7 @@ For multiple constraints on the same argument, use multiple forms in the vector.
 #+end_src
 
 ** Type polymorphism
-=et= also supports polymorphic function types. Polymorphic function types allows the output for a function to depend on the input of the function.
+=et= also supports polymorphic function types. Polymorphic function types allow the output of a function to depend on the input of the function.
 #+begin_src emacs-lisp
   (defun my-cons (a b)
     (declare (et (@generics [A B])
@@ -376,7 +376,7 @@ This syntax also allows constraints, as follows:
   (et-defun my-num-cons (a: [A <: Number] b: [B <: Number]) ConsFresh<A_B>
     (cons a b))
 #+end_src
-The shorthand however cannot express multiple generics on a single constraint; for this, the standard syntax must be used.
+The shorthand cannot express multiple constraints on a single generic; for this, the standard syntax must be used.
 
 *** Polymorphic function types
 We saw the =Function= type earlier, which is a type for a function with a fixed input and return type. The =PolyFunction= type is similar to =Function= except that its input and output are /type-expressions/ rather than single types. In addition to standard types, type-expressions can also contain type-variables, type-operations, and [[#type-variable-assignment]].
@@ -412,7 +412,7 @@ However, =BoolVector= is clearly not an array of numbers. The solution is to att
 #+end_src
 As shown, ~:=:~ only succeeds when the type variable matches exactly (it is an /invariant/ assignment). Alternatively, ~:>:~ (/covariant/ assignment) succeeds when the type variable contains its assignment, and the less common ~:<:~ (/contravariant/ assignment) succeeds when the type variable is contained within its assignment.
 
-Since the read-only version of an alias is designed to turn the alias from invariant to covariant, it will automatically convert all /invariant/ assignment to /covariant/ ones.
+Since the read-only version of an alias is designed to turn the alias from invariant to covariant, it will automatically convert all /invariant/ assignments to /covariant/ ones.
 #+begin_src emacs-lisp
   &MyArray<E> := &Vector<E> | BoolVector{E:>:Boolean} ; auto-generated
 
@@ -470,11 +470,11 @@ The newly-created cons cell is simultaneously assigned to a ~Cons<Integer_Intege
 #+end_src
 because ~ConsFresh<1_2>~ is automatically unfreshened to ~&Cons<1_2>~ before passing it to =cons-same=.
 
-*** freshen and freshen-shallow
-The =freshen= and =freshen-shallow= type-utilitys can be used to turn a concrete type into an equivalent fresh type:
+*** freshen-deep and freshen-shallow
+The =freshen-deep= and =freshen-shallow= type utilities can be used to turn a concrete type into an equivalent fresh type:
 #+begin_src emacs-lisp
   (et-defun list (&rest objects: [T]) (freshen-shallow T))
-  (et-defun copy-tree (x: [T]) (freshen T))
+  (et-defun copy-tree (x: [T]) (freshen-deep T))
 
   (et-defvar my-nested-list List<List<Integer>> nil)
   (apply #'list my-nested-list) ; => ListFresh<List<Integer>>
@@ -482,7 +482,7 @@ The =freshen= and =freshen-shallow= type-utilitys can be used to turn a concrete
 #+end_src
 
 ** Structs
-When using =cl-defstruct=, the =:et= slot-property can be used to indicate the type of a struct slots. Slots without an =:et= property are given the =Any= type.
+When using =cl-defstruct=, the =:et= slot property can be used to indicate the type of a struct's slots. Slots without an =:et= property are given the =Any= type.
 #+begin_src emacs-lisp
   (cl-defstruct my-person
     (name "" :et String)
@@ -583,7 +583,7 @@ Not all predicates exhaustively classify an entire type. For example, =evenp= re
 #+end_src
 Then, if we evaluate ~(my-evenp obj)~, we get the following conversion
 #+begin_src emacs-lisp
-  (is-a? String|Integer{= obj} Nil)
+  (is-a? String|Integer{= obj} Integer)
   => True{obj : Integer} | Nil{obj: String|Integer}
 #+end_src
 If ~(my-evenp obj)~ returns =t=, the typesystem can conclude that its input was definitely an integer, but if it returns =nil=, it cannot make a similar conclusion in the reverse direction.
@@ -627,7 +627,7 @@ The =isnt?= type utility, the opposite of =is?=, is defined by simply flipping t
 :CUSTOM_ID: intersection-bounds
 :END:
 
-When intersecting/subtracting two-types, a perfect answer is not always possible (e.g. intersecting =Integer= with =Positive=).
+When intersecting or subtracting two types, a perfect answer is not always possible (e.g. intersecting =Integer= with =Positive=).
 A /lower-bound intersection/, as is performed by the =subsect= utility, is guaranteed to be entirely contained within the true intersection. Namely, the =Never= type is a (trivially) valid lower-bound intersection for /any/ pair of types; For =Integer= and =Positive=, it is the /only/ valid lower-bound.
 An /upper-bound intersection/, as is performed by the =supersect= utility, is guaranteed to entirely /contain/ the true intersection. For our example, both =Integer= and =Positive= would be valid upper-bound intersections, as a type itself is always guaranteed to be at least as large as its intersection with any other type.
 
@@ -649,8 +649,8 @@ The correctness and types of the program are all determined bottom-up as describ
   (et-defvar my-list List<Cons<String_Positive>>
     (cons (cons "Alice" 1.5) nil))
 #+end_src
-~(cons "Alice" 1.5)~ evaluates to the type ~ConsFresh<"Alice"_1.5>~, however as described in [[#fresh]], this must be resolved to a concrete cons type before proceding. Of the many options it has to resolve to, we can clearly see that it /should/ choose ~Cons<String_Positive>~, but it needs some way to know that. To make this possible, a /type-recommendation/ must be passed down when traversing an expression.
-=et-defvar= type-checks the top-level =cons= with the recommendation ~List<Cons<String_Positive>>~. Based on this, =cons= calculates that it should give each its first child the recommendation ~Cons<String_Positive>~. Then, when ~(cons "Alice" 1.5)~ is converted to a concrete type, it uses the recommendation as a hint, and returns the correct type.
+~(cons "Alice" 1.5)~ evaluates to the type ~ConsFresh<"Alice"_1.5>~; however, as described in [[#fresh]], this must be resolved to a concrete cons type before proceeding. Of the many options it has to resolve to, we can clearly see that it /should/ choose ~Cons<String_Positive>~, but it needs some way to know that. To make this possible, a /type-recommendation/ must be passed down when traversing an expression.
+=et-defvar= type-checks the top-level =cons= with the recommendation ~List<Cons<String_Positive>>~. Based on this, =cons= calculates that it should give its first child the recommendation ~Cons<String_Positive>~. Then, when ~(cons "Alice" 1.5)~ is converted to a concrete type, it uses the recommendation as a hint, and returns the correct type.
 
 ** Casting
 Sometimes, type-recommendations will not be enough to coerce an expression to the desired type. In this case, there are several macros that allow explicitly overriding the recommendation system.
@@ -686,9 +686,9 @@ One solution to this is to explicitly widen the type of each value:
         (i (et: Integer 0)))
     ...)
 #+end_src
-This works, but requires significantly changing that way that the developer writes code.
+This works, but requires significantly changing the way that the developer writes code.
 
-Instead, when checking a =let= expression, =et= will perform a first pass over the body and determine each place that a variable is used. Then, it will make a /best guess/ for what the variable type should be, and proceed with type-checking using the best-guess type. This will eliminate the need for type-checking in most cases.
+Instead, when checking a =let= expression, =et= will perform a first pass over the body and determine each place that a variable is used. Then, it will make a /best guess/ for what the variable type should be, and proceed with type-checking using the best-guess type. This will eliminate the need for explicitly casting the value to the correct type.
 In this example, the first pass yields the following requirements:
 #+begin_src emacs-lisp
   typeof stack :> nil, ConsFresh<typeof i, typeof stack>
@@ -699,7 +699,7 @@ Solving these equations yields a type of =Integer= for =i=, =List<Integer>= for 
 
 
 ** Implicit function overloads
-Many languages allow for function overloading, where the same function has multiple signatures. Elisp lacks overloads feature, but many functions still exhibit overload-like behavior: their return types vary based on optional flags, argument types, etc.
+Many languages allow for function overloading, where the same function has multiple signatures. Elisp lacks explicit overloading, but many functions still exhibit overload-like behavior: their return types vary based on flags, argument types, etc.
 For example, a (somewhat) common pattern in elisp is for a function to provide a =noerror= flag. If this flag is non-nil, then the function will return the value =nil= instead of throwing an error if it fails. This can be expressed by the typesystem as follows:
 #+begin_src emacs-lisp
   (et-defun my-string-search (pattern: String &optional noerror: [N])
@@ -831,7 +831,7 @@ In the simplest case, where all of the arguments to the defop are types, =:parse
     (et-subtract a b)) ; both a and b are type objects
 #+end_src
 
-Sometimes, not all arguments to an operation are types. For example, consder the =infer= operation. =infer= matches =TYPE= against =PATTERN=. If it matches, it evaluates =IF=, and if not, it evaluates =ELSE=.
+Sometimes, not all arguments to an operation are types. For example, consider the =infer= operation. =infer= matches =TYPE= against =PATTERN=. If it matches, it evaluates =IF=, and if not, it evaluates =ELSE=.
 #+begin_src emacs-lisp
   ;; (infer TYPE [GENERICS...] PATTERN IF ELSE)
   (et (infer List<Integer> [T] List<T> T : Never)) ; => Integer
@@ -1167,4 +1167,3 @@ This is a collection of some of the more useful aliases built into the typesyste
         (Vector Sexp)))
   (et-defalias Sexps [] List<Sexp>)
 #+end_src
-

@@ -1,4 +1,4 @@
-* Intro
+* Et
 =et= is an external typesystem and type-checker for elisp code, similar to [[https://www.typescriptlang.org/][Typescript]] (for Javascript) or [[https://mypy-lang.org/][mypy]]/[[https://microsoft.github.io/pyright/#/][Pyright]] (for Python).
 
 =et= defines:
@@ -8,11 +8,11 @@
 
 To learn more about =et=, visit the [[https://benzanol.github.io/et/][documentation]].
 
-* Roadmap
+** Roadmap
 Top-priority
 - The documentation is currently incomplete.
 
-* Project organization
+** Project organization
 - =et.el= - Defines the core typesystem (=et:type=, =et:repr=, datatypes, aliases, type algebra)
 - =et-check.el= - Defines the process of type-checking elisp code
 - =et-annotate.el= - No-op macros for inserting type annotations alongside elisp code
@@ -20,12 +20,12 @@ Top-priority
 - =et-cache.el= - Caches expensive operations to avoid duplicating work. In large files, the checker is unusable without this.
 - =definitions/*= - Definitions for many files in the emacs standard library
 
-** Namespaces
+*** Namespaces
 Core files are split into different namespaces for the purpose of decoupling.
 Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
 Definitions /with/ a namespace prefix (=et:ns-*=) are internal functions, and are subject to being changed/removed over time. Namespaced definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
 
-** AI Usage
+*** AI Usage
 - The core typesystem and type-checker — =et-annotate.el=, =et.el=, =et-check.el= — are entirely human-written code (unless explicitly stated otherwise). These files should aim to contain no AI generated content into the forseeable future.
 - Auxiliary sources files — such as =et-flymake.el= and =et-cache.el= — contain substantial AI-generated portions.
 - Many of the standard library definitions were generated using =AI=.
