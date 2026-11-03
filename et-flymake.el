@@ -353,15 +353,16 @@ Only the top-level expression at ROOT-INDEX is type-checked."
     (let ((source-buffer (process-get process 'et:peek--source-buffer))
           (output-buffer (process-buffer process))
           (temp-file (process-get process 'et:peek--temp-file))
-          (id (process-get process 'et:peek--id)))
+          (id (process-get process 'et:peek--id))
+          (callback (process-get process 'et:peek--callback)))
       (unwind-protect
           (when (and (buffer-live-p source-buffer)
                      (eq process
                          (buffer-local-value 'et:peek--process source-buffer)))
             (with-current-buffer source-buffer
               (setq et:peek--process nil)
-              (message
-               "%s"
+              (funcall
+               callback
                (or (and (zerop (process-exit-status process))
                         (et:peek--parse-output output-buffer id))
                    "Could not determine expression type"))))
@@ -370,9 +371,8 @@ Only the top-level expression at ROOT-INDEX is type-checked."
         (when (buffer-live-p output-buffer)
           (kill-buffer output-buffer))))))
 
-(defun et-peek ()
-  "Show the type of the expression at point in the minibuffer."
-  (interactive)
+(defun et-infer-at-point (callback)
+  "Call CALLBACK with the type of the expression at point."
   (unless buffer-file-name
     (user-error "Current buffer is not visiting a file"))
   (pcase-let* ((`(,start . ,end)
@@ -403,6 +403,7 @@ Only the top-level expression at ROOT-INDEX is type-checked."
           (process-put process 'et:peek--source-buffer source-buffer)
           (process-put process 'et:peek--temp-file temp-file)
           (process-put process 'et:peek--id id)
+          (process-put process 'et:peek--callback callback)
           (setq et:peek--process process))
       (error
        (when (file-exists-p temp-file)
@@ -410,6 +411,11 @@ Only the top-level expression at ROOT-INDEX is type-checked."
        (when (buffer-live-p output-buffer)
          (kill-buffer output-buffer))
        (signal (car err) (cdr err))))))
+
+(defun et-peek ()
+  "Show the type of the expression at point in the minibuffer."
+  (interactive)
+  (et-infer-at-point (lambda (result) (message "%s" result))))
 
 
 ;;; ============================================================
