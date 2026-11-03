@@ -792,7 +792,11 @@ type for it."
   "Should be called whenever VAR is assigned to TYPE."
   (if (not (et-subtype? type (et:type-var->type var)))
       (et-err nil "Variable %s is not assignable to type %s" var type)
-    (et-update-var-narrow var type))
+    (let* ((narrow (et-reify-type type)))
+      ;; If TYPE is assignable to var, but the reified version is not,
+      ;; then just keep the variable as-is
+      (when (et-subtype? narrow (et:type-var->type var))
+        (et-update-var-narrow var narrow))))
   type)
 
 (et-define-macro-checker $symbol-set (sym-chk type-chk)
@@ -1256,6 +1260,7 @@ becomes a recursive alias."
                      (rewritten
                       (cond
                        ((null uppers) lower-check)
+                       ((funcall ideal-p lower-check) lower-check)
                        ;; `et-supersect' is deliberately an approximate
                        ;; intersection, so verify it against every actual
                        ;; upper bound before accepting it.
@@ -1271,7 +1276,6 @@ becomes a recursive alias."
                                  (error nil))))
                           (and (funcall acceptable-p intersection)
                                intersection)))
-                       ((funcall ideal-p lower-check) lower-check)
                        ;; No representable ideal solution was found.  Sets
                        ;; (including the initializer) describe values which
                        ;; really occur, so preserving their union is the
