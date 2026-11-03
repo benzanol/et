@@ -1,3 +1,5 @@
+Warning: this file is AI slop
+
 # Agent spawner instructions
 
 ## Purpose
@@ -1065,6 +1067,8 @@ package repositories such as ELPA or MELPA.
 
 - `0:NAME` — unprocessed source file, awaiting inventory.
 - `1:NAME` — inventory complete (skeleton of names only), awaiting authoring.
-- `2:NAME` — authoring complete.
+- `2:NAME` — authoring complete. file is still awaiting human review.
+- `3:NAME` — human has started reviewing and editting the file.
+- `4:NAME` — the file has been approved as complete by the human.
 
-Never rename a file to contain no prefix. The user must do that.
+Never rename a file to contain a `3:` or `4:` prefix. The user must do that.
