@@ -1,4 +1,6 @@
 #!/usr/bin/env -S emacs --script
+
+
 ;;; generate.el --- Generate VitePress content from Org files -*- lexical-binding: t; -*-
 
 ;; Usage:
@@ -7,30 +9,33 @@
 ;;   emacs --batch -Q -l documentation/generate.el \
 ;;     --eval '(et:vitepress-generate "DIR")'
 ;;
-;; DIR must contain an existing VitePress project in site/.  This script replaces
-;; site/src/ on every run.  The rest of site/ is persistent and owns VitePress
-;; configuration, dependencies, themes, styles, and static assets.
+;; DIR must contain an existing VitePress project in vitepress/. This
+;; script replaces vitepress/src/ on every run. The rest of vitepress/
+;; is persistent and owns VitePress configuration, dependencies,
+;; themes, styles, and static assets.
 ;;
-;; Every .org file directly inside DIR becomes a collection.  Each top-level
-;; headline becomes a page by default, with all of its descendant headlines on
-;; that page.  Give a headline the Org tag `section' to make it a sidebar group:
-;; each of its direct child headlines then becomes a separate page.  A section
-;; that also has its own body content is both a clickable page and a group.
-;; Give any headline the tag `page' to make that particular headline a separate
-;; page, even when its parent is not a section.  Untagged sibling headlines stay
-;; on their parent's page.
+;; Every .org file directly inside DIR becomes a collection. Each
+;; top-level headline becomes a page by default, with all of its
+;; descendant headlines on that page. Give a headline the Org tag
+;; `section' to make it a sidebar group: each of its direct child
+;; headlines then becomes a separate page. A section that also has its
+;; own body content is both a clickable page and a group. Give any
+;; headline the tag `page' to make that particular headline a separate
+;; page, even when its parent is not a section. Untagged sibling
+;; headlines stay on their parent's page.
 ;;
 ;;   * Language reference                                          :section:
 ;;   ** Syntax
 ;;   ** Semantics
 ;;
-;; Here, "Language reference" is a group, while "Syntax" and "Semantics" are
-;; pages.  If text appeared between the "Language reference" headline and its
-;; first child, the group would also link to a page containing that text.
-;; Without the `section' tag, "Language reference" alone would be a page and
-;; the two child headlines would appear in its right-hand TOC.  A child can
-;; itself be tagged `section' to create a nested group.
-;; A file can set its tab position with either of these top-level keywords:
+;; Here, "Language reference" is a group, while "Syntax" and
+;; "Semantics" are pages. If text appeared between the "Language
+;; reference" headline and its first child, the group would also link
+;; to a page containing that text. Without the `section' tag,
+;; "Language reference" alone would be a page and the two child
+;; headlines would appear in its right-hand TOC. A child can itself be
+;; tagged `section' to create a nested group. A file can set its tab
+;; position with either of these top-level keywords:
 ;;
 ;;   #+VITEPRESS_TAB_ORDER: 1
 ;;   #+PROPERTY: VITEPRESS_TAB_ORDER 1
@@ -153,14 +158,14 @@ property drawers, and comments do not make a navigation group into a page."
                                       (append path-prefix
                                               (list heading-slug)))))))
                     ((not selected)
-                       (setq pages
-                             (append pages
-                                     (walk
-                                      (org-element-contents element)
-                                      nil
-                                      (append
-                                       path-prefix
-                                       (list heading-slug))))))
+                     (setq pages
+                           (append pages
+                                   (walk
+                                    (org-element-contents element)
+                                    nil
+                                    (append
+                                     path-prefix
+                                     (list heading-slug))))))
                     (t
                      (let* (
                             (requested-slug
@@ -198,7 +203,7 @@ property drawers, and comments do not make a navigation group into a page."
    `(("text" . ,(et:vitepress--page-title page))
      ("link" . ,(concat "/" (et:vitepress--page-path page))))
    (when children
-      (append
+     (append
       (when (> (et:vitepress--page-level page) 1)
         '(("collapsed" . :json-false)))
       `(("items" . ,(vconcat children)))))))
@@ -298,11 +303,11 @@ all links to it."
       (unless pages
         (error "%s: no page headings found" file))
       (et:vitepress--tab-create :title title :slug slug :order order
-                               :file file :pages pages
-                               :nav
-                               (et:vitepress--build-navigation ast pages)
-                               :targets
-                               (et:vitepress--headline-targets ast pages)))))
+                                :file file :pages pages
+                                :nav
+                                (et:vitepress--build-navigation ast pages)
+                                :targets
+                                (et:vitepress--headline-targets ast pages)))))
 
 (defun et:vitepress--all-pages (pages)
   (cl-mapcan
@@ -553,9 +558,9 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
         (let ((page (et:vitepress--first-page tab)))
           (push `(("text" . ,(et:vitepress--tab-title tab))
                   ("link" . ,(if (et:vitepress--page-home page)
-                                  "/"
-                                (concat "/"
-                                        (et:vitepress--page-path page)))))
+                                 "/"
+                               (concat "/"
+                                       (et:vitepress--page-path page)))))
                 nav)
           (push (cons (concat "/" (et:vitepress--tab-slug tab) "/")
                       (vconcat (et:vitepress--tab-nav tab)))
@@ -604,13 +609,13 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
 ;;;###autoload
 
 (defun et:vitepress-generate (dir)
-  "Generate VitePress content in the existing project at DIR/site/."
+  "Generate VitePress content in the existing project at DIR/vitepress/."
   (interactive "DOrg documentation directory: ")
   (setq dir (file-name-as-directory (expand-file-name dir)))
   (unless (file-directory-p dir)
     (error "Not a directory: %s" dir))
   (let* ((files (directory-files dir t "\\.org\\'" t))
-         (site (expand-file-name "site" dir))
+         (site (expand-file-name "vitepress" dir))
          (src (expand-file-name "src" site))
          (tabs (sort (mapcar #'et:vitepress--read-tab files)
                      #'et:vitepress--tab-less-p)))

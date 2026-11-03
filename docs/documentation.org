@@ -2,7 +2,7 @@
 ** Introduction :section:
 =et= is an external typesystem and type-checker for elisp code, similar to [[https://www.typescriptlang.org/][Typescript]] (for Javascript) or [[https://mypy-lang.org/][mypy]]/[[https://microsoft.github.io/pyright/#/][Pyright]] (for Python).
 
-It provides two things:
+=et= defines:
 
 *1. A type-language for annotating elisp code*
 *2. A type-checker for statically analyzing the annotated code*
