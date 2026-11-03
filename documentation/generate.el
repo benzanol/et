@@ -13,17 +13,23 @@
 ;;
 ;; Every .org file directly inside DIR becomes a collection.  Each top-level
 ;; headline becomes a page by default, with all of its descendant headlines on
-;; that page.  Give a headline the Org tag `section' to make it a sidebar group
-;; instead: each of its direct child headlines then becomes a separate page.
+;; that page.  Give a headline the Org tag `section' to make it a sidebar group:
+;; each of its direct child headlines then becomes a separate page.  A section
+;; that also has its own body content is both a clickable page and a group.
+;; Give any headline the tag `page' to make that particular headline a separate
+;; page, even when its parent is not a section.  Untagged sibling headlines stay
+;; on their parent's page.
 ;;
 ;;   * Language reference                                          :section:
 ;;   ** Syntax
 ;;   ** Semantics
 ;;
 ;; Here, "Language reference" is a group, while "Syntax" and "Semantics" are
-;; pages.  Without the `section' tag, "Language reference" alone would be a
-;; page and the two child headlines would appear in its right-hand TOC.  A
-;; child can itself be tagged `section' to create a nested group.
+;; pages.  If text appeared between the "Language reference" headline and its
+;; first child, the group would also link to a page containing that text.
+;; Without the `section' tag, "Language reference" alone would be a page and
+;; the two child headlines would appear in its right-hand TOC.  A child can
+;; itself be tagged `section' to create a nested group.
 ;; A file can set its tab position with either of these top-level keywords:
 ;;
 ;;   #+VITEPRESS_TAB_ORDER: 1
@@ -40,10 +46,19 @@
 (setq org-export-preserve-breaks t)
 
 (cl-defstruct (et:vitepress--page (:constructor et:vitepress--page-create))
-  title slug path level begin contents-begin contents-end children home)
+  title slug path level begin end contents-begin contents-end children home)
+
+(cl-defstruct (et:vitepress--target (:constructor et:vitepress--target-create))
+  page anchor title)
 
 (cl-defstruct (et:vitepress--tab (:constructor et:vitepress--tab-create))
-  title slug order file pages nav)
+  title slug order file pages nav targets)
+
+(defvar et:vitepress--link-targets nil
+  "Headline targets available while exporting the current Org file.")
+
+(defvar et:vitepress--current-page nil
+  "Page currently being exported by the VitePress backend.")
 
 (defun et:vitepress--slugify (text)
   "Turn TEXT into a safe URL/file-name component."
@@ -62,6 +77,21 @@
       (error "%s: VITEPRESS_TAB_ORDER must be an integer" file))
     (string-to-number value)))
 
+(defun et:vitepress--section-has-content-p (headline)
+  "Return non-nil when HEADLINE has visible content before its children.
+
+Org represents that direct body as a `section' element.  Planning metadata,
+property drawers, and comments do not make a navigation group into a page."
+  (when-let* ((section
+               (seq-find (lambda (element)
+                           (eq (org-element-type element) 'section))
+                         (org-element-contents headline))))
+    (seq-some
+     (lambda (element)
+       (not (memq (org-element-type element)
+                  '(planning property-drawer comment comment-block))))
+     (org-element-contents section))))
+
 (defun et:vitepress--headline-pages (ast tab-slug file)
   "Read selected pages from AST and return their page-tree roots."
   (let (used-paths)
@@ -76,20 +106,52 @@
                         (section
                          (member "section"
                                  (org-element-property :tags element)))
-                        (selected (and children-are-pages-p (not section)))
+                        (explicit-page
+                         (member "page"
+                                 (org-element-property :tags element)))
+                        (selected (or explicit-page
+                                      (and children-are-pages-p
+                                           (not section))))
                         (title (org-element-property :raw-value element))
                         (heading-slug
                          (et:vitepress--slugify title)))
                    (cond
-                    ;; A section is a navigation group, never a page.  Its
-                    ;; direct children are the entries/pages in that group.
+                    ;; A section's direct children are entries/pages in its
+                    ;; navigation group.  When it has its own body, also make
+                    ;; the section itself a page which owns those children.  An
+                    ;; explicit `page' tag makes even an empty section a page.
                     (section
-                     (setq pages
-                           (append pages
-                                   (walk
-                                    (org-element-contents element) t
-                                    (append path-prefix
-                                            (list heading-slug))))))
+                     (if (or explicit-page
+                             (et:vitepress--section-has-content-p element))
+                         (let* ((requested-slug
+                                 (org-element-property :VITEPRESS_SLUG element))
+                                (slug (et:vitepress--slugify
+                                       (or requested-slug title)))
+                                (path (string-join
+                                       (append path-prefix (list slug)) "/"))
+                                (page
+                                 (et:vitepress--page-create
+                                  :title title :slug slug :path path :level level
+                                  :begin (org-element-property :begin element)
+                                  :end (org-element-property :end element)
+                                  :contents-begin
+                                  (org-element-property :contents-begin element)
+                                  :contents-end
+                                  (org-element-property :contents-end element))))
+                           (when (member path used-paths)
+                             (error "%s: duplicate generated page path %s"
+                                    file path))
+                           (push path used-paths)
+                           (setf (et:vitepress--page-children page)
+                                 (walk (org-element-contents element) t
+                                       (append path-prefix (list slug))))
+                           (setq pages (append pages (list page))))
+                       (setq pages
+                             (append pages
+                                     (walk
+                                      (org-element-contents element) t
+                                      (append path-prefix
+                                              (list heading-slug)))))))
                     ((not selected)
                        (setq pages
                              (append pages
@@ -111,6 +173,7 @@
                              (et:vitepress--page-create
                               :title title :slug slug :path path :level level
                               :begin (org-element-property :begin element)
+                              :end (org-element-property :end element)
                               :contents-begin
                               (org-element-property :contents-begin element)
                               :contents-end
@@ -135,9 +198,9 @@
    `(("text" . ,(et:vitepress--page-title page))
      ("link" . ,(concat "/" (et:vitepress--page-path page))))
    (when children
-     (append
+      (append
       (when (> (et:vitepress--page-level page) 1)
-        '(("collapsed" . t)))
+        '(("collapsed" . :json-false)))
       `(("items" . ,(vconcat children)))))))
 
 (defun et:vitepress--heading-navigation-entry (element page-table)
@@ -158,7 +221,7 @@ PAGE-TABLE maps headline positions to generated pages."
               (append
                `(("text" . ,(org-element-property :raw-value element)))
                (when (> (org-element-property :level element) 1)
-                 '(("collapsed" . t)))
+                 '(("collapsed" . :json-false)))
                `(("items" . ,(vconcat children))))))
             (children children)))))
 
@@ -176,6 +239,51 @@ PAGE-TABLE maps headline positions to generated pages."
       (puthash (et:vitepress--page-begin page) page page-table))
     (et:vitepress--heading-navigation (org-element-contents ast) page-table)))
 
+(defun et:vitepress--headline-targets (ast pages)
+  "Build a link-target table for all headlines in AST.
+
+PAGES identifies which generated page owns each headline.  Targets retain page
+objects rather than paths so making a page the site home later is reflected in
+all links to it."
+  (let ((page-table (make-hash-table :test #'eql))
+        (targets (make-hash-table :test #'equal)))
+    (dolist (page (et:vitepress--all-pages pages))
+      (puthash (et:vitepress--page-begin page) page page-table))
+    (cl-labels
+        ((add (type name page anchor title)
+           (when (and name (not (gethash (cons type name) targets)))
+             (puthash (cons type name)
+                      (et:vitepress--target-create
+                       :page page :anchor anchor :title title)
+                      targets)))
+         (walk (elements containing-page)
+           (dolist (element elements)
+             (when (eq (org-element-type element) 'headline)
+               (let* ((page (or (gethash (org-element-property :begin element)
+                                         page-table)
+                                containing-page))
+                      (page-root-p
+                       (and page
+                            (= (org-element-property :begin element)
+                               (et:vitepress--page-begin page))))
+                      (title (org-element-property :raw-value element))
+                      (custom-id (org-element-property :CUSTOM_ID element))
+                      (id (org-element-property :ID element)))
+                 (when page
+                   (add "custom-id" custom-id page
+                        (unless page-root-p custom-id) title)
+                   (add "id" id page (unless page-root-p id) title)
+                   ;; Org represents both [[Heading]] and [[*Heading]] as fuzzy
+                   ;; links (the latter retains its leading star in :path).
+                   (let ((anchor (unless page-root-p
+                                   (or custom-id id
+                                       (et:vitepress--slugify title)))))
+                     (add "fuzzy" title page anchor title)
+                     (add "fuzzy" (concat "*" title) page anchor title)))
+                 (walk (org-element-contents element) page))))))
+      (walk (org-element-contents ast) nil))
+    targets))
+
 (defun et:vitepress--read-tab (file)
   (with-temp-buffer
     (insert-file-contents file)
@@ -192,7 +300,9 @@ PAGE-TABLE maps headline positions to generated pages."
       (et:vitepress--tab-create :title title :slug slug :order order
                                :file file :pages pages
                                :nav
-                               (et:vitepress--build-navigation ast pages)))))
+                               (et:vitepress--build-navigation ast pages)
+                               :targets
+                               (et:vitepress--headline-targets ast pages)))))
 
 (defun et:vitepress--all-pages (pages)
   (cl-mapcan
@@ -213,7 +323,7 @@ PAGE-TABLE maps headline positions to generated pages."
         ;; marked descendants too.
         (dolist (child (et:vitepress--page-children page))
           (push (cons (- (et:vitepress--page-begin child) start)
-                      (- (et:vitepress--page-contents-end child) start))
+                      (- (et:vitepress--page-end child) start))
                 removed))
         (with-temp-buffer
           (insert body)
@@ -320,13 +430,42 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
     (concat contents
             (when footnotes (concat "\n\n" footnotes "\n")))))
 
+(defun et:vitepress--target-url (target)
+  "Return the site URL for TARGET."
+  (let* ((page (et:vitepress--target-page target))
+         (anchor (et:vitepress--target-anchor target))
+         (page-url (if (et:vitepress--page-home page)
+                       "/"
+                     (concat "/" (et:vitepress--page-path page)))))
+    (cond
+     ((and anchor (eq page et:vitepress--current-page))
+      (concat "#" anchor))
+     (anchor (concat page-url "#" anchor))
+     (t page-url))))
+
+(defun et:vitepress--link (link description info)
+  "Export LINK, rewriting document headline targets to generated page URLs."
+  (let* ((type (org-element-property :type link))
+         (path (org-element-property :path link))
+         (target (and et:vitepress--link-targets
+                      (gethash (cons type path)
+                               et:vitepress--link-targets))))
+    (if (not target)
+        (org-md-link link description info)
+      (format "[%s](%s)"
+              (if (or (null description) (string-empty-p description))
+                  (et:vitepress--target-title target)
+                description)
+              (et:vitepress--target-url target)))))
+
 (org-export-define-derived-backend 'et:vitepress-md 'md
   :translate-alist '((footnote-reference . et:vitepress--footnote-reference)
                      (inner-template . et:vitepress--inner-template)
+                     (link . et:vitepress--link)
                      (src-block . et:vitepress--src-block)
                      (table . et:vitepress--table)))
 
-(defun et:vitepress--org-to-md (org-text)
+(defun et:vitepress--org-to-md (org-text page targets)
   (let ((org-export-with-author nil)
         (org-export-with-broken-links 'mark)
         (org-export-with-creator nil)
@@ -335,7 +474,9 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
         (org-export-with-section-numbers nil)
         (org-export-with-tags nil)
         (org-export-with-toc nil)
-        (org-md-headline-style 'atx))
+        (org-md-headline-style 'atx)
+        (et:vitepress--current-page page)
+        (et:vitepress--link-targets targets))
     ;; A synthetic root keeps page-local headings at H2 and below.  Org's
     ;; body-only exporter would otherwise promote the shallowest heading to H1.
     (let ((markdown
@@ -350,12 +491,12 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
   "Encode STRING in a YAML-compatible double-quoted form."
   (json-serialize string))
 
-(defun et:vitepress--write-page (page source-file src-dir)
+(defun et:vitepress--write-page (page source-file src-dir targets)
   (with-temp-buffer
     (insert-file-contents source-file)
     (org-mode)
     (let* ((org-text (et:vitepress--page-org page))
-           (markdown (et:vitepress--org-to-md org-text))
+           (markdown (et:vitepress--org-to-md org-text page targets))
            (output (expand-file-name
                     (if (et:vitepress--page-home page)
                         "index.md"
@@ -485,7 +626,8 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
       (let ((all-pages (et:vitepress--all-pages
                         (et:vitepress--tab-pages tab))))
         (dolist (page all-pages)
-          (et:vitepress--write-page page (et:vitepress--tab-file tab) src))))
+          (et:vitepress--write-page page (et:vitepress--tab-file tab) src
+                                    (et:vitepress--tab-targets tab)))))
     (et:vitepress--write-navigation tabs src)
     (message "Generated %d collection(s) in %s" (length tabs) src)
     src))
