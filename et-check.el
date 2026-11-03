@@ -925,12 +925,13 @@ fresh types."
 
       (cl-loop
        for (sym . fn) in inits
-       for (_ . union) in
+       for (_ . solved) in
        (et:type--with-polymorphs polys
          (et:flow--solve-var-types var-uses polys))
-       for type = (et-with-recommendation union (funcall fn))
+       for reified = (et:algebra-simplify-type (et-reify-type solved))
+       for type = (et-with-recommendation reified (funcall fn))
        for final = (et:algebra-unfreshen-type
-                    (et-union type union))
+                    (et-union type reified))
        collect (cons sym final)))))
 
 (defun et:flow--new-poly-name (name)

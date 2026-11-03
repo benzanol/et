@@ -553,7 +553,7 @@ supports:
 ### Unions and intersections
 
 - `A|B|C` — union type (A or B or C)
-- `A^B` — intersection type (A and B) — rarely needed
+- `A{B}`, `{A}B`, or `{A}{B}` — intersection type (A and B) — rarely needed
 
 ### Optional (nullable)
 

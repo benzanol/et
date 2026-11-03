@@ -430,9 +430,9 @@
 ;;; List functions
 
 (et-declare
- (@def cl-first ([T] list: (or Nil^{T:>:Nil} (&Cons T Any))) T)
+ (@def cl-first ([T] list: (or Nil{T:>:Nil} (&Cons T Any))) T)
  (@def cl-second ([T] list: &List<T>) T?)
- (@def cl-rest ([T] list: (or Nil^{T:>:Nil} &Cons<Any_T>)) T)
+ (@def cl-rest ([T] list: (or Nil{T:>:Nil} &Cons<Any_T>)) T)
  (@def cl-third ([T] list: &List<T>) T?)
  (@def cl-fourth ([T] list: &List<T>) T?)
  (@def cl-fifth ([T] x: &List<T>) T?)

@@ -51,9 +51,9 @@
 ;;; List components
 
 (et-declare
- (@def car ([T] list: (or Nil^{T:>:Nil} (&Cons T Any))) T)
+ (@def car ([T] list: (or Nil{T:>:Nil} (&Cons T Any))) T)
  (@def car-safe ([O] object: O) (infer O [T] &Cons<T_Any> T Nil))
- (@def cdr ([T] list: (or Nil^{T:>:Nil} &Cons<Any_T>)) T)
+ (@def cdr ([T] list: (or Nil{T:>:Nil} &Cons<Any_T>)) T)
  (@def cdr-safe ([O] object: O) (infer O [T] &Cons<Any_T> T Nil))
  (@def setcar ([A B] cell: Cons<A_B> newcar: A) A)
  (@def setcdr ([A B] cell: Cons<A_B> newcdr: B) B))

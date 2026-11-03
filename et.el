@@ -1669,7 +1669,7 @@ never be read for any purpose other than assertions."
            when (string-empty-p or-seg)
            do (error "Empty segment in union type: %s" s)
            collect
-           (cl-loop for and-seg in (et:repr--split-at-depth or-seg ?^)
+           (cl-loop for and-seg in (et:repr--split-intersection or-seg)
                     when (string-empty-p and-seg)
                     do (error "Empty segment in intersection type: %s" s)
                     collect (et:repr->dnf (et:repr--parse-atom and-seg)) into and-parts
@@ -1768,6 +1768,39 @@ Depth tracks < > and { } nesting."
                (setq start (1+ i))))
         (setq prev c)))
     (push (substring s start) result)
+    (nreverse result)))
+
+(et-defun et:repr--split-intersection (s: String) List<String>
+  "Split S into adjacent intersection factors.
+
+  At least one side of each factor boundary must be surrounded by braces."
+  (let ((angle-depth 0)
+        (brace-depth 0)
+        (start 0)
+        (result nil)
+        (prev nil))
+    (dotimes (i (length s))
+      (let ((c (aref s i)))
+        (cond
+         ;; Do not treat the angle brackets in `T:<:U' as nesting.
+         ((eq prev ?:))
+         ((eq c ?<) (cl-incf angle-depth))
+         ((eq c ?>) (cl-decf angle-depth))
+         ((and (= angle-depth 0) (eq c ?{))
+          (when (= brace-depth 0)
+            (when (< start i)
+              (push (substring s start i) result))
+            (setq start i))
+          (cl-incf brace-depth))
+         ((and (= angle-depth 0) (eq c ?}))
+          (cl-decf brace-depth)
+          (when (= brace-depth 0)
+            (push (substring s start (1+ i)) result)
+            (setq start (1+ i)))))
+        (setq prev c)))
+
+    (when (< start (length s))
+      (push (substring s start) result))
     (nreverse result)))
 
 
@@ -1923,6 +1956,10 @@ in GEN-REPLS, if it exists."
 
 ;;;; To string
 
+;; To convert a series of nested cons types to a string,
+;; we must first construct the full structure of the cons types
+;; before resolving that structure to an actual string
+;; B=read-write, R=read, W=write, O=other
 (et-declare
  (@alias EtToString (or String Tuple<@B|@R|@W|@O_EtToString_EtToString>)))
 
@@ -1936,6 +1973,7 @@ in GEN-REPLS, if it exists."
     (et:repr--tostring-0 repr)))
 
 (et-defun et:repr--tostring-resolve (to: EtToString) String
+  "Convert a repr to string and resolve cons cells."
   (if (stringp to) to
     (cl-loop with first-op = (car to)
              with cur = to
@@ -1960,6 +1998,7 @@ in GEN-REPLS, if it exists."
         (t (mapconcat #'et:repr--tostring-resolve tos sep))))
 
 (et-defun et:repr--tostring-noresolve (repr: EtRepr) EtToString
+  "Convert a repr to string without resolving cons cells."
   (cl-loop for factors in (et:repr->dnf repr)
            collect
            (cl-loop for (name . args) in factors
@@ -1968,13 +2007,22 @@ in GEN-REPLS, if it exists."
                     unless (and (not et-print-narrows)
                                 (eq name 'S:OP)
                                 (memq (car args) '(typeof bind)))
-                    collect (apply print args) into and-strings
+                    for str = (apply print args)
+                    if (and (stringp str) (string-match-p "^{.*}$" str))
+                    collect str into brace-strs
+                    else collect str into nobrace-strs
                     finally return
-                    (et:repr--join-tostrings
-                     "Any" " ^ " (delete-dups (remove "Any" and-strings))))
+                    (concat
+                     (pcase nobrace-strs
+                       ((or 'nil `(,only)) (et:repr--tostring-resolve (or only "Any")))
+                       (nb (mapconcat (lambda (x) (format "{%s}" (et:repr--tostring-resolve x))) nb)))
+                     (mapconcat #'et:repr--tostring-resolve brace-strs)))
            into or-strings
            finally return
-           (let* ((str (et:repr--join-tostrings "Never" " | " or-strings)))
+           (let* ((str (pcase or-strings
+                         ('nil "Never")
+                         (`(,one) one)
+                         (os (mapconcat #'et:repr--tostring-resolve os " | ")))))
              (if (and et-print-labels (et:repr->label repr))
                  (format "%s[%s]" (et:repr->label repr)
                          (et:repr--tostring-resolve str))
@@ -4096,7 +4144,7 @@ lazily because `List' is not yet defined when this file loads.")
 (et-defalias PlistOf [K V] (or Nil (Cons K (Cons V (PlistOf K V)))))
 
 (et-defalias PlistLike [K V]
-  (or PlistOf<K_V>^{V:>:Nil}
+  (or PlistOf<K_V>{V:>:Nil}
       Plist<K_V>))
 
 (et-defalias PlistGet [P K]
@@ -4159,34 +4207,34 @@ lazily because `List' is not yet defined when this file loads.")
 
 ;;;; Seq aliases
 
-(et-defalias ConcatSeq [(E = Any)] (or List<E> Vector<E> String^{E:=:Integer}))
-(et-defalias OrdSeq [(E = Any)] (or ConcatSeq<E> BoolVector^{E:=:Boolean}))
-(et-defalias EltSeq [(E = Any)] (or OrdSeq<E> CharTable^{E:=:Any}))
+(et-defalias ConcatSeq [(E = Any)] (or List<E> Vector<E> String{E:=:Integer}))
+(et-defalias OrdSeq [(E = Any)] (or ConcatSeq<E> BoolVector{E:=:Boolean}))
+(et-defalias EltSeq [(E = Any)] (or OrdSeq<E> CharTable{E:=:Any}))
 (et-defalias LenSeq [(E = Any)] (or EltSeq<E> (and (Emacs record) E:=:Any)))
-(et-defalias MapSeq [E] (or OrdSeq<E> Closure^{E:=:Any}))
+(et-defalias MapSeq [E] (or OrdSeq<E> Closure{E:=:Any}))
 
 (et-defalias ArefSeq [E]
   (or &Vector<E>
-      String^{E:>:Integer}
-      BoolVector^{E:>:Boolean}
-      CharTable^{E:>:Any}
-      Closure^{E:>:Any}
+      String{E:>:Integer}
+      BoolVector{E:>:Boolean}
+      CharTable{E:>:Any}
+      Closure{E:>:Any}
       (and (Emacs record) E:>:Any)))
 (et-defalias AsetSeq [E]
   (or VectorW<E>
-      String^{E:<:Integer}
-      BoolVector^{E:<:Boolean}
-      CharTable^{E:<:Any}
+      String{E:<:Integer}
+      BoolVector{E:<:Boolean}
+      CharTable{E:<:Any}
       (and (Emacs record) E:<:Never)))
 
 (et-defalias FillableArray [E]
-  (or VectorW<E> String^{E:<:Integer}
-      CharTable^{E:<:Integer}
-      BoolVector^{E:<:Any}))
+  (or VectorW<E> String{E:<:Integer}
+      CharTable{E:<:Integer}
+      BoolVector{E:<:Any}))
 
 (et-defalias StringOrBuffer [(Idx <: IntOrMarker)]
-  (or String^{Idx:<:Integer}
-      Buffer^{Idx:<:IntOrMarker}))
+  (or String{Idx:<:Integer}
+      Buffer{Idx:<:IntOrMarker}))
 
 
 ;;;; Completion aliases
