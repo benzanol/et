@@ -1107,16 +1107,16 @@ Convert a type to its freshened version.
 #+end_src
 
 *** overlapping
-~(overlapping? A B YES NO?)~
+~(might-overlap? A B YES NO?)~
 
-If =A= and =B= are overlapping, return =YES=, otherwise return =NO=.
+If =A= and =B= have any chance of intersection, return =YES=, otherwise return =NO=.
 If =NO= is omitted, it defaults to =Never=.
 #+begin_src emacs-lisp
-  (et (overlapping? Integer|String Boolean|String True Nil)) ; => True
-  (et (overlapping? Integer|String Boolean True Nil)) ; => Nil
-  (et (overlapping? Integer|String Boolean True)) ; => Never
+  (et (might-overlap? Integer|String Boolean|String True Nil)) ; => True
+  (et (might-overlap? Integer|String Boolean True Nil)) ; => Nil
+  (et (might-overlap? Integer|String Boolean True)) ; => Never
+  (et (might-overlap? Integer Positive True)) ; => True
 #+end_src
-
 
 
 ** Provided aliases

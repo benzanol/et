@@ -3,6 +3,8 @@
 (require 'et-cache)
 
 
+;;; Testing macros
+
 (defvar et:test-setup-definitions nil)
 (defun et:test-setup-definitions ()
   (unless et:test-setup-definitions
@@ -33,7 +35,7 @@
          (should (et:result->failed result))))))
 
 
-;;; 'while-stack'
+;;; while-stack
 
 ;; Nothing forcing the type of 'stack', so it gets inferred to a weird (but correct) loop type
 (et:test-check-succeeds while-stack-no-force
@@ -81,7 +83,7 @@
       stack)))
 
 
-;;; 'lambda-parameters'
+;;; lambda-parameters
 
 (et:test-check-succeeds lambda-parameters-are-inferred
   (et-defvar my-fn (or Nil (fn (&tuple Integer String) Integer)) nil)

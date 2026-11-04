@@ -2505,8 +2505,8 @@ indeterminates slot."
   (et-union (et:algebra-when (et-supersect type is) (et True))
             (et Nil)))
 
-(et-defspec overlapping? (a b yes &optional no)
-  `(extends? (and ,a ,b) Never ,(or no 'Never) ,yes))
+(et-defspec might-overlap? (a b yes &optional no)
+  `(extends? (supersect ,a ,b) Never ,(or no 'Never) ,yes))
 
 (et-defspec replace-in (type from to)
   `(or (minus ,type ,from) (overlapping? ,type ,from ,to)))
@@ -4049,6 +4049,9 @@ lazily because `List' is not yet defined when this file loads.")
 
 
 ;;;; Public functions
+
+(et-defun et-might-overlap? (a: EtType b: EtType) Boolean
+  (not (et-never-p (et-supersect a b))))
 
 (et-defun et-reify-type (type: EtType) EtType
   (et:algebra-unfreshen-type (et-remove-type-binds-and-polys type nil)))
