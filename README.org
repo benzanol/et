@@ -34,8 +34,10 @@ Core files are split into different namespaces for the purpose of decoupling.
 Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
 Definitions /with/ a namespace prefix (=et:ns-*=) are internal functions, and are subject to being changed/removed over time. Namespaced definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
 
-*** AI Usage
-- The core typesystem and type-checker — =et-annotate.el=, =et.el=, =et-check.el= — are entirely human-written code (unless explicitly stated otherwise). These files should aim to contain no AI generated content into the forseeable future.
+*** AI Policy
+This policy reflects not only the current state of the project, but also the policy for new contributions going forward.
+- The core typesystem and type-checker — =et-annotate.el=, =et.el=, =et-check.el= — should contain no AI generated code.
+- Documentation should never be written by AI.
 - Auxiliary sources files — such as =et-flymake.el= and =et-cache.el= — contain substantial AI-generated portions.
 - Many of the standard library definitions were generated using =AI=.
 

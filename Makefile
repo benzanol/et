@@ -1,4 +1,4 @@
-.PHONY: all check test compile unit-test check-test clean
+.PHONY: all ci check compile unit-test check-test clean generate-docs
 
 EMACS ?= emacs
 
@@ -24,3 +24,6 @@ check-test:
 
 clean:
 	$(RM) $(ELC_FILES)
+
+generate-docs:
+	$(EMACS) --script ./docs/generate.el ./docs
