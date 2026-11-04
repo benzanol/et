@@ -6,7 +6,7 @@ ELISP_FILES := et-annotate.el et.el et-check.el et-cache.el et-flymake.el
 ELC_FILES := $(ELISP_FILES:.el=.elc)
 
 all: check
-
+ci: check
 check: compile unit-test check-test
 
 compile:
