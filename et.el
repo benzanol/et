@@ -239,6 +239,23 @@ expression that is not actually in the buffer, ensure that
                      (count-str (length (et:result->diagnostics result))))
              stream))))
 
+(defun et-pp-result (result)
+  "Return a readable representation of RESULT."
+  (string-join
+   (append
+    (list (if (et:result->failed result) "FAILURE" "SUCCESS"))
+    (unless (et:result->failed result)
+      (list (format "  %s" (et-pp (et:result->value result)))))
+    (cl-loop
+     for (path severity message)
+     in (reverse (et:result->diagnostics result))
+     collect
+     (truncate-string-to-width
+      (format "  %s %S: %s" severity path
+              (replace-regexp-in-string "[\n\r]+" " " message))
+      99 nil nil "...")))
+   "\n"))
+
 
 ;;;; Paths
 
@@ -1261,7 +1278,7 @@ FUNC is called with one argument, the current argument"
      do (let ((read (funcall intersect (nth 1 entry1) (nth 1 entry2)))
               (write (funcall union (nth 2 entry1) (nth 2 entry2))))
           (when (et-never-p read)
-            (cl-return-from et:dt--plist-intersect-args 'INVALID))
+            (cl-return 'INVALID))
           (push (list (car entry1) read write) result)
           (setq remaining2 (delq entry2 remaining2)))
      else
@@ -3153,6 +3170,10 @@ Returns the final list of generic types, or `INVALID'."
 
 (et-defvar et:algebra--subtype-stack List<Cons<EtType_EtType>> nil
   "Stack of calls to `et:algebra--subtype-0' with the form (SUBTYPE . SUPERTYPE).")
+
+(et-defun et-type=? (a: EtType b: EtType) Boolean
+  (or (equal a b)
+      (and (et-subtype? a b) (et-subtype? b a))))
 
 (et-defun et-subtype? (sub: EtType super: EtType) Boolean
   "Entrypoint for determining subtype."

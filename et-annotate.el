@@ -82,7 +82,6 @@
       (cl-callf2 nconc (nreverse decls) (alist-get 'et (alist-get 'declare body))))
     `(,(nreverse args) ,@(when doc (list doc)) ,@body)))
 
-(et-declare (@expand et-defun))
 (defmacro et-defun (name arglist return &rest body)
   "Define NAME as a function with type annotations.
 
@@ -90,12 +89,11 @@
   (declare (indent 3) (doc-string 4))
   `(cl-defun ,name ,@(et:annotate-parse-arglist (cons arglist (cons return body)))))
 
-(et-declare (@expand et-lambda))
 (defmacro et-lambda (arglist return &rest body)
   "Define NAME as a function with type annotations.
 
 \(fn NAME ARGLIST RETURN [DOCSTRING] [DECL] [INTERACTIVE] BODY...)"
-  (declare (indent 3) (doc-string 4))
+  (declare (indent 2) (doc-string 3))
   `(lambda ,@(et:annotate-parse-arglist (cons arglist (cons return body)))))
 
 (setf (alist-get 'et defun-declarations-alist) (list #'ignore)

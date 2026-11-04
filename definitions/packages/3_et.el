@@ -60,7 +60,9 @@
  (@check et-declare ($type Nil))
 
  (@expand et-defun)
- (@expand et-defstruct))
+ (@expand et-defstruct)
+
+ (@check et-lambda ($expand)))
 
 (et-set-checker #'et-defun #'et:checker--et-defun)
 (et-defun et:checker--et-defun () EtType

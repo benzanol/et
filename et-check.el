@@ -614,20 +614,6 @@ be used as the body of the checker function."
             finally return last))
 
 
-;;;; Helper macros
-
-(defmacro et-is? (expr type)
-  `(et-subtype? (et:result->value
-                 (et-result-boundary
-                  (et:check--result->type (et:check-check ',expr nil nil))))
-                (et ,type)))
-
-(defmacro et-typecheck (expr)
-  `(et:result->value
-    (et-result-boundary
-     (et:check--result->type (et:check-check ',expr nil nil)))))
-
-
 ;;; ============================================================
 ;;; Processing - `et:process'
 ;;;; Identify exprs
@@ -672,6 +658,11 @@ be used as the body of the checker function."
 (defvar et:process--phase nil "The current processing phase.")
 (defvar et:process--expr nil "The expression currently being processed.")
 
+(defcustom et-allow-unrecognized t
+  "Allow top-level forms which don't have a registered checker."
+  :group 'et
+  :type 'boolean)
+
 (et-defun et-process-exprs (exprs: Sexps &key check test eval only-check) Nil
   ;; If checking is enabled for this file, that means we want diagnostics,
   ;; so disable deferred identification IFF checking is enabled
@@ -681,7 +672,8 @@ be used as the body of the checker function."
          (non-declare-idents (et-identify-exprs exprs))
          (identifications (cl-loop for p1 in declare-idents
                                    for p2 in non-declare-idents
-                                   collect (or p1 p2))))
+                                   collect (or p1 p2)))
+         check-results)
 
     ;; Evaluate the buffer
     ;; This must occur first, in case the buffer defines custom type keywords, macros, etc
@@ -719,7 +711,8 @@ be used as the body of the checker function."
       (cl-loop for expr in exprs
                for pos upfrom 0
                when (and (consp expr)
-                         (or (et-symbol-func-type (car expr))
+                         (or (not et-allow-unrecognized)
+                             (et-symbol-func-type (car expr))
                              (et-symbol-checker (car expr)))
                          ;; Only check a certain index when only-check is specified
                          (or (null only-check) (eq only-check pos)))
@@ -1649,6 +1642,20 @@ will be the result."
   (if (eval expr t) (et Nil)
     (et-fatal nil "Returned nil")))
 
+(et:helper--define-utility-checker :assert-type= (expr: Sexp spec: EtSpec)
+  (let* ((expr-type (et-reify-type (et-chk ($exp expr))))
+         (spec-type (et-parse-type spec)))
+    (unless (et-type=? expr-type spec-type)
+      (et-err nil "Expected %s, found %s" spec-type expr-type))
+    (et Nil)))
+
+(et:helper--define-utility-checker :assert-is? (expr: Sexp spec: EtSpec)
+  (let* ((expr-type (et-reify-type (et-chk ($exp expr))))
+         (spec-type (et-parse-type spec)))
+    (unless (et-subtype? expr-type spec-type)
+      (et-err nil "Expected %s, found %s" spec-type expr-type))
+    (et Nil)))
+
 (et:helper--define-utility-checker :assert-error (_expr: Sexp)
   (condition-case _err (et-chk ($at 1))
     (error (et Nil))
@@ -2258,6 +2265,24 @@ Returns a plist with :declare to set the symbol type."
 (et-defun et:identify-@eval (&rest body) EtIdentifyPlist
   (eval `(progn ,@body) t)
   nil)
+
+
+;;; ============================================================
+;;; Testing
+
+(defmacro et-is? (expr type)
+  `(et-subtype? (et:result->value
+                 (et-result-boundary
+                  (et:check--result->type (et:check-check ',expr nil nil))))
+                (et ,type)))
+
+(defmacro et-typecheck (expr)
+  `(et:result->value
+    (et-result-boundary
+     (et:check--result->type (et:check-check ',expr nil nil)))))
+
+(defmacro et-check (&rest exprs)
+  `(et-result-boundary (et-process-exprs ',exprs :check t)))
 
 
 ;;; ============================================================

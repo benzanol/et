@@ -42,7 +42,7 @@
  (@check [defvar defconst]
          ($pcase
           (or `(,name) `(,name ,val .,_))
-          ($progn ($expect ($eval (et-global-var-type name)) ($exp val))
+          ($progn ($expect ($eval (or (et-global-var-type name) (et Any))) ($exp val))
                   ($eval (et-literal name)))))
  (@check let
          ($pcase

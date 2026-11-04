@@ -935,7 +935,10 @@ To get accurate types for =put= and =get=, you can declare a particular symbol-p
 Run some elisp code within the checker process.
 #+begin_src emacs-lisp
   (et-declare
-   (@eval (some-code ...)))
+   (@eval (setq et-allow-unrecognized nil)))
+
+  ;; et will complain about this unrecognized top-level form
+  (my-unrecognized-function)
 #+end_src
 
 ** Provided spec macros

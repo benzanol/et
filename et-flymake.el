@@ -105,7 +105,7 @@ et.el."
           "--eval" (format "(add-to-list 'load-path %S)" source-directory)
           "--eval" "(setq load-prefer-newer t)"
           "-l" "et-cache"
-          "--eval" (format "(et-process-directory %S :eval nil)"
+          "--eval" (format "(et-process-directory %S :eval t)"
                            (expand-file-name "definitions" source-directory))
           "--eval" "(setq max-lisp-eval-depth 2400)"
           "--eval" (format "(et-flycheck-check-file %S %S :eval nil :check t :test %S)"
@@ -325,7 +325,7 @@ Only the top-level expression at ROOT-INDEX is type-checked."
           "--eval" (format "(add-to-list 'load-path %S)" source-directory)
           "--eval" "(setq load-prefer-newer t)"
           "-l" "et-cache"
-          "--eval" (format "(et-process-directory %S :eval nil)"
+          "--eval" (format "(et-process-directory %S :eval t)"
                            (expand-file-name "definitions" source-directory))
           "--eval" "(setq max-lisp-eval-depth 2400)"
           "--eval" (format "(et-flycheck-check-file %S %S :eval nil :only-check %S)"
