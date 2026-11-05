@@ -2133,7 +2133,7 @@ Returns the type of the last expression in the body."
 
 ;; If a form of these types is encountered in the file, evaluate it
 (et-set-identifier 'et-defalias #'et:identify-via-eval)
-(et-set-identifier 'et-defspec #'et:identify-via-eval)
+(et-set-identifier 'et-defsyntax #'et:identify-via-eval)
 (et-set-identifier 'et-defop #'et:identify-via-eval)
 
 (et-defun et:identify-via-eval (&rest _body) EtIdentifyPlist
@@ -2249,12 +2249,12 @@ Returns a plist with :declare to set the symbol type."
     (_ (et-fatal nil "Expected format (@symbol-property SYMBOL TYPE)"))))
 
 
-;;;; @spec
+;;;; @syntax
 
-(et-set-identifier '@spec #'et:identify-@spec)
+(et-set-identifier '@syntax #'et:identify-@syntax)
 
-(et-defun et:identify-@spec (name arglist &rest body) EtIdentifyPlist
-  (eval `(et-defspec ,name ,arglist ,@body) t)
+(et-defun et:identify-@syntax (name arglist &rest body) EtIdentifyPlist
+  (eval `(et-defsyntax ,name ,arglist ,@body) t)
   nil)
 
 

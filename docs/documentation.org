@@ -490,14 +490,13 @@ The newly-created cons cell is simultaneously assigned to a ~Cons<Integer_Intege
 because ~ConsFresh<1_2>~ is automatically unfreshened to ~&Cons<1_2>~ before passing it to =cons-same=.
 
 *** freshen-deep and freshen-shallow
-The =freshen-deep= and =freshen-shallow= type utilities can be used to turn a concrete type into an equivalent fresh type:
+The =freshen-deep= and =freshen-shallow= type-operations can be used to turn a concrete type into an equivalent fresh type:
 #+begin_src emacs-lisp
   (et-defun list (&rest objects: [T]) (freshen-shallow T))
   (et-defun copy-tree (x: [T]) (freshen-deep T))
 
-  (et-defvar my-nested-list List<List<Integer>> nil)
-  (apply #'list my-nested-list) ; => ListFresh<List<Integer>>
-  (copy-tree my-nested-list) ; => ListFresh<ListFresh<Integer>>
+  (apply #'list {List<List<Integer>>}) ; => ListFresh<List<Integer>>
+  (copy-tree {List<List<Integer>>}) ; => ListFresh<ListFresh<Integer>>
 #+end_src
 
 ** Structs
@@ -630,19 +629,22 @@ This is fairly useless when using concrete types: you could have just written ~(
   (my-remove-nil {List<Boolean>}) ; => List<True>
 #+end_src
 
-We have already seen the type-operations =is?=, =is-a?=, and =isnt?=, which are used for type-narrowing. A list of type operations can be found [[#type-operations-ref][here]].
+We have already seen the narrowing operations =is?=, =is-a?=, and =isnt?=, as well as the freshening operations =freshen-deep= and =freshen-shallow=. A more complete list of type operations can be found [[#type-operations-ref][here]].
+By convention, type-operations and type-macros should be named in lowercase, while core datatypes and aliases are uppercase.
 
-** Spec macros
-A "spec" is the human-writable list format which eventually gets parsed into actual type object. =et-defspec= can be used to define a custom spec-macro, which expands one spec to another spec before it is parsed into a type object.
+** Type macros
+One of the most powerful features of Lisp is its macro system, which makes it possible to add custom syntax to the language. Similarly, =et= has /type-macros/, which enable custom syntax for writing types.
+Defining a type-macro is very similar to defining a standard Lisp macro. Its definition is a function whose arguments and return value are unparsed types. Type-macros operate on unparsed types, much like how Lisp macros operate on unevaluated expressions.
 #+begin_src emacs-lisp
-  (et-deftype tuple (&rest args)
-    (if (null args) '(Nil)
+  (et-defsyntax tuple (&rest args)
+    (if (null args) 'Nil
       `(Cons ,(car args) (tuple ,@(cdr args)))))
 
   (et tuple 1 2 3) ; => (Cons 1 (Cons 2 (Cons 3 Nil)))
 #+end_src
-Keep in mind that the spec returned by a spec-macro cannot use the *symbol syntax* for types, it must use *list syntax*. This includes wrapping even zero-argument types in a list (as shown above with =Nil=).
-Many types you have seen so far, such as =args=, and =fn=, are actually spec macros which expand to real types. It is generally convention that spec-macros and type-operations are /lowercase/, while core datatypes and aliases are uppercase.
+To extend the analogy, if type-macros are like Lisp macros, then type-operations are like functions. Type-macros can define custom syntax, but type-operations are still necessary for the underlying type manipulations.
+
+Both =args= and =fn=, which we have already seen, are type-macros. A more complete list can be found [[#type-macros-ref][here]].
 
 * Type-checking :section:
 ** Type-checking (bottom-up)
@@ -868,12 +870,12 @@ Define an alias.
    (@alias MyNumberAlist [K (V <: Number) (V = Integer)] Alist<K_V>))
 #+end_src
 
-*** @spec
-Define a custom spec macro.
+*** @syntax
+Define a type macro.
 #+begin_src emacs-lisp
   (et-declare
-   (@spec my-cons (&optional arg1 arg2)
-          `(Cons ,(or arg1 'Any) ,(or arg2 arg1 'Any))))
+   (@syntax my-cons (&optional arg1 arg2)
+            `(Cons ,(or arg1 'Any) ,(or arg2 arg1 'Any))))
 #+end_src
 
 *** @symbol-property
@@ -969,7 +971,11 @@ Convert a type to its freshened version.
   ;; => (ConsFresh (Cons 1 2) (ConsFresh 3 4))
 #+end_src
 
-** Provided spec macros
+** Provided type macros
+:PROPERTIES:
+:CUSTOM_ID: type-macros-ref
+:END:
+
 *** tuple/tuple*
 ~(tuple TYPES...)~ / ~(tuple* TYPES... TAIL)~
 

@@ -33,7 +33,7 @@
 
 
 ;; Define stubs for 'def' functions
-(dolist (sym '(et-defalias et-defspec et-defop))
+(dolist (sym '(et-defalias et-defsyntax et-defop))
   (unless (fboundp sym) (fset sym (cons 'macro #'ignore))))
 
 (defmacro et: (_spec expr) (declare (indent 1)) expr)

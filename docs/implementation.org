@@ -43,7 +43,7 @@ A write-only (contravariant) form of a type can be defined by setting =READ=Any=
 *** Other containers
 Plists, vectors, and hash tables are all defined in terms of read-write types.
 #+begin_src emacs-lisp
-  (et-defspec Plist (&rest args)
+  (et-defsyntax Plist (&rest args)
     (when (eq 1 (mod (length args) 2))
       (error "Plist must have an even number of arguments"))
     (cl-loop for (key type) on args by #'cddr
@@ -137,23 +137,23 @@ A *type-spec* is the human-write/readable format that you will actually use in c
 A *type-expression* (=et:repr=) is a structural representation of a type-spec after being parsed.
 A *type-object* (=et:type=) is a less-expressive, normalized representation of a type. Type-checking an expression evaluates to an =et:type=.
 
-|                           | spec | et:repr | et:type |
-|---------------------------+------+---------+---------|
-| Human readable            | [X]  | [ ]     | [ ]     |
-| Contains datatypes        | [X]  | [X]     | [X]     |
-| Contains aliases          | [X]  | [X]     | [X]     |
-| Contains unions           | [X]  | [X]     | [X]     |
-| Contains intersections    | [X]  | [X]     | [ ]     |
-| Contains type-ops         | [X]  | [X]     | [ ]     |
-| Contains spec-macro calls | [X]  | [ ]     | [ ]     |
-| Contains type-variables   | [X]  | [X]     | [ ]     |
-| Contains variable narrows | [ ]  | [ ]     | [X]     |
+|                                 | spec | et:repr | et:type |
+|---------------------------------+------+---------+---------|
+| Human readable                  | [X]  | [ ]     | [ ]     |
+| Contains datatypes              | [X]  | [X]     | [X]     |
+| Contains aliases                | [X]  | [X]     | [X]     |
+| Contains unions                 | [X]  | [X]     | [X]     |
+| Contains intersections          | [X]  | [X]     | [ ]     |
+| Contains type-ops               | [X]  | [X]     | [ ]     |
+| Contains type-macro invocations | [X]  | [ ]     | [ ]     |
+| Contains type-variables         | [X]  | [X]     | [ ]     |
+| Contains variable narrows       | [ ]  | [ ]     | [X]     |
 
 #+begin_src
 spec
  | Parse type syntax
  | Resolve alias/datatype/type-operation/type-variable names
- | Expand spec-macros
+ | Expand type-macros
  V
 et:repr
  | Evaluate type-operations
@@ -163,7 +163,7 @@ et:type
 #+end_src
 
 ** Defining type operations
-While defspecs operate on its arguments in unparsed form, defops allow operating on its arguments after they have already been converted to types. This makes operations much more powerful, but also more difficult to define.
+While type-macros operate on arguments in unparsed form, type-operations allow operating on arguments after they have already been converted to types. This makes operations much more powerful, but also more difficult to define.
 #+begin_src emacs-lisp
   (et-defop NAME (ARGS...)
     [:to-string TO-STRING-CODE] ; always optional

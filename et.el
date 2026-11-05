@@ -91,7 +91,7 @@
                 ;; t => this is a ro alias, but is no different from its non-ro equivalent
                 :ro-redundant Boolean))
  (@symbol-property et-alias EtAliasDefinitionPlist)
- (@symbol-property et-spec-macro (Function Any EtSpec)))
+ (@symbol-property et-syntax (Function Any EtSpec)))
 
 (et-declare
  (@alias EtConstrainResult *et:match-result<List<EtMatchConstraint>>)
@@ -543,6 +543,19 @@ variable."
 
 ;;; ============================================================
 ;;; Types - `et:type'
+;;;; Type names
+
+(eval-and-compile
+  (et-defun et:type-ro-name (name: EtAliasName) EtAliasName
+    (intern (format "&%s" name))))
+
+(et-defun et:type-clear-type-definition (name: Symbol) Nil
+  (dolist (sym (list name (et:type-ro-name name)))
+    (put sym 'et-op nil)
+    (put sym 'et-syntax nil)
+    (put sym 'et-alias nil)))
+
+
 ;;;; Type structs
 
 (et-defstruct et:type-var
@@ -869,8 +882,8 @@ This is a common pattern for functions that have a `noerror' argument."
       name)))
 
 (et-defun et:type-identify-alias (name: EtAliasName genvec: EtGenVec spec: EtSpec props: &List) Nil
-  (when (plist-get (et:type--alias-props name t) :read-only)
-    (error "Alias %s is already defined, and is read-only" name))
+  (unless (plist-get props :ro-from)
+    (et:type-clear-type-definition name))
 
   ;; Parse the default specs
   (let* ((def-specs nil)
@@ -882,7 +895,7 @@ This is a common pattern for functions that have a `noerror' argument."
                               into genlist
                               finally return (vconcat genlist)))
          (ro-from (plist-get props :ro-from))
-         (ro-name (unless ro-from (intern (format "&%s" name))))
+         (ro-name (unless ro-from (et:type-ro-name name)))
          (plist (cl-list* :genvec raw-genvec
                           :generics (et-genvec-generics genvec)
                           :spec spec
@@ -907,10 +920,6 @@ This is a common pattern for functions that have a `noerror' argument."
     nil))
 
 (et-defun et:type-declare-alias (name: EtAliasName) Nil
-  ;; Remove it as a spec/op
-  (put name 'et-op nil)
-  (put name 'et-spec-macro nil)
-
   (let* ((props (et:type--alias-props name))
          (gens (plist-get props :generics))
          (def-specs (plist-get props :default-specs))
@@ -1090,7 +1099,7 @@ a valid `et:type-case->value'."
     (et-dt 'Literal val)))
 
 (et-defun et:type-tuple-spec (cons: Var args) EtSpec
-  (if (null args) (et-ql Nil)
+  (if (null args) 'Nil
     (et-ql ,cons ,(car args) ,(et:type-tuple-spec cons (cdr args)))))
 
 (et-defun et:type-tuple-star-spec (cons: Var types) EtSpec
@@ -1655,8 +1664,8 @@ never be read for any purpose other than assertions."
      (et:repr-new :generics et:repr--parsing-generics
                   :dnf (list (list (list 'S:POLY name)))))
 
-   ;; Parse a spec macro
-   (when-let* ((macro (get name 'et-spec-macro)))
+   ;; Parse a type macro
+   (when-let* ((macro (get name 'et-syntax)))
      (et:repr--parse-0 (apply macro args)))
 
    ;; Parse a custom op
@@ -2228,19 +2237,21 @@ indeterminates slot."
               (apply tostring args) (et:repr--op-to-string-fallback op-name args)))
 
 
-;;;; Spec macros
+;;;; Type macros
 
-(defmacro et-defspec (name arglist &rest body)
+(defmacro et-defsyntax (name arglist &rest body)
   (declare (indent 2))
-  `(progn (put ',name 'et-spec-macro (lambda ,arglist ,@body))
-          (put ',(intern (format "&%s" name)) 'et-spec-macro
-               (lambda ,arglist (list 'read-only (progn ,@body))))))
+  `(progn
+     (et:type-clear-type-definition ',name)
+     (put ',name 'et-syntax (lambda ,arglist ,@body))
+     (put ',(et:type-ro-name name) 'et-syntax
+          (lambda ,arglist (list 'read-only (progn ,@body))))))
 
-(et-defspec Nil () `(Literal nil))
-(et-defspec True () `(Literal t))
-(et-defspec Never () `(or))
+(et-defsyntax Nil () (et-ql Literal nil))
+(et-defsyntax True () (et-ql Literal t))
+(et-defsyntax Never () (et-ql or))
 
-(et-defspec fn (&rest args)
+(et-defsyntax fn (&rest args)
   (let* ((genvec (when (vectorp (car args)) (pop args)))
          (in (or (pop args) 'Nil))
          (out (or (pop args) 'Any)))
@@ -2251,12 +2262,18 @@ indeterminates slot."
       (list 'Function (et:repr--parse-0 in) (et:repr--parse-0 out)))))
 
 ;; fn0 (with no args) is equivalent to fn (with no args). Prefer the latter.
-(et-defspec fn0 (&optional ret) `(fn Nil ,ret))
-(et-defspec fn1 (arg &optional ret) `(fn (&tuple ,(or arg 'Any)) ,ret))
-(et-defspec fn2 (a1 a2 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any)) ,ret))
-(et-defspec fn3 (a1 a2 a3 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any)) ,ret))
-(et-defspec fn4 (a1 a2 a3 a4 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any)) ,ret))
-(et-defspec fn5 (a1 a2 a3 a4 a5 &optional ret) `(fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any) ,(or a5 'Any)) ,ret))
+(et-defsyntax fn0 (&optional ret)
+  (et-ql fn Nil ,ret))
+(et-defsyntax fn1 (arg &optional ret)
+  (et-ql fn (&tuple ,(or arg 'Any)) ,ret))
+(et-defsyntax fn2 (a1 a2 &optional ret)
+  (et-ql fn (&tuple ,(or a1 'Any) ,(or a2 'Any)) ,ret))
+(et-defsyntax fn3 (a1 a2 a3 &optional ret)
+  (et-ql fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any)) ,ret))
+(et-defsyntax fn4 (a1 a2 a3 a4 &optional ret)
+  (et-ql fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any)) ,ret))
+(et-defsyntax fn5 (a1 a2 a3 a4 a5 &optional ret)
+  (et-ql fn (&tuple ,(or a1 'Any) ,(or a2 'Any) ,(or a3 'Any) ,(or a4 'Any) ,(or a5 'Any)) ,ret))
 
 
 ;;;; Op macros
@@ -2349,11 +2366,13 @@ indeterminates slot."
 
 (defmacro et-defop (name arglist &rest plist)
   (declare (indent 2))
-  `(put ',name 'et-op
-        ,(et:repr--generate-op arglist
-                               (plist-get plist :parse)
-                               (car (last plist))
-                               (plist-get plist :to-string))))
+  `(progn
+     (et:type-clear-type-definition ',name)
+     (put ',name 'et-op
+          ,(et:repr--generate-op arglist
+                                 (plist-get plist :parse)
+                                 (car (last plist))
+                                 (plist-get plist :to-string)))))
 
 
 ;;;; Op definitions
@@ -2362,7 +2381,7 @@ indeterminates slot."
   :to-string (format "{%s - %s}" (et:repr--tostring-0 a) (et:repr--tostring-0 b))
   (et-subtract a b))
 
-(et-defspec non-nil (a)
+(et-defsyntax non-nil (a)
   `(minus ,a Nil))
 
 (et-defop type ([type :const])
@@ -2441,7 +2460,7 @@ indeterminates slot."
                              (et:repr--totype-0 yes) (et:repr--totype-0 no)))
 
 ;; Take THE FIRST matching case
-(et-defspec switch (type &rest options)
+(et-defsyntax switch (type &rest options)
   (pcase options
     ('nil 'Never)
     ((or `([,pat ,out] . ,rest) (and `([,pat] . ,rest) (let out pat)))
@@ -2453,7 +2472,7 @@ indeterminates slot."
     (_ (error "Invalid format for switch"))))
 
 ;; Must be exhaustive
-(et-defspec map-cases (type &rest cases)
+(et-defsyntax map-cases (type &rest cases)
   (cl-loop
    for (case . rest) on cases
    for (genvec pattern output) =
@@ -2508,10 +2527,10 @@ indeterminates slot."
   (et-union (et:algebra-when (et-supersect type is) (et True))
             (et Nil)))
 
-(et-defspec might-overlap? (a b yes &optional no)
+(et-defsyntax might-overlap? (a b yes &optional no)
   `(extends? (supersect ,a ,b) Never ,(or no 'Never) ,yes))
 
-(et-defspec replace-in (type from to)
+(et-defsyntax replace-in (type from to)
   `(or (minus ,type ,from) (overlapping? ,type ,from ,to)))
 
 (et-defop freshen-shallow (type)
@@ -4100,10 +4119,10 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias Alist [K V] (List (Cons K V)))
 
-(et-defspec tuple (&rest args) (et:type-tuple-spec 'Cons args))
-(et-defspec tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
+(et-defsyntax tuple (&rest args) (et:type-tuple-spec 'Cons args))
+(et-defsyntax tuple* (&rest args) (et:type-tuple-star-spec 'Cons args))
 
-(et-defspec args (&rest specs)
+(et-defsyntax args (&rest specs)
   (let ((required nil)
         (optional nil)
         (tail 'Nil)
@@ -4164,7 +4183,7 @@ lazily because `List' is not yet defined when this file loads.")
 
 ;;;; Plist aliases
 
-(et-defspec Plist (&rest args)
+(et-defsyntax Plist (&rest args)
   (when (eq 1 (mod (length args) 2))
     (error "Plist must have an even number of arguments"))
   (cl-loop for (key type) on args by #'cddr
