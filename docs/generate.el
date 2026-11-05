@@ -65,6 +65,12 @@
 (defvar et:vitepress--current-page nil
   "Page currently being exported by the VitePress backend.")
 
+(defvar et:vitepress--current-source-file nil
+  "Org source file currently being exported by the VitePress backend.")
+
+(defvar et:vitepress--file-targets nil
+  "Map absolute Org source filenames to their headline target tables.")
+
 (defun et:vitepress--slugify (text)
   "Turn TEXT into a safe URL/file-name component."
   (let ((slug (downcase (string-trim text))))
@@ -448,13 +454,32 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
      (anchor (concat page-url "#" anchor))
      (t page-url))))
 
+(defun et:vitepress--file-link-target (link)
+  "Return the target of LINK when it names a custom ID in another Org file."
+  (let ((search (org-element-property :search-option link)))
+    (when (and et:vitepress--file-targets
+               et:vitepress--current-source-file
+               (equal (org-element-property :type link) "file")
+               search
+               (string-match "\\`#\\(.+\\)\\'" search))
+      (let* ((custom-id (match-string 1 search))
+             (path (org-link-decode (org-element-property :path link)))
+             (file (file-truename
+                    (expand-file-name
+                     path
+                     (file-name-directory et:vitepress--current-source-file))))
+             (targets (gethash file et:vitepress--file-targets)))
+        (and targets
+             (gethash (cons "custom-id" custom-id) targets))))))
+
 (defun et:vitepress--link (link description info)
   "Export LINK, rewriting document headline targets to generated page URLs."
   (let* ((type (org-element-property :type link))
          (path (org-element-property :path link))
-         (target (and et:vitepress--link-targets
-                      (gethash (cons type path)
-                               et:vitepress--link-targets))))
+         (target (or (and et:vitepress--link-targets
+                          (gethash (cons type path)
+                                   et:vitepress--link-targets))
+                     (et:vitepress--file-link-target link))))
     (if (not target)
         (org-md-link link description info)
       (format "[%s](%s)"
@@ -500,7 +525,8 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
   (with-temp-buffer
     (insert-file-contents source-file)
     (org-mode)
-    (let* ((org-text (et:vitepress--page-org page))
+    (let* ((et:vitepress--current-source-file source-file)
+           (org-text (et:vitepress--page-org page))
            (markdown (et:vitepress--org-to-md org-text page targets))
            (output (expand-file-name
                     (if (et:vitepress--page-home page)
@@ -527,6 +553,14 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
 (defun et:vitepress--first-page (tab)
   "Return the first generated page in TAB."
   (car (et:vitepress--all-pages (et:vitepress--tab-pages tab))))
+
+(defun et:vitepress--file-target-table (tabs)
+  "Map the absolute source filename of each tab in TABS to its targets."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (tab tabs table)
+      (puthash (file-truename (et:vitepress--tab-file tab))
+               (et:vitepress--tab-targets tab)
+               table))))
 
 (defun et:vitepress--rewrite-link (tree old new)
   "Destructively replace links equal to OLD with NEW in TREE."
@@ -627,12 +661,14 @@ angle brackets inside those blocks as JSX, so use explicit fences instead."
     (if (file-directory-p src)
         (et:vitepress--empty-directory src)
       (make-directory src t))
-    (dolist (tab tabs)
-      (let ((all-pages (et:vitepress--all-pages
-                        (et:vitepress--tab-pages tab))))
-        (dolist (page all-pages)
-          (et:vitepress--write-page page (et:vitepress--tab-file tab) src
-                                    (et:vitepress--tab-targets tab)))))
+    (let ((et:vitepress--file-targets
+           (et:vitepress--file-target-table tabs)))
+      (dolist (tab tabs)
+        (let ((all-pages (et:vitepress--all-pages
+                          (et:vitepress--tab-pages tab))))
+          (dolist (page all-pages)
+            (et:vitepress--write-page page (et:vitepress--tab-file tab) src
+                                      (et:vitepress--tab-targets tab))))))
     (et:vitepress--write-navigation tabs src)
     (message "Generated %d collection(s) in %s" (length tabs) src)
     src))
