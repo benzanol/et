@@ -1,8 +1,12 @@
-* Implementation details :section:
+#+title: Internals
+
+* Implementation internals :section:
 #+begin_quote
 [!WARNING]
-🚧 This page is not complete 🚧
+🚧 This section is not complete 🚧
 #+end_quote
+
+This section of the documentation contains internal implementation details, and is geared toward advanced users and contributors. For the standard documentation, see [[file:documentation.org::#introduction][Documentation]].
 
 ** Read-write types
 :PROPERTIES:

@@ -80,7 +80,10 @@
 
 (defun et:vitepress--file-property (name)
   "Return file-wide Org property NAME from the current buffer."
-  (org--property-global-or-keyword-value name t))
+  (or (cdr (assoc-string name
+                         (org-collect-keywords (list name) (list name))
+                         t))
+      (org--property-global-or-keyword-value name t)))
 
 (defun et:vitepress--parse-order (value file)
   (when value

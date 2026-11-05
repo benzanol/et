@@ -1,5 +1,11 @@
+#+title: Documentation
+
 * Overview :section:
 ** Introduction :section:
+:PROPERTIES:
+:CUSTOM_ID: introduction
+:END:
+
 =et= is an external typesystem and type-checker for elisp code, similar to [[https://www.typescriptlang.org/][Typescript]] (for Javascript) or [[https://mypy-lang.org/][mypy]]/[[https://microsoft.github.io/pyright/#/][Pyright]] (for Python).
 
 =et= defines:
@@ -236,13 +242,13 @@ If =X <: A= and =Y <: =B=, then =Cons<X_Y>= supports all of the operations that 
 
 For readability, types containing =Cons= and =&Cons= types are often printed in compact lisp notation:
 #+begin_src emacs-lisp
-  (et Cons<1_Nil>) ; (1)
+  (et (Cons 1 (Cons 2 (Cons 3 Nil)))) ; (1 2 3)
   (et &Cons<1_2>) ; &(1 . 2)
-  (et &Cons<1_&Cons<2_&Cons<3_Nil>>>) ; &(1 2 3)
+  (et (Cons 1 (&Cons 2 (&Cons 3 Nil)))) ; (1 . &(2 3))
 #+end_src
 The underlying =Cons= types still exist, but the formatter hides them for brevity.
 
-For more details on the implementation and theory behind read-only types, see [[file:implementation.org::#read-write-types]].
+For advanced details on the implementation of read-only types, see [[file:implementation.org::#read-write-types]].
 
 *** Plists
 The =Plist= type represents an unordered plist, with a different type for each possible key. Similarly to =Cons=, the =Plist= type is read-write, and =&Plist= is the read-only version.
@@ -384,7 +390,7 @@ It is extremely common that a parameter's type is exactly a type variable (=left
   (et-defun my-cons (a: [A] b: [B]) ConsFresh<A_B>
     (cons a b))
 #+end_src
-This syntax also allows constraints, as follows:
+This syntax also allows for constraints, as follows:
 #+begin_src emacs-lisp
   (et-defun my-num-cons (a: [A <: Number] b: [B <: Number]) ConsFresh<A_B>
     (cons a b))
@@ -392,7 +398,7 @@ This syntax also allows constraints, as follows:
 The shorthand cannot express multiple constraints on a single generic; for this, the standard syntax must be used.
 
 *** Polymorphic function types
-We saw the =Function= type earlier, which is a type for a function with a fixed input and return type. The =PolyFunction= type is similar to =Function= except that its input and output are /type-expressions/ rather than single types. In addition to standard types, type-expressions can also contain type-variables, type-operations, and [[#type-variable-assignment]].
+We saw the =Function= type earlier, which is a type for a function with a fixed input and return type. The =PolyFunction= type is similar to =Function= except that its input and output are /type-expressions/ rather than single types. In addition to standard types, type-expressions can also contain type-variables, type-operations, and [[#type-variable-assignment]]s.
 
 To define a =PolyFunction= type, add a vector of generics before the arglist type of =fn=.
 #+begin_src emacs-lisp
@@ -514,7 +520,6 @@ From a struct definition, the type-checker will generate definitions for the str
 For more information on the predicate return type, see [[#narrowing]].
 
 *** Generic structs
-
 To make a struct type generic, add an =:et-generics= property to the first slot.
 #+begin_src emacs-lisp
   (cl-defstruct my-pair
@@ -529,6 +534,7 @@ Generic constraints use the same syntax as aliases and polymorphic functions:
     (second 0 :et T))
 #+end_src
 Struct type arguments are invariant, since struct slots can be mutated. Thus, =*box<Integer>= is not a subtype of =*box<Number>=.
+
 ** Narrowing
 :PROPERTIES:
 :CUSTOM_ID: narrowing
@@ -616,7 +622,7 @@ Type-operations define arbitrary transformations between types.
 #+begin_src emacs-lisp
   (et (minus Boolean Nil)) ; => True
 #+end_src
-This is fairly useless when using concrete types: you could have just written ~(et True)~. The power comes from applying type-operations to variable types.
+This is fairly useless when using concrete types: you could have just written ~(et True)~. Type-operations become much more useful when applied to type-variables:
 #+begin_src emacs-lisp
   (et-defun my-remove-nil ([T] list: &List<T>) (List (minus T Nil))
     (remq list nil))
@@ -626,10 +632,10 @@ This is fairly useless when using concrete types: you could have just written ~(
 
 We have already seen the type-operations =is?=, =is-a?=, and =isnt?=, which are used for type-narrowing. A list of type operations can be found [[#type-operations-ref][here]].
 
-** Custom spec macros
-A "spec" is the raw human-writable list format which eventually gets parsed into an actual type object. =et-defspec= can be used to define a custom spec-macro, which expands one spec to another spec before it is parsed into a type object.
+** Spec macros
+A "spec" is the human-writable list format which eventually gets parsed into actual type object. =et-defspec= can be used to define a custom spec-macro, which expands one spec to another spec before it is parsed into a type object.
 #+begin_src emacs-lisp
-  (et-defspec tuple (&rest args)
+  (et-deftype tuple (&rest args)
     (if (null args) '(Nil)
       `(Cons ,(car args) (tuple ,@(cdr args)))))
 
