@@ -105,6 +105,8 @@ The typesystem's design is driven by the following 3 goals:
   - Function types are single-argument, where the argument is the entire arglist
   - Predicates and type-narrowing are first-class citizens
 
+Many type-checkers allow customizing the type-system's strictness. Per goal 1, =et= is strict by default, and lacks any form of non-strict mode. Such a mode is currently on the roadmap, and could exist in the future.
+
 *** The invariance problem
 A primary goal of the typesystem is /correctness/, which means that if the typesystem tells you a value will have a particular type, it will. This may seem like an obvious property for a typesystem to have, but consider the following snippet in Typescript, which is arguably the most comparable project to this one:
 #+begin_src typescript

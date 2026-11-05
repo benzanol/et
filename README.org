@@ -4,22 +4,23 @@
 =et= defines:
 
 *1. A type-language for annotating elisp code*
+
 *2. A type-checker for statically analyzing the annotated code*
 
 To learn more about =et=, visit the [[https://benzanol.github.io/et/][documentation]].
 
 ** Roadmap
-=et= is currently *experimental software*. All APIs and behaviors are subject to change. The project is currently far from a complete or stable state.
+=et= is currently *extremely experimental*. All APIs and behaviors are subject to change. The project is currently far from a complete or stable state.
 
-The following items are high-priority:
-- The typesystem is missing a comprehensive behavior spec and test suite
-- Only a tiny fraction of the standard library has type annotations
-- A robust design is needed for handling =setf= places
-- More options beyond =et:/et!= are needed for annotating local variable types
-- Early returns such as /throw-catch/ are not handled correctly
-- The current =defop= API is unstable
+The following items are currently considered to be priorities:
+- 100% test coverage
+- Type-annotations for more of the standard library
+- =setf= handling
+- More options for annotating local types (beyond just =et:/et!=)
+- Early return handling such as /throw-catch/
 - The program design needs to be better documented in [[./docs/implementation.org]].
-- =et= does not currently type-check itself (due to incomplete annotations, missing standard library definitions, etc)
+- Getting the =et= package to fully type-check itself
+- Non-strict mode + customizable strictness rules
 
 ** Project organization
 - =et.el= - Defines the core typesystem (=et:type=, =et:repr=, datatypes, aliases, type algebra)
@@ -31,14 +32,13 @@ The following items are high-priority:
 
 *** Namespaces
 Core files are split into different namespaces for the purpose of decoupling.
-Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
-Definitions /with/ a namespace prefix (=et:ns-*=) are internal functions, and are subject to being changed/removed over time. Namespaced definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
+- Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
+- Definitions /with/ a namespace prefix (=et:ns-*=) are internal functions, and are subject to being changed/removed over time. Namespaced definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
 
-*** AI Policy
-This policy reflects not only the current state of the project, but also the policy for new contributions going forward.
-- The core typesystem and type-checker — =et-annotate.el=, =et.el=, =et-check.el= — should contain no AI generated code.
-- Documentation should never be written by AI.
-- Auxiliary sources files — such as =et-flymake.el= and =et-cache.el= — contain substantial AI-generated portions.
-- Many of the standard library definitions were generated using =AI=.
-
+*** AI Usage
+LLMs cannot currently generate high-quality elisp code. Thus, the core code should aim to contain zero AI-generated code. However, some of the auxiliary code, and much of the standard library, is currently AI-generated.
+| Documentation            | ~documentation/*.org~                | No AI                |
+| Core source files        | ~et.el~, ~et-check.el~, ~et-annotate.el~ | No AI usage          |
+| Auxiliary source files   | ~et-cache.el~, ~et-flymake.el~         | Substantial AI usage |
+| Standard lib definitions | ~definitions/*~                      | Almost entirely AI   |
 
