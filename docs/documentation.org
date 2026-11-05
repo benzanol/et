@@ -13,6 +13,8 @@
 *1. A type-language for annotating elisp code*
 *2. A type-checker for statically analyzing the annotated code*
 
+Click here for the [[https://github.com/benzanol/et][Github repo]].
+
 *** 1. Annotating code
 :PROPERTIES:
 :CUSTOM_ID: annotating-intro
@@ -72,7 +74,7 @@ The type-checker is built in four main layers:
 3. =et-cache.el= caches results of expensive computations to improve the checker's performance
 4. =et-flymake.el= uses flymake to run the type-checker in a background emacs process
 
-To run the checker, clone the =et= repo, then add the following to your config:
+To run the checker, clone the [[https://github.com/benzanol/et][repo]], then add the following to your config:
 #+begin_src emacs-lisp
   (add-to-list 'load-path "/path/to/et")
   (require 'et-flymake)

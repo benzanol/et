@@ -1,15 +1,9 @@
 * et
 =et= is an external typesystem and type-checker for elisp code, similar to [[https://www.typescriptlang.org/][Typescript]] (for Javascript) or [[https://mypy-lang.org/][mypy]]/[[https://microsoft.github.io/pyright/#/][Pyright]] (for Python).
 
-=et= defines:
+To learn more about =et=, check out the [[https://benzanol.github.io/et/][documentation]].
 
-*1. A type-language for annotating elisp code*
-
-*2. A type-checker for statically analyzing the annotated code*
-
-To learn more about =et=, visit the [[https://benzanol.github.io/et/][documentation]].
-
-** Roadmap
+*** Roadmap
 =et= is currently *extremely experimental*. All APIs and behaviors are subject to change. The project is currently far from a complete or stable state.
 
 The following items are currently considered to be priorities:
@@ -22,21 +16,9 @@ The following items are currently considered to be priorities:
 - Getting the =et= package to fully type-check itself
 - Non-strict mode + customizable strictness rules
 
-** Project organization
-- =et.el= - Defines the core typesystem (=et:type=, =et:repr=, datatypes, aliases, type algebra)
-- =et-check.el= - Defines the process of type-checking elisp code
-- =et-annotate.el= - No-op macros for inserting type annotations alongside elisp code
-- =et-flymake.el= - A flymake backend which runs the type-checker in a background Emacs process
-- =et-cache.el= - Caches expensive operations to avoid duplicating work. In large files, the checker is unusable without this.
-- =definitions/*= - Definitions for many files in the emacs standard library
-
-*** Namespaces
-Core files are split into different namespaces for the purpose of decoupling.
-- Definitions with no namespace prefix (=et-*=) are intended to be user-facing functions.
-- Definitions /with/ a namespace prefix (=et:ns-*=) are internal functions, and are subject to being changed/removed over time. Namespaced definitions with two dashes (=et:ns--*=) are private to the namespace they are defined in, and should not be used outside of it.
-
 *** AI Usage
-LLMs cannot currently generate high-quality elisp code. Thus, the core code should aim to contain zero AI-generated code. However, some of the auxiliary code, and much of the standard library, is currently AI-generated.
+- The core source files and documentation files should aim to contain zero AI-generated code/content.
+- Some of the auxiliary code, and much of the standard library, is currently AI-generated.
 | Documentation            | ~documentation/*.org~                | No AI                |
 | Core source files        | ~et.el~, ~et-check.el~, ~et-annotate.el~ | No AI usage          |
 | Auxiliary source files   | ~et-cache.el~, ~et-flymake.el~         | Substantial AI usage |
