@@ -887,7 +887,7 @@ For this, we introduce "checker expressions". A checker expression is built out 
 Many simple macros can get away with just using the =$expand= checker. This tells the type-checker to expand the macro, and then type-check the resulting expression, instead of trying to type-check the original macro invocation.
 #+begin_src emacs-lisp
   (defmacro my-increment (place)
-    (et ($expand))
+    (declare (et ($expand)))
     `(setf ,place (1+ ,place)))
 #+end_src
 
@@ -895,10 +895,10 @@ Many simple macros can get away with just using the =$expand= checker. This tell
 Many macros take a fixed number of positional arguments (zero or more), and the remaining arguments are expressions to be evaluated. The =$body= checker can be used in this case:
 #+begin_src emacs-lisp
   (defmacro save-excursion (&rest body)
-    (et ($body))
+    (declare (et ($body)))
     ...)
   (defmacro with-current-buffer (buf &rest body)
-    (et ($body Buffer))
+    (declare (et ($body Buffer)))
     ...)
 #+end_src
 
