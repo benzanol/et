@@ -1085,7 +1085,10 @@ interactively, clears every source's defun cache."
 
 (defun et-flycheck-check-file (true-file &optional content-file &rest args)
   "Entry point for batch-mode type checking."
-  (et-report-progress "Type-checking %s" (abbreviate-file-name true-file))
+  (et-report-progress "Type-checking %s"
+                      (if true-file
+                          (abbreviate-file-name true-file)
+                        "<headless buffer>"))
 
   (et-with-cache-source-if-enabled true-file
     (with-temp-buffer

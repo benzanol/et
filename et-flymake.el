@@ -41,6 +41,12 @@ et.el."
                  directory)
   :group 'et)
 
+(defcustom et-emacs-executable
+  (expand-file-name invocation-name invocation-directory)
+  "Emacs executable used for background type-checking processes."
+  :type 'file
+  :group 'et)
+
 (defcustom et-flymake-temp-directory
   (expand-file-name "et-flymake" temporary-file-directory)
   "Directory for temporary files used by the ET Flymake backend."
@@ -101,7 +107,7 @@ et.el."
 (defun et:flymake--command (true-file temp-file)
   "Return the ET batch command for TRUE-FILE and TEMP-FILE."
   (let ((source-directory (et:flymake-source-directory)))
-    (list "emacs" "--batch"
+    (list et-emacs-executable "--batch"
           "--eval" (format "(add-to-list 'load-path %S)" source-directory)
           "--eval" "(setq load-prefer-newer t)"
           "-l" "et-cache"
@@ -321,7 +327,7 @@ REPORT-FN is Flymake's diagnostic reporting callback."
 
 Only the top-level expression at ROOT-INDEX is type-checked."
   (let ((source-directory (et:flymake-source-directory)))
-    (list "emacs" "--batch"
+    (list et-emacs-executable "--batch"
           "--eval" (format "(add-to-list 'load-path %S)" source-directory)
           "--eval" "(setq load-prefer-newer t)"
           "-l" "et-cache"
@@ -373,8 +379,6 @@ Only the top-level expression at ROOT-INDEX is type-checked."
 
 (defun et-infer-at-point (callback)
   "Call CALLBACK with the type of the expression at point."
-  (unless buffer-file-name
-    (user-error "Current buffer is not visiting a file"))
   (pcase-let* ((`(,start . ,end)
                 (or (et:peek--bounds)
                     (user-error "No expression at point")))
