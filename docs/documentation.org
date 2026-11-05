@@ -124,7 +124,9 @@ addAnimals(dogs); // Dog[] is considered to be a valid Animal[]
 This code will type-check in every version of Typescript. The user has done nothing wrong here, but the typesystem has failed them. The design of the typesystem is heavily motivated by the goal of addressing this problem.
 
 ** In this documentation
-This documentation is most interactive when viewed within Emacs, where it is possible to directly evaluate and tweak the provided examples. The =M-x et-last-sexp= command can be used to type-check the expression before the point.
+This documentation is most interactive when viewed within Emacs, where it is possible to directly evaluate and tweak the provided examples.
+
+The =M-x et-last-sexp= command can be used to type-check the expression before the point. Note that this command runs in the /current Emacs process/ (useful for self-contained experiments, such as those in this doc). However, if you are type-checking a buffer using flymake, then use =et-peek= to check the expression in the /flymake process/.
 
 
 *** Some common utilities
