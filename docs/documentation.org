@@ -119,12 +119,29 @@ addAnimals(dogs); // Dog[] is considered to be a valid Animal[]
 This code will type-check in every version of Typescript. The user has done nothing wrong here, but the typesystem has failed them. The design of the typesystem is heavily motivated by the goal of addressing this problem.
 
 ** In this documentation
-This documentation makes use of the following macros for demonstrative purposes:
-- ~(et TYPE-SYNTAX...)~ - Parse a type
-- ~(et-is? EXPRESSION TYPE)~ - Type-check =EXPRESSION=, and determine if it is assignable to =TYPE=
-- ~(et-typecheck EXPRESSION)~ - Type-check =EXPRESSION= and output the resulting type
+This documentation is most interactive when viewed within Emacs, where it is possible to directly evaluate and tweak the provided examples. The =M-x et-last-sexp= command can be used to type-check the expression before the point.
 
-This documentation is best viewed within Emacs, where you can directly interact with the provided examples (plus create your own) to get a better feel for the system.
+
+*** Some common utilities
+
+Within a type-checked expression, the ~(:type TYPE)~ form is often used as a stub representing an arbitrary type. For example, the following tests how =+= behaves for various input types.
+#+begin_src emacs-lisp
+  (+ (:type Integer) (:type Number))
+  ;; >> Number
+  (+ (:type Integer) (:type String))
+  ;; >> "+" errored: expected NumOrMarker, found String
+#+end_src
+The =et= macro is used to parse a type name:
+#+begin_src emacs-lisp
+  (et Integer?)
+  ;; -> Integer | Nil
+#+end_src
+The =et-is?= macro is used to check an expression against a particular type:
+#+begin_src emacs-lisp
+  (et-is? 4 Integer)
+  ;; -> t
+#+end_src
+As shown, ~>>~ indicates the result of /type-checking/ an expression, while ~->~ indicates the result of /evaluating/ an expression at runtime.
 
 * Types :section:
 ** Type syntax
@@ -133,89 +150,122 @@ There are two mutually compatible syntaxes for defining types:
 *Symbol syntax:* ~Cons<Vector<Integer>_String>~
 Symbol syntax can be nested inside of list syntax:
 #+begin_src emacs-lisp
-(Cons Vector<Integer> String)
+  (Cons Vector<Integer> String)
 #+end_src
 But not the other way around:
 #+begin_src emacs-lisp
-Cons<(Vector Integer)_String> ; INVALID
+  Cons<(Vector Integer)_String> ; INVALID
 #+end_src
 
 ** Basic types :section:
 *** Scalars
 The typical scalar types =String=, =Number=, and =Symbol= behave as expected for describing simple datatypes.
 #+begin_src emacs-lisp
-  (et-is? 4 Number) ; t
-  (et-is? "foo" String) ; t
-  (et-is? 'bar Symbol) ; t
+  (et-is? 4 Number)
+  ;; -> t
+  (et-is? "foo" String)
+  ;; -> t
+  (et-is? 'bar Symbol)
+  ;; -> t
 #+end_src
 The numeric types =Integer=, =Positive=, and =Negative= exist as subtypes of =Number=.
 #+begin_src emacs-lisp
-  (et-is? 4 Integer) ; t
-  (et-is? 4.0 Integer) ; nil
-  (et-is? 4.5 Integer) ; nil
-  (et-is? 1 Positive) ; t
-  (et-is? -1 Negative) ; t
-  (et-is? 0 Positive) ; t
-  (et-is? 0 Negative) ; t
+  (et-is? 4 Integer)
+  ;; -> t
+  (et-is? 4.0 Integer)
+  ;; -> nil
+  (et-is? 4.5 Integer)
+  ;; -> nil
+  (et-is? 1 Positive)
+  ;; -> t
+  (et-is? -1 Negative)
+  ;; -> t
+  (et-is? 0 Positive)
+  ;; -> t
+  (et-is? 0 Negative)
+  ;; -> t
 #+end_src
 The types =NonNilSymbol= (all symbols except =nil=) and =Var= (all symbols except =nil= and =t=) exist as subtypes of =Symbol=.
 #+begin_src emacs-lisp
-  (et-is? nil NonNilSymbol) ; nil
-  (et-is? nil Var) ; nil
-  (et-is? t Var) ; nil
+  (et-is? nil NonNilSymbol)
+  ;; -> nil
+  (et-is? nil Var)
+  ;; -> nil
+  (et-is? t Var)
+  ;; -> nil
 #+end_src
 
 There are also a host of types representing internal emacs objects, such as =Buffer=, =Window=, =Frame=, =Overlay=, etc.
 #+begin_src emacs-lisp
-  (et-is? (current-buffer) Buffer) ; t
-  (et-is? (selected-window) Window) ; t
-  (et-is? (selected-frame) Frame) ; t
+  (et-is? (current-buffer) Buffer)
+  ;; -> t
+  (et-is? (selected-window) Window)
+  ;; -> t
+  (et-is? (selected-frame) Frame)
+  ;; -> t
 #+end_src
 
 The =Any= type matches any value, and the =NonNil= type matches any value /except/ for =nil=.
 #+begin_src emacs-lisp
-  (et-is? 123 NonNil) ; t
-  (et-is? 'foo NonNil) ; t
-  (et-is? (current-buffer) NonNil) ; t
-  (et-is? nil NonNil) ; nil
-  (et-is? nil Any) ; t
+  (et-is? 123 NonNil)
+  ;; -> t
+  (et-is? 'foo NonNil)
+  ;; -> t
+  (et-is? (current-buffer) NonNil)
+  ;; -> t
+  (et-is? nil NonNil)
+  ;; -> nil
+  (et-is? nil Any)
+  ;; -> t
 #+end_src
 
 *** Literals
 Any lisp value can be turned into a =Literal= type, which is a type that matches only that value.
 #+begin_src emacs-lisp
-  (et-is? 4 (Literal 4)) ; t
-  (et-is? "foo" (Literal "foo")) ; t
+  (et-is? 4 (Literal 4))
+  ;; -> t
+  (et-is? "foo" (Literal "foo"))
+  ;; -> t
 #+end_src
 There is also shorthand syntax for defining literal numbers, strings, and symbols:
 #+begin_src emacs-lisp
-  (et 4) ; (Literal 4)
-  (et @foo) ; (Literal 'foo)
-  (et %bar) ; (Literal "bar")
+  (et 4)
+  ;; -> (Literal 4)
+  (et @foo)
+  ;; -> (Literal 'foo)
+  (et %bar)
+  ;; -> (Literal "bar")
 #+end_src
 The types =True= and =Nil= are shorthands for =(Literal t)= and =(Literal nil)= respectively.
 #+begin_src emacs-lisp
-  (et True) ; (Literal t)
-  (et Nil) ; (Literal nil)
+  (et True)
+  ;; -> (Literal t)
+  (et Nil)
+  ;; -> (Literal nil)
 #+end_src
 
 *** Unions
 Any list of types can be unioned to create a new type using the =or= utility.
 #+begin_src emacs-lisp
-  (et-is? 4 (or Number String)) ; t
-  (et-is? "foo" (or Number String)) ; t
+  (et-is? 4 (or Number String))
+  ;; -> t
+  (et-is? "foo" (or Number String))
+  ;; -> t
 #+end_src
 A pipe can be used as shorthand syntax for a union type.
 #+begin_src emacs-lisp
-  (et-is? 4 Number|String) ; t
+  (et-is? 4 Number|String)
+  ;; -> t
 #+end_src
 The =Never= type is shorthand for an empty union, and matches no values.
 #+begin_src emacs-lisp
-  (equal (et (or)) (et Never)) ; t
+  (equal (et (or)) (et Never))
+  ;; -> t
 #+end_src
 Placing a question mark at the end of a type name is shorthand for unioning that type with =Nil=.
 #+begin_src emacs-lisp
-  (equal (et Integer?) (et Nil|Integer)) ; t
+  (equal (et Integer?) (et Nil|Integer))
+  ;; -> t
 #+end_src
 
 
@@ -231,7 +281,8 @@ The type ~(Cons A B)~ represents a cons cell with car =A= and cdr =B=. By defaul
 
   (et-defvar integer-cons Cons<Integer_Integer> (cons 1 1))
   (multiply-car integer-cons)
-  integer-cons ; (1.5 . 1)
+  integer-cons
+  ;; -> (1.5 . 1)
 #+end_src
 As shown, accepting a =Cons<Integer_Integer>= as a =Cons<Number_Any>= violates correctness, and must be rejected. In order to allow for /covariance/, we must define a read-only version of a cons cell, =&Cons=. A =&Cons= cannot be written to, so =&Cons<Integer_Integer>= is a subtype of =&Cons<Number_Number>= without violating correctness.
 Furthermore, a standard cons can be a subtype of a read-only cons, but not the other way around. To understand why, think about each cons type as "supporting" certain operations:
@@ -242,9 +293,12 @@ If =X <: A= and =Y <: =B=, then =Cons<X_Y>= supports all of the operations that 
 
 For readability, types containing =Cons= and =&Cons= types are often printed in compact lisp notation:
 #+begin_src emacs-lisp
-  (et (Cons 1 (Cons 2 (Cons 3 Nil)))) ; (1 2 3)
-  (et &Cons<1_2>) ; &(1 . 2)
-  (et (Cons 1 (&Cons 2 (&Cons 3 Nil)))) ; (1 . &(2 3))
+  (et (Cons 1 (Cons 2 (Cons 3 Nil))))
+  ;; -> (1 2 3)
+  (et &Cons<1_2>)
+  ;; -> &(1 . 2)
+  (et (Cons 1 (&Cons 2 (&Cons 3 Nil))))
+  ;; -> (1 . &(2 3))
 #+end_src
 The underlying =Cons= types still exist, but the formatter hides them for brevity.
 
@@ -253,14 +307,19 @@ For advanced details on the implementation of read-only types, see [[file:implem
 *** Plists
 The =Plist= type represents an unordered plist, with a different type for each possible key. Similarly to =Cons=, the =Plist= type is read-write, and =&Plist= is the read-only version.
 #+begin_src emacs-lisp
-  (et-subtype? (et (Plist :num Integer)) (et (Plist :num Number))) ; nil
-  (et-subtype? (et (&Plist :num Integer)) (et (&Plist :num Number))) ; t
+  (et-subtype? (et (Plist :num Integer)) (et (Plist :num Number)))
+  ;; -> nil
+  (et-subtype? (et (&Plist :num Integer)) (et (&Plist :num Number)))
+  ;; -> t
 #+end_src
 If =nil= is a valid value for a particular key's type, then that key is optional.
 #+begin_src emacs-lisp
-  (et-is? '(:a 4) (&Plist :a Integer :b Integer)) ; nil
-  (et-is? '(:a 4) (&Plist :a Integer :b Integer?)) ; t
-  (et-is? nil (&Plist :a Integer? :b Integer?)) ; t
+  (et-is? '(:a 4) (&Plist :a Integer :b Integer))
+  ;; -> nil
+  (et-is? '(:a 4) (&Plist :a Integer :b Integer?))
+  ;; -> t
+  (et-is? nil (&Plist :a Integer? :b Integer?))
+  ;; -> t
 #+end_src
 
 *** Functions
@@ -293,30 +352,40 @@ The argument-list for this kind of function can be represented using the =Plist=
 Luckily, you will never need to write these out in practice. For defuns, the function type will be generated automatically. For explicitly defining function types, you can use the =args= helper to generate the arglist type.
 #+begin_src emacs-lisp
   (et (fn (args Integer &optional String &rest Any) Symbol))
-  ;; (Function (&Cons Integer (or Nil (&Cons String Any))) Symbol)
+  ;; -> (Function (&Cons Integer (or Nil (&Cons String Any))) Symbol)
   (et (fn (args Integer &key :a String?) Symbol))
-  ;; (Function (&Cons Integer (&Plist :a String?)) Symbol)
+  ;; -> (Function (&Cons Integer (&Plist :a String?)) Symbol)
 #+end_src
 Then, function types can be expressed as follows:
 #+begin_src emacs-lisp
-  (et-is? #'foo (fn (args A &optional B C &rest Rest) Return)) ; t
-  (et-is? #'bar (fn (args A &key :x X :y Y) Return)) ; t
+  (et-is? #'foo (fn (args A &optional B C &rest Rest) Return))
+  ;; -> t
+  (et-is? #'bar (fn (args A &key :x X :y Y) Return))
+  ;; -> t
 #+end_src
 Additionally, there are several helpers for compactly defining an =N=-argument function. If any arguments or the return value is omitted, they default to =Any=.
 #+begin_src emacs-lisp
-  (et fn0) ; (Function Nil Any)
-  (et fn0<Integer>) ; (Function Nil Integer)
-  (et fn3) ; (Function (&Cons Any (&Cons Any (&Cons Any Nil))) Any)
-  (et fn3<1_2_3>) ; (Function (&Cons 1 (&Cons 2 (&Cons 3 Nil))) Any)
+  (et fn0)
+  ;; -> (Function Nil Any)
+  (et fn0<Integer>)
+  ;; -> (Function Nil Integer)
+  (et fn3)
+  ;; -> (Function (&Cons Any (&Cons Any (&Cons Any Nil))) Any)
+  (et fn3<1_2_3>)
+  ;; -> (Function (&Cons 1 (&Cons 2 (&Cons 3 Nil))) Any)
 #+end_src
 
 *** Other containers
 The =Vector= and =HashTable= types behave very similarly to =Cons=, with read-only variants of their own.
 #+begin_src emacs-lisp
-  (et-subtype? (et HashTable<Integer_Integer>) (et HashTable<Number_Number>)) ; nil
-  (et-subtype? (et &HashTable<Integer_Integer>) (et &HashTable<Number_Number>)) ; t
-  (et-subtype? (et Vector<Integer>) (et Vector<Number>)) ; nil
-  (et-subtype? (et &Vector<Integer>) (et &Vector<Number>)) ; t
+  (et-subtype? (et HashTable<Integer_Integer>) (et HashTable<Number_Number>))
+  ;; -> nil
+  (et-subtype? (et &HashTable<Integer_Integer>) (et &HashTable<Number_Number>))
+  ;; -> t
+  (et-subtype? (et Vector<Integer>) (et Vector<Number>))
+  ;; -> nil
+  (et-subtype? (et &Vector<Integer>) (et &Vector<Number>))
+  ;; -> t
 #+end_src
 
 ** Type aliases
@@ -327,14 +396,19 @@ Type-aliases allow for defining new types by mapping names to type expansions. A
 #+end_src
 Defining an alias will automatically define a read-only version of that alias. This conversion is done by simply walking the definition, and replacing every read-write type with its read-only equivalent.
 #+begin_src emacs-lisp
-  (et-subtype? (et List<Integer>) (et List<Number>)) ; nil
-  (et-subtype? (et &List<Integer>) (et &List<Number>)) ; t
-  (et-expand-aliases (et &List<Integer>)) ; Nil | (&Cons Integer &List<Integer>)
+  (et-subtype? (et List<Integer>) (et List<Number>))
+  ;; -> nil
+  (et-subtype? (et &List<Integer>) (et &List<Number>))
+  ;; -> t
+  (et-expand-aliases (et &List<Integer>))
+  ;; -> Nil | (&Cons Integer &List<Integer>)
 #+end_src
 Using a read-only version of an alias does /not/ convert the arguments to read only. For example, =&List<List<Integer>>= is a read-only list whose elements are read-write lists.
 #+begin_src emacs-lisp
-  (et-subtype? (et &List<List<Integer>>) (et &List<List<Number>>)) ; nil
-  (et-subtype? (et &List<&List<Integer>>) (et &List<&List<Number>>)) ; t
+  (et-subtype? (et &List<List<Integer>>) (et &List<List<Number>>))
+  ;; -> nil
+  (et-subtype? (et &List<&List<Integer>>) (et &List<&List<Number>>))
+  ;; -> t
 #+end_src
 
 Alias arguments can contain constraints on what types are valid:
@@ -372,27 +446,27 @@ Similarly to alias arguments, constraints can also be applied to function generi
 #+end_src
 Equivalently,
 #+begin_src emacs-lisp
-  (et-defun my-sort ([(N <: Number)] nums: &List<N>) ListFresh<N>
+  (et-defun my-sort ([(N <: Number)] nums: &List<N>) List<N>
     (sort (apply #'list nums)))
 #+end_src
 
 The function body must be type-checked without knowing what these type-variables will eventually resolve to. A type-variable is not a real type, so type-variables in the parameters are each replaced with their upper bound, and then annotated with the corresponding type variable:
 #+begin_src emacs-lisp
-  (et-defun my-num-cons ([A (B <: Number)] a: A b: B) ConsFresh<A_B>
-    a ; => Any{$A}
-    b ; => Number{$B}
+  (et-defun my-num-cons ([A (B <: Number)] a: A b: B) Cons<A_B>
+    a ; Any{$A}
+    b ; Number{$B}
     (cons a b))
 #+end_src
 
 *** Inline generics syntax
 It is extremely common that a parameter's type is exactly a type variable (=left= and =right= in =cons= for example, but not =nums= in =sort=). For these cases, we introduce a shorthand syntax for defining the generic at the same time as assigning it to the parameter:
 #+begin_src emacs-lisp
-  (et-defun my-cons (a: [A] b: [B]) ConsFresh<A_B>
+  (et-defun my-cons (a: [A] b: [B]) Cons<A_B>
     (cons a b))
 #+end_src
 This syntax also allows for constraints, as follows:
 #+begin_src emacs-lisp
-  (et-defun my-num-cons (a: [A <: Number] b: [B <: Number]) ConsFresh<A_B>
+  (et-defun my-num-cons (a: [A <: Number] b: [B <: Number]) Cons<A_B>
     (cons a b))
 #+end_src
 The shorthand cannot express multiple constraints on a single generic; for this, the standard syntax must be used.
@@ -402,8 +476,8 @@ We saw the =Function= type earlier, which is a type for a function with a fixed 
 
 To define a =PolyFunction= type, add a vector of generics before the arglist type of =fn=.
 #+begin_src emacs-lisp
-  (et (fn [T] (args T T) ConsFresh<T_T>))
-  ;; => PolyFunction<[T] &(T T) -> ConsFresh<T, T>>
+  (et (fn [T] (args T T) Cons<T_T>))
+  ;; -> PolyFunction<[T] &(T T) -> Cons<T, T>>
 #+end_src
 
 *** Type-variable assignment :page:
@@ -417,7 +491,8 @@ Consider an attempt to define a generic array type consisting of both vectors an
     (or Vector<E>
         BoolVector))
 
-  (et-expand-aliases (et MyNaiveArray<Number>)) ; => Vector<Number> | BoolVector
+  (et-expand-aliases (et MyNaiveArray<Number>))
+  ;; -> Vector<Number> | BoolVector
 #+end_src
 However, =BoolVector= is clearly not an array of numbers. The solution is to attach a /variable assignment/ to the =BoolVector= case:
 #+begin_src emacs-lisp
@@ -425,9 +500,12 @@ However, =BoolVector= is clearly not an array of numbers. The solution is to att
     (or Vector<E>
         BoolVector{E:=:Boolean}))
 
-  (et-expand-aliases (et MyArray<Number>)) ; => Vector<Number>
-  (et-expand-aliases (et MyArray<Boolean>)) ; => Vector<Boolean> | BoolVector
-  (et-expand-aliases (et MyArray<Any>)) ; => Vector<Any>
+  (et-expand-aliases (et MyArray<Number>))
+  ;; -> Vector<Number>
+  (et-expand-aliases (et MyArray<Boolean>))
+  ;; -> Vector<Boolean> | BoolVector
+  (et-expand-aliases (et MyArray<Any>))
+  ;; -> Vector<Any>
 #+end_src
 As shown, ~:=:~ only succeeds when the type variable matches exactly (it is an /invariant/ assignment). Alternatively, ~:>:~ (/covariant/ assignment) succeeds when the type variable contains its assignment, and the less common ~:<:~ (/contravariant/ assignment) succeeds when the type variable is contained within its assignment.
 
@@ -435,9 +513,12 @@ Since the read-only version of an alias is designed to turn the alias from invar
 #+begin_src emacs-lisp
   &MyArray<E> := &Vector<E> | BoolVector{E:>:Boolean} ; auto-generated
 
-  (et-expand-aliases (et &MyArray<Number>)) ; => &Vector<Number>
-  (et-expand-aliases (et &MyArray<Boolean>)) ; => &Vector<Boolean> | BoolVector
-  (et-expand-aliases (et &MyArray<Any>)) ; => &Vector<Any> | BoolVector
+  (et-expand-aliases (et &MyArray<Number>))
+  ;; -> &Vector<Number>
+  (et-expand-aliases (et &MyArray<Boolean>))
+  ;; -> &Vector<Boolean> | BoolVector
+  (et-expand-aliases (et &MyArray<Any>))
+  ;; -> &Vector<Any> | BoolVector
 #+end_src
 
 Variable assignments can also be used to detect the appropriate type for a type variable:
@@ -445,9 +526,12 @@ Variable assignments can also be used to detect the appropriate type for a type 
   (et-defun my-array-get ([T] array: &MyArray<T>) T
     ...)
 
-  (my-array-get {&Vector<Number>}) ; => Number
-  (my-array-get {BoolVector}) ; => Boolean
-  (my-array-get {&Vector<Number> | BoolVector}) ; => Number | Boolean
+  (my-array-get (:type &Vector<Number>))
+  ;; >> Number
+  (my-array-get (:type BoolVector))
+  ;; >> Boolean
+  (my-array-get (:type &Vector<Number>|BoolVector))
+  ;; >> Number | Boolean
 #+end_src
 
 ** Fresh types
@@ -463,10 +547,14 @@ One unique aspect of lisp is that the same value can represent different types i
 #+end_src
 For maximum unobtrusiveness, all of these should be accepted, as they are all perfectly valid lisp code. This begs the question, what type could =(list 1 2)= possibly return to satisfy all 3 of these cases? To answer this, we introduce /fresh types/ for representing newly created values.
 #+begin_src emacs-lisp
-  (et-typecheck (list 1 2)) ; ConsFresh<1, ConsFresh<2, Nil>> 
-  (et-is? (list 1 2) List<Integer>) ; t
-  (et-is? (list 1 2) tuple<Integer_Integer>) ; t
-  (et-is? (list 1 2) Cons<Integer_Any>) ; t
+  (et-typecheck (list 1 2))
+  ;; -> ConsFresh<1, ConsFresh<2, Nil>>
+  (et-is? (list 1 2) List<Integer>)
+  ;; -> t
+  (et-is? (list 1 2) tuple<Integer_Integer>)
+  ;; -> t
+  (et-is? (list 1 2) Cons<Integer_Any>)
+  ;; -> t
 #+end_src
 Unlike other container types, which care about read-write permissions, fresh types only care about structure: a fresh type can be assigned to any type which it is /structurally compatible/ with.
 
@@ -477,15 +565,18 @@ Fresh types are extremely powerful, but also extremely dangerous. Imagine that w
     (cons value value))
 
   (et-defvar my-var (Cons Cons<Integer_Integer> Cons<Number_Number>)
-    (cons-same (cons 1 2))) ; => (ConsFresh ConsFresh<1_2> ConsFresh<1_2>)
+             (cons-same (cons 1 2)))
+  ;; >> (ConsFresh ConsFresh<1_2> ConsFresh<1_2>)
 
   (setcar (cdr my-var) 1.5)
-  (car (car my-var)) ; Type-checks as Integer, but is actually 1.5
+  (car (car my-var))
+  ;; Type-checks as Integer, but is actually 1.5
 #+end_src
 The newly-created cons cell is simultaneously assigned to a ~Cons<Integer_Integer>~ and to a ~Cons<Number_Number>~, which results in a correctness bug.
  To remedy this, fresh types can exist only temporarily. A fresh type must resolve to a concrete type as soon as a value is used (passed to another function, assigned to a variable, etc). In the example above, we instead have
 #+begin_src emacs-lisp
-  (cons-same (cons 1 2)) ; => (ConsFresh &Cons<1_2> &Cons<1_2>)
+  (cons-same (cons 1 2))
+  ;; >> (ConsFresh &Cons<1_2> &Cons<1_2>)
 #+end_src
 because ~ConsFresh<1_2>~ is automatically unfreshened to ~&Cons<1_2>~ before passing it to =cons-same=.
 
@@ -495,8 +586,10 @@ The =freshen-deep= and =freshen-shallow= type-operations can be used to turn a c
   (et-defun list (&rest objects: [T]) (freshen-shallow T))
   (et-defun copy-tree (x: [T]) (freshen-deep T))
 
-  (apply #'list {List<List<Integer>>}) ; => ListFresh<List<Integer>>
-  (copy-tree {List<List<Integer>>}) ; => ListFresh<ListFresh<Integer>>
+  (apply #'list (:type List<List<Integer>>))
+  ;; >> ListFresh<List<Integer>>
+  (copy-tree (:type List<List<Integer>>))
+  ;; >> ListFresh<ListFresh<Integer>>
 #+end_src
 
 ** Structs
@@ -511,10 +604,18 @@ The type ~(Struct my-person)~ refers to instances of the =my-person= struct. The
 
 From a struct definition, the type-checker will generate definitions for the struct's constructor, predicate, copier, and accessors.
 #+begin_src emacs-lisp
-  (make-my-person :name "John" :age 35) ; => *my-person
-  (my-person-name {*my-person}) ; => String
-  (copy-my-person {*my-person}) ; => *my-person
-  (my-person-p {x : *my-person|Other}) ; => t{x : *my-person} | nil{x : Other}
+  (make-my-person :name "John" :age 35)
+  ;; >> *my-person
+
+  (my-person-name (:type *my-person))
+  ;; >> String
+
+  (copy-my-person (:type *my-person))
+  ;; >> *my-person
+
+  (let ((x (:type *my-person|Other)))
+    (my-person-p x))
+  ;; >> t{x : *my-person} | nil{x : Other}
 #+end_src
 For more information on the predicate return type, see [[#narrowing]].
 
@@ -549,20 +650,24 @@ A common pattern in lisp is using predicates to handle a value differently based
 Within the =then= branch of the if-statement, we want the type of =obj= to be narrowed to just =String=, and likewise to just =Integer= in the else branch.
 To solve this, we introduce narrow-binding. Narrow-binds allow a type to contain internal information about variables in scope.
 #+begin_src emacs-lisp
-  (stringp obj) ; :: True{obj : String} | Nil{obj : Integer}
+  (stringp obj)
+  ;; >> True{obj : String} | Nil{obj : Integer}
 #+end_src
 
 This type describes that when it is true, =obj= has type =String=, and when it is nil, =obj= has type =Integer=. Utilizing this, conditional macros such as =if= can type-check each branch with the correct narrowed variable types.
 In order for this to work, the type returned by a variable must not only contain the type of the value, but also encode that the type represents the value currently stored in =obj=.
 #+begin_src emacs-lisp
-  obj ; :: Integer|String {= obj}
+  obj
+  ;; >> Integer|String {= obj}
 #+end_src
 This type describes that it is an =Integer= or =String=, and also that whatever value it holds is equal to the value stored in the variable =obj=. This allows for narrowing not just on predicate outputs, but on variables themselves:
 #+begin_src emacs-lisp
   (et-defun my-negative (val: Number?) Number
     (if val
-        (- val) ; val : Number
-      0)) ; val : Nil
+        ;; val narrowed to Number
+        (- val)
+      ;; val narrowed to Nil
+      0))
 #+end_src
 
 *** Defining predicate functions
@@ -578,7 +683,7 @@ Then, suppose you type-check the expression
 As discussed, =obj= will evaluate to the type ~String|Integer {= obj}~. When type-checking the call to =my-stringp=, this type will get assigned to =S=. The =is?= type-utility then does the following conversion:
 #+begin_src emacs-lisp
   (is? String|Integer{=obj} String)
-  => True{obj : String} | Nil{obj : Integer}
+  -> True{obj : String} | Nil{obj : Integer}
 #+end_src
 
 Now, consider the behavior of a =not=-like function:
@@ -589,7 +694,7 @@ Now, consider the behavior of a =not=-like function:
 If we evaluate ~(my-not (my-stringp obj))~, then we will get the conversion
 #+begin_src emacs-lisp
   (is? {True{obj : String} | Nil{obj : Integer}} Nil)
-  => True{obj : Integer} | Nil{obj: String}
+  -> True{obj : Integer} | Nil{obj: String}
 #+end_src
 This is exactly the behavior we would want out of this expression, and we get it nearly for free.
 
@@ -602,7 +707,7 @@ Not all predicates exhaustively classify an entire type. For example, =evenp= re
 Then, if we evaluate ~(my-evenp obj)~, we get the following conversion
 #+begin_src emacs-lisp
   (is-a? String|Integer{= obj} Integer)
-  => True{obj : Integer} | Nil{obj: String|Integer}
+  -> True{obj : Integer} | Nil{obj: String|Integer}
 #+end_src
 If ~(my-evenp obj)~ returns =t=, the typesystem can conclude that its input was definitely an integer, but if it returns =nil=, it cannot make a similar conclusion in the reverse direction.
 
@@ -619,18 +724,20 @@ The =isnt?= operation is the opposite of =is?=.
 
 Type-operations define arbitrary transformations between types.
 #+begin_src emacs-lisp
-  (et (minus Boolean Nil)) ; => True
+  (et (minus Boolean Nil))
+  ;; -> True
 #+end_src
 This is fairly useless when using concrete types: you could have just written ~(et True)~. Type-operations become much more useful when applied to type-variables:
 #+begin_src emacs-lisp
   (et-defun my-remove-nil ([T] list: &List<T>) (List (minus T Nil))
     (remq list nil))
 
-  (my-remove-nil {List<Boolean>}) ; => List<True>
+  (my-remove-nil (:type List<Boolean>))
+  ;; >> List<True>
 #+end_src
 
 We have already seen the narrowing operations =is?=, =is-a?=, and =isnt?=, as well as the freshening operations =freshen-deep= and =freshen-shallow=. A more complete list of type operations can be found [[#type-operations-ref][here]].
-By convention, type-operations and type-macros should be named in lowercase, while core datatypes and aliases are uppercase.
+By convention, most type-operations and type-macros should be named in lowercase, while core datatypes and aliases are uppercase.
 
 ** Type macros
 One of the most powerful features of Lisp is its macro system, which makes it possible to add custom syntax to the language. Similarly, =et= has /type-macros/, which enable custom syntax for writing types.
@@ -640,7 +747,11 @@ Defining a type-macro is very similar to defining a standard Lisp macro. Its def
     (if (null args) 'Nil
       `(Cons ,(car args) (tuple ,@(cdr args)))))
 
-  (et tuple 1 2 3) ; => (Cons 1 (Cons 2 (Cons 3 Nil)))
+  (et tuple 1 2 3)
+  ;; -> (Cons 1 (Cons 2 (Cons 3 Nil)))
+  ;; A read-only equivalent will also be auto-generated
+  (et &tuple 1 2 3)
+  ;; -> (&Cons 1 (&Cons 2 (&Cons 3 Nil)))
 #+end_src
 To extend the analogy, if type-macros are like Lisp macros, then type-operations are like functions. Type-macros can define custom syntax, but type-operations are still necessary for the underlying type manipulations.
 
@@ -669,14 +780,18 @@ The correctness and types of the program are all determined bottom-up as describ
 Sometimes, type-recommendations will not be enough to coerce an expression to the desired type. In this case, there are several macros that allow explicitly overriding the recommendation system.
 The =et:= macro, or /safe cast/, can be used to safely cast an expression to a particular type. Its safety comes from the fact that the type of the expression must be compatible with the type it gets cast to, guaranteeing that correctness will not be compromised.
 #+begin_src emacs-lisp
-  nil ; => Nil
-  (et: List<Integer> nil) ; => List<Integer>
-  (et: Vector<Integer> nil) ; => error - expected Vector<Integer>, found Nil
+  nil
+  ;; >> Nil
+  (et: List<Integer> nil)
+  ;; >> List<Integer>
+  (et: Vector<Integer> nil)
+  ;; >> error - expected Vector<Integer>, found Nil
 #+end_src
 
 The =et!= macro, or /unsafe cast/, can be used to cast an expression to any arbitrary type, regardless of the type actually returned by the expression. For obvious reasons, the use of this macro compromises correctness.
 #+begin_src emacs-lisp
-  (et! Vector<Integer> nil) ; => Vector<Integer>
+  (et! Vector<Integer> nil)
+  ;; >> Vector<Integer>
 #+end_src
 
 ** Variable inference
@@ -716,21 +831,25 @@ Many languages allow for function overloading, where the same function has multi
 For example, a (somewhat) common pattern in elisp is for a function to provide a =noerror= flag. If this flag is non-nil, then the function will return the value =nil= instead of throwing an error if it fails. This can be expressed by the typesystem as follows:
 #+begin_src emacs-lisp
   (et-defun my-string-search (pattern: String &optional noerror: [N])
-            (is-nil? N String String?)
-    (let* ((result (search-for pattern))) ; => result : String?
+            (if-nil? N String String?)
+    (let* ((result (search-for pattern))) ; result : String?
       (if noerror
-          result ; => String?
-        (or result (error "No result found!"))))) ; => String
+          result
+        (or result (error "No result found!")))))
 
-  (my-string-search "foo") ; => String
-  (my-string-search "foo" nil) ; => String
-  (my-string-search "foo" t) ; => String?
-  (my-string-search "foo" {Any}) ; => String?
+  (my-string-search "foo")
+  ;; >> String
+  (my-string-search "foo" nil)
+  ;; >> String
+  (my-string-search "foo" t)
+  ;; >> String?
+  (my-string-search "foo" (:type Any))
+  ;; >> String?
 #+end_src
 This says that if =noerror= is /definitely/ nil, then the function definitely returns a non-nil =String=. If there is even a slight chance that =noerror= is non-nil, then it returns =String?=.
 
 How can the typesystem possibly verify that the body of the function conforms to this complex set of rules? The answer is /implicit overloads/.
-Upon seeing ~(is-nil? N String String?)~, the typesystem implicitly generates two overloads for =my-string-search=:
+Upon seeing ~(if-nil? N String String?)~, the typesystem implicitly generates two overloads for =my-string-search=:
 #+begin_src emacs-lisp
   1. (pattern: String &optional noerror: [N <: Nil]) -> String
   2. (pattern: String &optional noerror: [N !<: Nil]) -> String?
@@ -744,11 +863,14 @@ Another common example of overloaded functions are /arithmetic operations/. Thes
             (switch Ns [Nil 0] [&List<Integer> Integer] Number)
     ...)
 
-  (+) ; => 0
-  (+ 1 2) ; => Integer
-  (+ 1 2.5) ; => Number
+  (+)
+  ;; >> 0
+  (+ 1 2)
+  ;; >> Integer
+  (+ 1 2.5)
+  ;; >> Number
 #+end_src
-The =switch= type operation checks =Ns= against each case. If =Ns <: Nil=, it returns =0=. If =Ns <: &List<Integer>=, it returns =Integer=. Otherwise, it returns =Number=.
+The =switch= type checks =Ns= against each case. If =Ns <: Nil=, it returns =0=. If =Ns <: &List<Integer>=, it returns =Integer=. Otherwise, it returns =Number=.
 
 ** Macro checkers
 Type-checking macros is substantially different than type-checking functions. While a function type models a /type transformation/, a macro checker must instead model /control-flow/.
@@ -884,8 +1006,10 @@ To get accurate types for =put= and =get=, you can declare a particular symbol-p
   (et-declare
    (@symbol-property my-documentation String))
 
-  (get SYMBOL 'foo) ; => Any
-  (get SYMBOL 'my-documentation) ; => String?
+  (get SYMBOL 'foo)
+  ;; >> Any
+  (get SYMBOL 'my-documentation)
+  ;; >> String?
 #+end_src
 
 *** @eval
@@ -909,10 +1033,13 @@ Run some elisp code within the checker process.
 
 Check whether =CHILD= is a subtype of =PARENT=.
 #+begin_src emacs-lisp
-  (et (extends? Integer Number 1 0)) ; => 1
-  (et (extends? String Number 1 0)) ; => 0
+  (et (extends? Integer Number 1 0))
+  ;; -> 1
+  (et (extends? String Number 1 0))
+  ;; -> 0
   ;; The type variable COULD represent a subtype of Number, or it might not
-  (et-with-type-variables [T] (et (extends? T Number 1 0))) ; => 1 | 0
+  (et-with-type-variables [T] (et (extends? T Number 1 0)))
+  ;; -> 1 | 0
 #+end_src
 
 *** infer
@@ -920,8 +1047,10 @@ Check whether =CHILD= is a subtype of =PARENT=.
 
 Match =type= against =pattern= and determine values for each of the =generics=. If it matches, then evaluate =if= with the inferred generics. Otherwise, return =else=.
 #+begin_src emacs-lisp
-  (et (infer List<Integer> [T] List<T> T Never)) ; => Integer
-  (et (infer String [T] List<T> T Never)) ; => Never
+  (et (infer List<Integer> [T] List<T> T Never))
+  ;; -> Integer
+  (et (infer String [T] List<T> T Never))
+  ;; -> Never
 #+end_src
 
 *** minus
@@ -929,12 +1058,15 @@ Match =type= against =pattern= and determine values for each of the =generics=. 
 
 Subtract =B= from =A=.
 #+begin_src emacs-lisp
-  (et (minus Number|String Number)) ;; => String
-  (et (minus List<Integer> Nil)) ;; => (Integer . List<Integer>)
+  (et (minus Number|String Number))
+  ;; -> String
+  (et (minus List<Integer> Nil))
+  ;; -> (Integer . List<Integer>)
 #+end_src
-There is not always a perfect answer for type-subtraction. In such cases, =minus= will always err on the side of keeping the type /larger/ than it should be. See [[#intersection-bounds]].
+There is not always a perfect answer for type-subtraction. In such cases, =minus= will always err on the side of keeping the type /larger/ than it should be. See [[file:implementation.org::#intersection-bounds]].
 #+begin_src emacs-lisp
-(et (minus Number Integer)) ;; => Number
+(et (minus Number Integer))
+;; -> Number
 #+end_src
 
 *** subsect/supersect
@@ -942,33 +1074,39 @@ There is not always a perfect answer for type-subtraction. In such cases, =minus
 
 Perform lower/upper bound intersection.
 #+begin_src emacs-lisp
-  (et (subsect Integer Positive)) ; => Never
-  (et (supersect Integer Positive)) ; => Integer
+  (et (subsect Integer Positive))
+  ;; -> Never
+  (et (supersect Integer Positive))
+  ;; -> Integer
 
   (et (supersect (fn1 Integer Integer) (fn1 Number Number)))
-  ;; => Function<&(Number), Integer>
+  ;; -> Function<&(Number), Integer>
 
-  (et (supersect AnyFn Cons<Any_Any>)) ; => Function<Never, Any>
-  (et (supersect AnyFn Cons<Integer_Any>)) ; => Never
-  (et (supersect AnyFn Cons<@foo_Any>)) ; => Never
-  (et (supersect AnyFn Cons<@lambda_Any>)) ; => Function<Never, Any>
+  (et (supersect AnyFn Cons<Any_Any>))
+  ;; -> Function<Never, Any>
+  (et (supersect AnyFn Cons<Integer_Any>))
+  ;; -> Never
+  (et (supersect AnyFn Cons<@foo_Any>))
+  ;; -> Never
+  (et (supersect AnyFn Cons<@lambda_Any>))
+  ;; -> Function<Never, Any>
 #+end_src
 
 *** freshen-deep/freshen-shallow
 ~(freshen-deep TYPE)~ / ~(freshen-shallow TYPE)~
 
 Convert a type to its freshened version.
-=freshen= will recursively freshen every level of the type, like ~(copy-tree value)~.
+=freshen-deep= will recursively freshen every level of the type, like ~(copy-tree value)~.
 =freshen-shallow= will only freshen the top-level list, like ~(apply #'list value)~
 #+begin_src emacs-lisp
   (et (freshen-deep List<List<Integer>>))
-  ;; => ListFresh<ListFresh<Integer>>
+  ;; -> ListFresh<ListFresh<Integer>>
   (et (freshen-shallow List<List<Integer>>))
-  ;; => ListFresh<List<Integer>>
+  ;; -> ListFresh<List<Integer>>
   (et (freshen-deep (Cons (Cons 1 2) (Cons 3 4))))
-  ;; => (ConsFresh (ConsFresh 1 2) (ConsFresh 3 4))
+  ;; -> (ConsFresh (ConsFresh 1 2) (ConsFresh 3 4))
   (et (freshen-shallow (Cons (Cons 1 2) (Cons 3 4))))
-  ;; => (ConsFresh (Cons 1 2) (ConsFresh 3 4))
+  ;; -> (ConsFresh (Cons 1 2) (ConsFresh 3 4))
 #+end_src
 
 ** Provided type macros
@@ -980,24 +1118,29 @@ Convert a type to its freshened version.
 ~(tuple TYPES...)~ / ~(tuple* TYPES... TAIL)~
 
 #+begin_src emacs-lisp
-  (et (tuple 1 2 3)) ; => (Cons 1 (Cons 2 (Cons 3 Nil)))
-  (et (&tuple 1 2 3)) ; => (&Cons 1 (&Cons 2 (&Cons 3 Nil)))
+  (et (tuple 1 2 3))
+  ;; -> (Cons 1 (Cons 2 (Cons 3 Nil)))
+  (et (&tuple 1 2 3))
+  ;; -> (&Cons 1 (&Cons 2 (&Cons 3 Nil)))
 
-  (et (tuple* 1 2 3)) ; => (Cons 1 (Cons 2 3))
-  (et (&tuple* 1 2 3)) ; => (&Cons 1 (&Cons 2 3))
+  (et (tuple* 1 2 3))
+  ;; -> (Cons 1 (Cons 2 3))
+  (et (&tuple* 1 2 3))
+  ;; -> (&Cons 1 (&Cons 2 3))
 #+end_src
 
 *** args
 ~(args SPECS...)~
 
 #+begin_src emacs-lisp
-  (et (args A B C)) ; => &(A B C)
+  (et (args A B C))
+  ;; -> &(A B C)
 
   (et (args Integer &optional String &rest Any))
-  ;; => &(Integer . Nil | &(String . Any))
+  ;; -> &(Integer . Nil | &(String . Any))
 
   (et (args String &key :flag Boolean :count Integer))
-  ;; => &(String . &Plist<:flag Boolean, :count Integer>)
+  ;; -> &(String . &Plist<:flag Boolean, :count Integer>)
 #+end_src
 
 *** fn
@@ -1005,9 +1148,9 @@ Convert a type to its freshened version.
 
 #+begin_src emacs-lisp
   (et (fn (args Integer String) Boolean))
-  ;; => (Function &(Integer String) Boolean)
+  ;; -> (Function &(Integer String) Boolean)
   (et (fn [T] (args T T T) List<T>))
-  ;; => (PolyFunction &(T T T) List<T>)
+  ;; -> (PolyFunction &(T T T) List<T>)
 #+end_src
 
 *** fnN
@@ -1015,10 +1158,14 @@ Convert a type to its freshened version.
 
 The explicit =return= type can be omitted, in which case the return type will default to =Any=.
 #+begin_src emacs-lisp
-  (et (fn0 Integer)) ; => (Function Nil Integer)
-  (et (fn1 4 Integer)) ; => (Function &(4 . Nil) Integer)
-  (et (fn2 4 3 Integer)) ; => (Function &(4 3) Integer)
-  (et (fn1 4)) ; => (Function &(4) Any)
+  (et (fn0 Integer))
+  ;; -> (Function Nil Integer)
+  (et (fn1 4 Integer))
+  ;; -> (Function &(4 . Nil) Integer)
+  (et (fn2 4 3 Integer))
+  ;; -> (Function &(4 3) Integer)
+  (et (fn1 4))
+  ;; -> (Function &(4) Any)
 #+end_src
 
 *** switch
@@ -1043,10 +1190,14 @@ If the pattern and output happen to be the same, then you can use the shortcut:
                     (extends? Nums &List<Integer> Integer
                               Number)))
 
-  (et-expand-aliases (et SumOf Nil)) ; => 0
-  (et-expand-aliases (et SumOf (Cons 123 Nil))) ; => 123
-  (et-expand-aliases (et SumOf (tuple 2 3))) ; => Integer
-  (et-expand-aliases (et SumOf (tuple 1.5 2))) ; => Number
+  (et-expand-aliases (et SumOf Nil))
+  ;; -> 0
+  (et-expand-aliases (et SumOf (Cons 123 Nil)))
+  ;; -> 123
+  (et-expand-aliases (et SumOf (tuple 2 3)))
+  ;; -> Integer
+  (et-expand-aliases (et SumOf (tuple 1.5 2)))
+  ;; -> Number
 #+end_src
 
 The final case can be a single default type, which will be returned if no cases match. If a default type is not provided, =Never= will be used as the default.
@@ -1076,16 +1227,21 @@ Evaluates to ~(extends? (supersect A B) Never NO YES)~
 If =A= and =B= have any chance of intersection, return =YES=, otherwise return =NO=.
 If =NO= is omitted, it defaults to =Never=.
 #+begin_src emacs-lisp
-  (et (might-overlap? Integer|String Boolean|String True Nil)) ; => True
-  (et (might-overlap? Integer|String Boolean True Nil)) ; => Nil
-  (et (might-overlap? Integer|String Boolean True)) ; => Never
-  (et (might-overlap? Integer Positive True)) ; => True
+  (et (might-overlap? Integer|String Boolean|String True Nil))
+  ;; -> True
+  (et (might-overlap? Integer|String Boolean True Nil))
+  ;; -> Nil
+  (et (might-overlap? Integer|String Boolean True))
+  ;; -> Never
+  (et (might-overlap? Integer Positive True))
+  ;; -> True
 #+end_src
 
 *** non-nil
 ~(non-nil A) -> (minus A Nil)~
 #+begin_src emacs-lisp
-  (et (non-nil List<Integer>)) ; => (Integer . List<Integer>)
+  (et (non-nil List<Integer>))
+  ;; -> (Integer . List<Integer>)
 #+end_src
 
 

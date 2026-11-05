@@ -24,6 +24,8 @@
 
 (require 'et)
 (require 'et-annotate)
+(require 'find-func)
+(require 'pp)
 (require 'seq)
 
 
@@ -663,7 +665,7 @@ be used as the body of the checker function."
   :group 'et
   :type 'boolean)
 
-(et-defun et-process-exprs (exprs: Sexps &key check test eval only-check) Nil
+(et-defun et-process-exprs (exprs: Sexps &key check test eval only-check) List<EtType>
   ;; If checking is enabled for this file, that means we want diagnostics,
   ;; so disable deferred identification IFF checking is enabled
   (let* ((et-no-defer-declare check)
@@ -719,7 +721,9 @@ be used as the body of the checker function."
                do
                (let* ((et:process--phase :check)
                       (et:process--expr expr))
-                 (et-error-boundary pos (et:check-check expr nil nil)))))
+                 (et-error-boundary pos
+                   (push (et:check--result->type (et:check-check expr nil nil))
+                         check-results)))))
 
     ;; Run tests
     (when test
@@ -740,7 +744,8 @@ be used as the body of the checker function."
                       ((and result (pred et:result-p))
                        (when (et:result->failed result)
                          (et-propagate-result result)))))))))
-    nil))
+
+    (nreverse check-results)))
 
 
 ;;;; Processing helpers
@@ -755,6 +760,18 @@ be used as the body of the checker function."
 
 (et-defun et-process-file-exprs (file: String) Sexps
   (with-temp-buffer (insert-file-contents file) (et-process-buffer-exprs)))
+
+(et-defun et-process-directory (dir: String &rest args) *et:result<Any>
+  (interactive (list (read-directory-name "DProcess Directory: ") :eval t))
+  (et-result-boundary
+   (let* ((files (list (expand-file-name dir))))
+     (while-let ((file (pop files)))
+       (cond
+        ((file-directory-p file)
+         (cl-callf append files (directory-files file t "^[^.]")))
+        ((file-regular-p file)
+         (et-error-boundary nil
+           (apply #'et-process-exprs (et-process-file-exprs file) args))))))))
 
 
 ;;; ============================================================
@@ -2269,6 +2286,19 @@ Returns a plist with :declare to set the symbol type."
 
 ;;; ============================================================
 ;;; Testing
+;;;; Load definitions
+
+(defvar et:check-setup-definitions nil)
+
+(defun et:check-setup-definitions ()
+  (unless et:check-setup-definitions
+    (setq et:check-setup-definitions t)
+    (let* ((lib (file-name-directory (find-library-name "et"))))
+      (et-process-directory (expand-file-name "definitions" lib)
+                            :eval t))))
+
+
+;;;; Macros
 
 (defmacro et-is? (expr type)
   `(et-subtype? (et:result->value
@@ -2283,6 +2313,16 @@ Returns a plist with :declare to set the symbol type."
 
 (defmacro et-check (&rest exprs)
   `(et-result-boundary (et-process-exprs ',exprs :check t)))
+
+(defun et-last-sexp ()
+  "Typecheck the sexp before the point."
+  (interactive)
+  (et:check-setup-definitions)
+  (let* ((res (et-result-boundary
+               (et-process-exprs (list (pp-last-sexp))
+                                 :check t))))
+    (cl-callf car-safe (et:result->value res))
+    (message "%s" (et-pp res))))
 
 
 ;;; ============================================================

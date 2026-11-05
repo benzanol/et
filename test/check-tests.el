@@ -5,20 +5,13 @@
 
 ;;; Testing macros
 
-(defvar et:test-setup-definitions nil)
-(defun et:test-setup-definitions ()
-  (unless et:test-setup-definitions
-    (setq et:test-setup-definitions t)
-    (et-process-directory "definitions" :eval t)))
-
-
 (defmacro et:test-check-succeeds (name &rest body)
   (declare (indent 1) 
            (et ($arglist (name &rest body)
                          ($eval (prog1 (et Nil)
                                   (et-at-offset 2 (et-process-exprs body :check t)))))))
   `(ert-deftest ,name ()
-     (et:test-setup-definitions)
+     (et:check-setup-definitions)
      (let ((result (et-check ,@body)))
        (ert-info ((et-pp-result result))
          (should-not (et:result->failed result))))))
@@ -29,7 +22,7 @@
                          ($eval (prog1 (et Nil)
                                   (et-at-offset 2 (et-process-exprs body :check t)))))))
   `(ert-deftest ,name ()
-     (et:test-setup-definitions)
+     (et:check-setup-definitions)
      (let ((result (et-check ,@body)))
        (ert-info ((et-pp-result result))
          (should (et:result->failed result))))))

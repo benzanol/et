@@ -233,9 +233,15 @@ expression that is not actually in the buffer, ensure that
                  for (_path severity msg) in (et:result->diagnostics result)
                  when (eq 'error severity) collect (format "[%s]" msg) into strs
                  else do (cl-callf 1+ others)
-                 finally do (princ (format "#<FAIL: %s%s>" (string-join strs " ") (count-str others)) stream))
+                 finally do
+                 (princ (format "#<FAIL %s%s>" (string-join strs " ") (count-str others))
+                        stream))
 
-      (princ (format "#<SUCCESS: %s%s>" (cl-prin1-to-string (et:result->value result))
+
+      (princ (format "#<SUCCESS%s%s>"
+                     (if (null (et:result->value result)) ""
+                       (format " value=%s"
+                               (cl-prin1-to-string (et:result->value result))))
                      (count-str (length (et:result->diagnostics result))))
              stream))))
 

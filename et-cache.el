@@ -1049,18 +1049,6 @@ interactively, clears every source's defun cache."
 
 ;;;; Process directory
 
-(defun et-process-directory (dir &rest args)
-  (interactive (list (read-directory-name "DProcess Directory: ") :eval t))
-  (et-result-boundary
-   (let* ((files (list (expand-file-name dir))))
-     (while-let ((file (pop files)))
-       (cond
-        ((file-directory-p file)
-         (cl-callf append files (directory-files file t "^[^.]")))
-        ((file-regular-p file)
-         (et-error-boundary nil
-           (apply #'et-process-exprs (et-process-file-exprs file) args))))))))
-
 (defun et-test-directory (dir)
   (et-process-directory dir :eval t)
   (et-process-directory dir :test t))

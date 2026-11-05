@@ -72,9 +72,9 @@ The naive idea would be to copy the read-only version, but use the write slot in
     (or Nil (ConsW T ListW1<T>)))
 
   (et-subtype? (et ConsW<Number_Number>) (et ConsW<Integer_Integer>))
-  ;; => t - the cons cell is contravariant
+  ;; -> t - the cons cell is contravariant
   (et-subtype? (et ListW1<Number>) (et ListW1<Integer>))
-  ;; => nil - the list is not
+  ;; -> nil - the list is not
 #+end_src
 The first cons in the list behaves as desired, however the second =cons= is stuck behind the write-only cdr of the first =cons=. In order to write to the second =cons= of a list, you must first access it, which means /reading from the cdr of the first cons/. Each step in the list is behind another contravaraint slot, giving =ListW1= a bizarre "oscillating variance" behavior:
 #+begin_src emacs-lisp
@@ -85,7 +85,7 @@ The first cons in the list behaves as desired, however the second =cons= is stuc
 
   (et-subtype? (et (ConsW Number (ConsW Integer (ConsW Number (ConsW Integer Nil)))))
                (et (ConsW Integer (ConsW Number (ConsW Integer (ConsW Number Nil))))))
-  ;; => t
+  ;; -> t
 #+end_src
 
 So just make the =cdr= invariant, right?
@@ -93,7 +93,8 @@ So just make the =cdr= invariant, right?
   (et-defalias ListW2 [T]
     (or Nil (ConsRW T Any ListW2<T> ListW2<T>)))
 
-  (et-subtype? (et ListW2<Number>) (et ListW2<Integer>)) ; => nil
+  (et-subtype? (et ListW2<Number>) (et ListW2<Integer>))
+  ;; -> nil
 #+end_src
 This is much better than the previous example. We can now safely traverse the list, because we know that each =cdr= that we read will be another =ListW2<T>=. Furthermore, at each step, we can /write/ a =T= to the =car= but not /read/ one, just as desired.
 The issue is that =ListW2<Number>= still fails to be a subtype of =ListW2<Integer>= in the =CDR-WRITE= slot, which prevents this definition from being contravariant.
@@ -103,8 +104,10 @@ If we make the =cdr= read-only, we finally get a contravariant type:
   (et-defalias ListW3 [T]
     (or Nil (ConsRW Any T ListW3<T> Never)))
 
-  (et-subtype? (et ListW3<Number>) (et ListW3<Integer>)) ; => t
-  (et-subtype? (et List<Number>) (et ListW3<Number>)) ; => t
+  (et-subtype? (et ListW3<Number>) (et ListW3<Integer>))
+  ;; -> t
+  (et-subtype? (et List<Number>) (et ListW3<Number>))
+  ;; -> t
 #+end_src
 This has the obvious downside that a list with a read-only =cdr= cannot be appended to. The typesystem has good reason to block this kind of operation: the following example illustrates why appends are fundamentally dangerous on a contravariant list type.
 #+begin_src emacs-lisp
@@ -126,14 +129,16 @@ In this example, the problem is not with appends themselves, but with the shared
   (et-defalias ListW [T]
     (or Nil (ConsRW Any T ListW<T> ListFresh<T>)))
 
-  (et-subtype? (et ListW<Number>) (et ListW<Integer>)) ; => t
-  (et-subtype? (et List<Number>) (et ListW<Number>)) ; => t
+  (et-subtype? (et ListW<Number>) (et ListW<Integer>))
+  ;; -> t
+  (et-subtype? (et List<Number>) (et ListW<Number>))
+  ;; -> t
 #+end_src
 Hopefully you can now appreciate why contravariance is not simply "covariance in the other direction", but is rather far more intricate and complex to deal with.
 
 ** Type specs vs reprs vs objects
 There are 3 different forms that a type can take.
-A *type-spec* is the human-write/readable format that you will actually use in code.
+A *type-spec* is the human-readable/writable format that you will actually use in code.
 A *type-expression* (=et:repr=) is a structural representation of a type-spec after being parsed.
 A *type-object* (=et:type=) is a less-expressive, normalized representation of a type. Type-checking an expression evaluates to an =et:type=.
 
@@ -144,7 +149,7 @@ A *type-object* (=et:type=) is a less-expressive, normalized representation of a
 | Contains aliases                | [X]  | [X]     | [X]     |
 | Contains unions                 | [X]  | [X]     | [X]     |
 | Contains intersections          | [X]  | [X]     | [ ]     |
-| Contains type-ops               | [X]  | [X]     | [ ]     |
+| Contains type-operations        | [X]  | [X]     | [ ]     |
 | Contains type-macro invocations | [X]  | [ ]     | [ ]     |
 | Contains type-variables         | [X]  | [X]     | [ ]     |
 | Contains variable narrows       | [ ]  | [ ]     | [X]     |
@@ -185,8 +190,10 @@ Sometimes, not all arguments to an operation are types. For example, consider th
 Additionally, as stated before, type-arguments are automatically converted to types before being passed to =EVAL-CODE=. However, we do not want to evaluate =YES= or =NO= until we have checked whether the infer matched. So, these can be annotated with =:repr= to state that these should be passed as =et:repr= objects (not be pre-evaluated).
 #+begin_src emacs-lisp
   ;; (infer TYPE [GENERICS...] PATTERN IF ELSE)
-  (et (infer List<Integer> [T] List<T> T : Never)) ; => Integer
-  (et (infer Boolean [T] List<T> T : Never)) ; => Never
+  (et (infer List<Integer> [T] List<T> T : Never))
+  ;; -> Integer
+  (et (infer Boolean [T] List<T> T : Never))
+  ;; -> Never
 #+end_src
 The definition of =infer= looks like this:
 #+begin_src emacs-lisp
@@ -211,13 +218,13 @@ For example, =is?= is defined as
 In other words, return =True= in the cases where =TYPE= overlaps with =PRED=, and =Nil= in the cases where =TYPE= differs from =PRED=.
 To see how narrows propagate, watch what happens when we type-check ~(stringp obj)~:
 #+begin_src emacs-lisp
-  (supersect String|Number{= obj} String) => String{= obj}
-  (when String{= obj} True) => True{obj : String}
+  (supersect String|Number{= obj} String) -> String{= obj}
+  (when String{= obj} True) -> True{obj : String}
 
-  (minus String|Number{= obj} String) => Number{= obj}
-  (when Number{= obj} Nil) => Nil{obj : Number}
+  (minus String|Number{= obj} String) -> Number{= obj}
+  (when Number{= obj} Nil) -> Nil{obj : Number}
 
-  (is? String|Number{= obj} String) => True{obj : String} | Nil{obj : Number}
+  (is? String|Number{= obj} String) -> True{obj : String} | Nil{obj : Number}
 #+end_src
 Similarly, =is-a?= is defined by the following:
 #+begin_src emacs-lisp
