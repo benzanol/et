@@ -2362,6 +2362,9 @@ indeterminates slot."
   :to-string (format "{%s - %s}" (et:repr--tostring-0 a) (et:repr--tostring-0 b))
   (et-subtract a b))
 
+(et-defspec non-nil (a)
+  `(minus ,a Nil))
+
 (et-defop type ([type :const])
   :to-string (format "type:%s" (et-pp type))
   type)
@@ -4089,6 +4092,8 @@ lazily because `List' is not yet defined when this file loads.")
 
 (et-defalias ListFresh [(E = Any)] (or Nil (ConsFresh E (ListFresh E))))
 (et-defalias List [(E = Any)] (or Nil (Cons E (List E))))
+(et-defalias ListW [T]
+  (or Nil (ConsRW Any T ListW<T> ListFresh<T>)))
 
 (et-defalias Tree [(E = Any)] (or (List (Tree E)) E))
 (et-defalias ConsTree [(E = Any)] (or (Cons (ConsTree E) (ConsTree E)) E))
@@ -4163,8 +4168,8 @@ lazily because `List' is not yet defined when this file loads.")
   (when (eq 1 (mod (length args) 2))
     (error "Plist must have an even number of arguments"))
   (cl-loop for (key type) on args by #'cddr
-           nconc (list key type type) into new
-           finally return `(PlistRW ,@new)))
+           nconc (list key type type) into rw-args
+           finally return `(PlistRW ,@rw-args)))
 
 (et-defalias PlistOf [K V] (or Nil (Cons K (Cons V (PlistOf K V)))))
 
